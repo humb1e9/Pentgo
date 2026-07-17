@@ -67,6 +67,7 @@ type ExecutionResult struct {
 	RepeatedOutput  bool            `json:"repeated_output,omitempty"`
 	EvidencePath    string          `json:"evidence_path,omitempty"`
 	Error           string          `json:"error,omitempty"`
+	Level           EvidenceLevel   `json:"level,omitempty"`
 	StartedAt       time.Time       `json:"started_at"`
 	FinishedAt      time.Time       `json:"finished_at"`
 }
@@ -138,6 +139,7 @@ type executionEvidence struct {
 	Stdout        string          `json:"stdout,omitempty"`
 	Stderr        string          `json:"stderr,omitempty"`
 	Error         string          `json:"error,omitempty"`
+	Level         EvidenceLevel   `json:"level,omitempty"`
 	TimedOut      bool            `json:"timed_out,omitempty"`
 	Cancelled     bool            `json:"cancelled,omitempty"`
 	Truncated     bool            `json:"truncated,omitempty"`
@@ -164,6 +166,7 @@ func (executor *Executor) persistEvidence(input ExecutionInput, preflight Prefli
 		Stdout:        result.Stdout,
 		Stderr:        result.Stderr,
 		Error:         result.Error,
+		Level:         result.Level,
 		TimedOut:      result.TimedOut,
 		Cancelled:     result.Cancelled,
 		Truncated:     result.StdoutTruncated || result.StderrTruncated,
@@ -187,7 +190,10 @@ func (executor *Executor) persistEvidence(input ExecutionInput, preflight Prefli
 
 func (executor *Executor) executeBlock(ctx context.Context, input ExecutionInput, preflight PreflightResult) (result ExecutionResult) {
 	result = ExecutionResult{Block: preflight.Block, ExitCode: -1, StartedAt: time.Now().UTC()}
-	defer func() { result.FinishedAt = time.Now().UTC() }()
+	defer func() {
+		result.FinishedAt = time.Now().UTC()
+		result.Level = GradeEvidence(result)
+	}()
 	if !preflight.Approved {
 		result.Status = ExecutionPreflightRejected
 		result.Error = preflight.Rejection

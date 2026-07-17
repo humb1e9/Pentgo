@@ -21,7 +21,7 @@ func TestBuildSystemPromptListsSkills(t *testing.T) {
 
 func TestBuildSystemPromptWithoutSkills(t *testing.T) {
 	prompt := buildSystemPrompt(nil)
-	if !strings.Contains(prompt, "terminal agent") {
+	if !strings.Contains(prompt, "terminal penetration-testing agent") {
 		t.Fatalf("base prompt missing: %s", prompt)
 	}
 }

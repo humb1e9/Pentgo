@@ -20,6 +20,7 @@ type ReportBlock struct {
 	Stdout       string
 	Stderr       string
 	EvidencePath string
+	Level        EvidenceLevel
 }
 
 // ReportTurn 是单个 Agent 回合的无代码报告摘要。

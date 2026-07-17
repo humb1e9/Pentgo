@@ -283,6 +283,7 @@ func (runner *Runner) recordReportBlocks(results []ExecutionResult) {
 			Stdout:       truncateBytes(result.Stdout, maxReportBlockOutputBytes),
 			Stderr:       truncateBytes(result.Stderr, maxReportBlockOutputBytes),
 			EvidencePath: result.EvidencePath,
+			Level:        result.Level,
 		})
 	}
 }

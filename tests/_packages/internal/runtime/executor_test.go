@@ -86,6 +86,26 @@ func TestExecutorWritesPerBlockEvidence(t *testing.T) {
 	}
 }
 
+func TestExecutorGradesResultAndEvidence(t *testing.T) {
+	captured := map[string]any{}
+	sink := evidenceSinkFunc(func(name string, value any) (string, error) {
+		captured[name] = value
+		return "evidence/" + name + ".json", nil
+	})
+	executor := NewExecutor(ExecutorConfig{WorkDir: t.TempDir(), Timeout: 10 * time.Second, MaxParallel: 1, Evidence: sink})
+	results := executor.Execute(context.Background(), ExecutionInput{
+		Turn:   1,
+		Blocks: []PreflightResult{{Approved: true, Code: "print('probe-ok')", Block: CodeBlock{Index: 1, Language: LanguagePython}}},
+	})
+	if len(results) != 1 || results[0].Level != EvidenceVerified {
+		t.Fatalf("result level = %+v", results)
+	}
+	evidence, ok := captured["agent-turn-001-block-001"].(executionEvidence)
+	if !ok || evidence.Level != EvidenceVerified {
+		t.Fatalf("evidence level = %+v (ok=%v)", captured, ok)
+	}
+}
+
 func TestExecutorResolvesRelativeWorkDirBeforeStartingChildProcess(t *testing.T) {
 	t.Chdir(t.TempDir())
 	executor := NewExecutor(ExecutorConfig{WorkDir: ".pentgo-test/work", Timeout: time.Second, MaxParallel: 1, MaxOutputBytes: 1024, LineRepeatLimit: 10, ScanLineRepeatLimit: 10})
@@ -109,6 +129,12 @@ func approvedBlock(index int, language Language, code string) PreflightResult {
 type memoryEvidenceSink struct {
 	name  string
 	value any
+}
+
+type evidenceSinkFunc func(string, any) (string, error)
+
+func (sink evidenceSinkFunc) WriteEvidence(name string, value any) (string, error) {
+	return sink(name, value)
 }
 
 func (sink *memoryEvidenceSink) WriteEvidence(name string, value any) (string, error) {

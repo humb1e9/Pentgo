@@ -35,9 +35,28 @@ func TestReportContextPromptExcludesCodeAndBoundsOutput(t *testing.T) {
 	}
 }
 
+func TestReportContextRendersDeclaredLabels(t *testing.T) {
+	reportContext := ReportContext{
+		Target: "https://example.com",
+		Turns: []ReportTurn{{
+			Number:         1,
+			Decision:       "发现未授权接口",
+			DeclaredLabels: []EvidenceLevel{EvidenceLikely},
+			Blocks: []ReportBlock{{
+				Index: 1,
+				Level: EvidenceVerified,
+			}},
+		}},
+	}
+	text := reportContext.PromptText()
+	if !strings.Contains(text, "模型声明标签: LIKELY") || !strings.Contains(text, "执行等级: VERIFIED") {
+		t.Fatalf("prompt missing separated labels: %s", text)
+	}
+}
+
 func TestRunnerExposesCodeFreeExecutionReportContext(t *testing.T) {
 	client := &scriptedClient{responses: []agent.Response{
-		{Content: "检查首页。\n```python\nimport os\nprint(os.environ['PENTGO_TARGET'])\n```"},
+		{Content: "[LIKELY] 检查首页。\n```python\nimport os\nprint(os.environ['PENTGO_TARGET'])\n```"},
 		{Content: "TASK_COMPLETE"},
 	}}
 	executor := &recordingExecutor{results: []ExecutionResult{{
@@ -55,7 +74,7 @@ func TestRunnerExposesCodeFreeExecutionReportContext(t *testing.T) {
 	}
 	reportContext := runner.ReportContext(session)
 	prompt := reportContext.PromptText()
-	if !strings.Contains(prompt, "检查首页。") || !strings.Contains(prompt, "HTTP 200") || !strings.Contains(prompt, "evidence/agent-turn-001-block-001.json") {
+	if !strings.Contains(prompt, "检查首页。") || !strings.Contains(prompt, "LIKELY") || !strings.Contains(prompt, "HTTP 200") || !strings.Contains(prompt, "evidence/agent-turn-001-block-001.json") {
 		t.Fatalf("prompt = %q", prompt)
 	}
 	if strings.Contains(prompt, "import os") || strings.Contains(prompt, "print(os.environ") {

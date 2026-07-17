@@ -129,7 +129,7 @@ func (runner *Runner) Run(ctx context.Context, session *AgentSession) error {
 		history.Append("assistant", assistantText)
 		session.AddEvent(turn, "assistant", "model response received", time.Now().UTC())
 		runner.emit(RunnerEvent{Turn: turn, Kind: "assistant", Detail: assistantSummary(assistantText)})
-		runner.reportTurns = append(runner.reportTurns, ReportTurn{Number: turn, Decision: assistantSummary(assistantText)})
+		runner.reportTurns = append(runner.reportTurns, ReportTurn{Number: turn, Decision: assistantSummary(assistantText), DeclaredLabels: extractFindingLabels(assistantText)})
 
 		fingerprint := responseFingerprint(assistantText)
 		if fingerprint == lastFingerprint {
@@ -276,7 +276,7 @@ func (runner *Runner) ReportContext(session *AgentSession) ReportContext {
 	}
 	context.Turns = make([]ReportTurn, len(runner.reportTurns))
 	for index, turn := range runner.reportTurns {
-		context.Turns[index] = ReportTurn{Number: turn.Number, Decision: turn.Decision, Blocks: append([]ReportBlock(nil), turn.Blocks...)}
+		context.Turns[index] = ReportTurn{Number: turn.Number, Decision: turn.Decision, DeclaredLabels: append([]EvidenceLevel(nil), turn.DeclaredLabels...), Blocks: append([]ReportBlock(nil), turn.Blocks...)}
 	}
 	return context
 }

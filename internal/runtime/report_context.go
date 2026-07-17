@@ -25,9 +25,10 @@ type ReportBlock struct {
 
 // ReportTurn 是单个 Agent 回合的无代码报告摘要。
 type ReportTurn struct {
-	Number   int
-	Decision string
-	Blocks   []ReportBlock
+	Number         int
+	Decision       string
+	DeclaredLabels []EvidenceLevel
+	Blocks         []ReportBlock
 }
 
 // ReportContext 是生成最终报告所需的有界执行上下文。
@@ -52,8 +53,17 @@ func (context ReportContext) PromptText() string {
 		if !appendReportText(&builder, fmt.Sprintf("\n回合 %d\n决策摘要: %s\n", turn.Number, turn.Decision)) {
 			return finishReportPrompt(&builder)
 		}
+		if len(turn.DeclaredLabels) > 0 {
+			labels := make([]string, 0, len(turn.DeclaredLabels))
+			for _, label := range turn.DeclaredLabels {
+				labels = append(labels, string(label))
+			}
+			if !appendReportText(&builder, "模型声明标签: "+strings.Join(labels, ", ")+"\n") {
+				return finishReportPrompt(&builder)
+			}
+		}
 		for _, block := range turn.Blocks {
-			metadata := fmt.Sprintf("块 %d\n语言: %s\n状态: %s\n退出码: %d\nevidence: %s\n", block.Index, block.Language, block.Status, block.ExitCode, block.EvidencePath)
+			metadata := fmt.Sprintf("块 %d\n语言: %s\n状态: %s\n退出码: %d\n执行等级: %s\nevidence: %s\n", block.Index, block.Language, block.Status, block.ExitCode, block.Level, block.EvidencePath)
 			if !appendReportText(&builder, metadata) {
 				return finishReportPrompt(&builder)
 			}

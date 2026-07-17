@@ -87,8 +87,12 @@ func (terminal *Terminal) Run(ctx context.Context) error {
 
 	var activeDone <-chan terminalRunResult
 	var activeCancel context.CancelFunc
+	readerClosed := false
 	for {
 		if activeDone == nil {
+			if readerClosed {
+				return <-readerDone
+			}
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -101,7 +105,9 @@ func (terminal *Terminal) Run(ctx context.Context) error {
 				terminal.printPrompt()
 			case line, ok := <-lines:
 				if !ok {
-					return <-readerDone
+					readerClosed = true
+					lines = nil
+					continue
 				}
 				if terminal.handleIdleLine(ctx, line, &activeDone, &activeCancel) {
 					return nil
@@ -134,6 +140,7 @@ func (terminal *Terminal) Run(ctx context.Context) error {
 			return ctx.Err()
 		case line, ok := <-lines:
 			if !ok {
+				readerClosed = true
 				lines = nil
 				continue
 			}

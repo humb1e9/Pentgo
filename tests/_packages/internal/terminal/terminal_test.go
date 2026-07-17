@@ -3,6 +3,7 @@ package terminal
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -65,6 +66,47 @@ func TestTerminalHelpListsCancelCommand(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "/cancel") {
 		t.Fatalf("output = %q", output.String())
+	}
+}
+
+type fakeRunner struct {
+	gate    chan struct{}
+	started chan struct{}
+}
+
+func (runner *fakeRunner) Run(ctx context.Context, _ app.Request, _ func(app.Event)) (app.Result, error) {
+	close(runner.started)
+	select {
+	case <-runner.gate:
+	case <-ctx.Done():
+	}
+	return app.Result{}, nil
+}
+
+func TestRunReturnsWhenEOFArrivesDuringEngagement(t *testing.T) {
+	runner := &fakeRunner{gate: make(chan struct{}), started: make(chan struct{})}
+	input := strings.NewReader("对 http://example.test 做检查\n")
+	instance := NewWithOutputRoot(input, io.Discard, runner, make(chan os.Signal), t.TempDir())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- instance.Run(context.Background())
+	}()
+
+	select {
+	case <-runner.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("engagement never started")
+	}
+	close(runner.gate)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run returned error = %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not return after engagement completed with EOF pending (deadlock)")
 	}
 }
 

@@ -66,6 +66,12 @@ func TestAuthorizationConfigOverrides(t *testing.T) {
 	}
 }
 
+func TestMaxBlocksPerTurnDefaultAndNormalize(t *testing.T) {
+	if Default().Agent.MaxBlocksPerTurn != 8 {
+		t.Fatalf("default MaxBlocksPerTurn = %d, want 8", Default().Agent.MaxBlocksPerTurn)
+	}
+}
+
 func TestLoadMergesRootAgentConfiguration(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("XDG configuration path is only used on Linux and WSL")

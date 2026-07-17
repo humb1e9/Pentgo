@@ -23,6 +23,7 @@ type AgentConfig struct {
 	ExecutionTimeoutSeconds   int                 `json:"execution_timeout_seconds"`
 	MaxOutputBytes            int                 `json:"max_output_bytes"`
 	MaxParallelBlocks         int                 `json:"max_parallel_blocks"`
+	MaxBlocksPerTurn          int                 `json:"max_blocks_per_turn"`
 	NoCodeLimit               int                 `json:"no_code_limit"`
 	ProviderRetryDelaySeconds int                 `json:"provider_retry_delay_seconds"`
 	NetworkBackoffSeconds     int                 `json:"network_backoff_seconds"`
@@ -76,6 +77,7 @@ func defaultAgentConfig() AgentConfig {
 		ExecutionTimeoutSeconds:   1800,
 		MaxOutputBytes:            65536,
 		MaxParallelBlocks:         4,
+		MaxBlocksPerTurn:          8,
 		NoCodeLimit:               3,
 		ProviderRetryDelaySeconds: 3,
 		NetworkBackoffSeconds:     15,
@@ -110,6 +112,9 @@ func normalizeAgentConfig(agent *AgentConfig) {
 	}
 	if agent.MaxParallelBlocks <= 0 {
 		agent.MaxParallelBlocks = defaults.MaxParallelBlocks
+	}
+	if agent.MaxBlocksPerTurn <= 0 {
+		agent.MaxBlocksPerTurn = defaults.MaxBlocksPerTurn
 	}
 	if agent.NoCodeLimit <= 0 {
 		agent.NoCodeLimit = defaults.NoCodeLimit

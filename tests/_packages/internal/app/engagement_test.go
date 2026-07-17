@@ -87,6 +87,45 @@ func TestServiceRejectsEmptyRuntimeTarget(t *testing.T) {
 	}
 }
 
+func TestServiceWiresAuthorizationFromConfig(t *testing.T) {
+	cfg := config.Default()
+	if !cfg.Agent.Authorization.IsEnabled() {
+		t.Fatal("precondition: authorization enabled by default")
+	}
+	cfg.Agent.ExecutionTimeoutSeconds = 1
+	responses := []agent.Response{
+		{Content: "```python\nimport requests\nrequests.get('https://evil.example.net/x')\n```"},
+		{Content: "```python\nimport os\nprint('ok')\n```"},
+		{Content: "TASK_COMPLETE"},
+	}
+	dir := t.TempDir()
+	service := NewService(cfg, Dependencies{
+		NewAgentClient: func(config.AgentConfig) (agent.Client, error) {
+			return &sequenceClient{responses: responses}, nil
+		},
+	})
+	result, err := service.Run(context.Background(), Request{
+		Target:     runtime.Target{Canonical: "https://example.com", Raw: "example.com"},
+		Intent:     "检查目标",
+		OutputRoot: dir,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Session.Status != runtime.SessionDone {
+		t.Fatalf("session = %+v", result.Session)
+	}
+	blocked := false
+	for _, event := range result.Session.Timeline {
+		if event.Kind == "recovery" && event.Detail == "authorization_blocked" {
+			blocked = true
+		}
+	}
+	if !blocked {
+		t.Fatalf("expected authorization_blocked event: %+v", result.Session.Timeline)
+	}
+}
+
 func newTestService(client agent.Client) *Service {
 	return NewService(config.Default(), Dependencies{
 		Clock:           func() time.Time { return time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC) },
@@ -122,6 +161,20 @@ type scriptedClient struct {
 	outcomes []chatOutcome
 	requests []agent.Request
 	onCall   func(int)
+}
+
+type sequenceClient struct {
+	responses []agent.Response
+	index     int
+}
+
+func (client *sequenceClient) Chat(_ context.Context, _ agent.Request) (agent.Response, error) {
+	if client.index >= len(client.responses) {
+		return agent.Response{Content: "TASK_COMPLETE"}, nil
+	}
+	response := client.responses[client.index]
+	client.index++
+	return response, nil
 }
 
 func (client *scriptedClient) Chat(_ context.Context, request agent.Request) (agent.Response, error) {

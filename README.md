@@ -66,12 +66,20 @@ REPL 从输入中提取第一个 HTTP(S) URL 或裸域名；裸域名自动补�
       "base_url": "https://api.anthropic.com",
       "model": "MODEL",
       "api_key_env": "ANTHROPIC_API_KEY"
+    },
+    "authorization": {
+      "enabled": true,
+      "allow_destructive": false,
+      "allow_private_hosts": true,
+      "allowed_hosts": []
     }
   }
 }
 ```
 
 OpenAI 兼容 Provider 使用 Chat Completions 普通文本消息，不发送 native tool definitions。`thinking_mode` 非空时会作为 OpenAI 兼容接口的 `thinking` 字段发送。
+
+授权门会在执行前校验代码块：默认仅允许输入目标主机及其子域，拦截破坏性 SQL 与系统命令；`allowed_hosts` 可追加额外授权主机。范围检查只静态解析代码中直接出现的 HTTP(S) URL，并非沙箱；变量拼接或其他间接访问形式可能绕过该检查，因此它仅是纵深防御的一层。
 
 ## 执行模型
 

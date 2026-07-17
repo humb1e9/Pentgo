@@ -116,6 +116,9 @@ func (service *Service) Run(ctx context.Context, request Request, progress func(
 				progress(Event{Message: fmt.Sprintf("Block turn %d #%d finished: %s", event.Turn, event.BlockIndex, event.Detail)})
 			}
 		},
+		Authorizer:        authorizerFromConfig(agentConfig.Authorization),
+		AllowedHosts:      agentConfig.Authorization.AllowedHosts,
+		AllowPrivateHosts: agentConfig.Authorization.PrivateAllowed(),
 	}, nil, nil)
 	progress(Event{Message: "Agent engagement started: " + engagementID})
 	result.RunError = runner.Run(ctx, session)
@@ -206,4 +209,11 @@ func newEngagementID(now time.Time) (string, error) {
 		return "", err
 	}
 	return "eng-" + now.UTC().Format("20060102-150405") + "-" + hex.EncodeToString(random), nil
+}
+
+func authorizerFromConfig(auth config.AuthorizationConfig) *runtime.Authorizer {
+	if !auth.IsEnabled() {
+		return nil
+	}
+	return runtime.NewAuthorizer(auth.AllowDestructive)
 }

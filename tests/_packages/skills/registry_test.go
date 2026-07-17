@@ -25,24 +25,29 @@ func TestLoadRejectsUnknownAndTraversalNames(t *testing.T) {
 
 func TestNamesListsRegisteredSkills(t *testing.T) {
 	names := Names()
-	want := []string{"nosql-injection", "recon", "terminal", "type-juggling", "waf-bypass"}
-	if len(names) != len(want) {
-		t.Fatalf("names = %q", names)
+	if len(names) != 35 {
+		t.Fatalf("len(names) = %d, want 35", len(names))
 	}
-	for i := range want {
-		if names[i] != want[i] {
-			t.Fatalf("names = %q, want %q", names, want)
+	index := make(map[string]bool, len(names))
+	for _, n := range names {
+		index[n] = true
+	}
+	for _, must := range []string{"recon", "terminal", "waf-bypass", "sqli-sql-injection", "ssrf-server-side-request-forgery", "http-403-bypass", "race-condition"} {
+		if !index[must] {
+			t.Fatalf("names missing %q: %q", must, names)
+		}
+	}
+	for i := 1; i < len(names); i++ {
+		if names[i-1] >= names[i] {
+			t.Fatalf("names not sorted ascending at %d: %q", i, names)
 		}
 	}
 }
 
 func TestCatalogListsSkillsWithDescriptions(t *testing.T) {
 	catalog := Catalog()
-	if len(catalog) != 5 {
-		t.Fatalf("catalog length = %d", len(catalog))
-	}
-	if catalog[0].Name != "nosql-injection" {
-		t.Fatalf("catalog order = %+v", catalog)
+	if len(catalog) != 35 {
+		t.Fatalf("catalog length = %d, want 35", len(catalog))
 	}
 	for _, skill := range catalog {
 		if strings.TrimSpace(skill.Description) == "" {
@@ -52,7 +57,7 @@ func TestCatalogListsSkillsWithDescriptions(t *testing.T) {
 }
 
 func TestLoadMigratedSkill(t *testing.T) {
-	for _, name := range []string{"waf-bypass", "nosql-injection", "type-juggling"} {
+	for _, name := range []string{"waf-bypass", "nosql-injection", "type-juggling", "sqli-sql-injection", "xxe-xml-external-entity", "http-403-bypass", "deserialization-insecure"} {
 		content, err := Load(name)
 		if err != nil {
 			t.Fatalf("Load(%q) error = %v", name, err)

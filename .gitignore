@@ -1,0 +1,40 @@
+# Legacy reference tree
+/bingo/
+
+# Local design and planning documents
+/docs/
+
+# Go module build and analysis artifacts
+/pentgo
+/bin/
+/dist/
+/build/
+*.exe
+*.test
+coverage.out
+*.coverprofile
+*.prof
+
+# PentGo engagement output
+/eng-*/
+/.pentgo-*/
+pentgo-report-*.md
+/pentgo-output/
+
+# Local configuration and secrets
+/config.json
+.env
+.env.*
+!.env.example
+*.local.json
+
+# Local agent scratch data
+/.superpowers/
+
+# Editor and operating-system metadata
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

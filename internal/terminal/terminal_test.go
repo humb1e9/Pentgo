@@ -1,0 +1,1 @@
+../../tests/_packages/internal/terminal/terminal_test.go

@@ -1,0 +1,1 @@
+../../tests/_packages/cmd/pentgo/main_test.go

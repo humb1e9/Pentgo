@@ -1,0 +1,1 @@
+../tests/_packages/skills/registry_test.go

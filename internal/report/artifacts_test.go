@@ -1,0 +1,1 @@
+../../tests/_packages/internal/report/artifacts_test.go

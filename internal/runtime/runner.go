@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -34,6 +35,9 @@ type RunnerConfig struct {
 	SoftStuckTurns     int
 	HardStuckTurns     int
 	OnEvent            func(RunnerEvent)
+	Authorizer         *Authorizer
+	AllowedHosts       []string
+	AllowPrivateHosts  bool
 }
 
 // RunnerEvent 是可安全显示在终端中的运行时摘要，不包含模型代码和原始输出。
@@ -166,14 +170,26 @@ func (runner *Runner) Run(ctx context.Context, session *AgentSession) error {
 		}
 		noCodeCount = 0
 
+		scope := NewScope(hostOf(session.Target.Canonical), runner.config.AllowedHosts, runner.config.AllowPrivateHosts)
 		preflight := make([]PreflightResult, 0, len(blocks))
 		approved := make([]PreflightResult, 0, len(blocks))
+		authorizationBlocked := false
 		for _, block := range blocks {
 			result := Preflight(block)
+			if result.Approved {
+				if decision := runner.config.Authorizer.Authorize(result.Block, scope); !decision.Allowed {
+					result.Approved = false
+					result.Rejection = decision.Reason
+					authorizationBlocked = true
+				}
+			}
 			preflight = append(preflight, result)
 			if result.Approved {
 				approved = append(approved, result)
 			}
+		}
+		if authorizationBlocked {
+			session.AddEvent(turn, "recovery", "authorization_blocked", time.Now().UTC())
 		}
 		if len(approved) == 0 {
 			results := runner.executor.Execute(ctx, ExecutionInput{
@@ -423,4 +439,12 @@ func assistantSummary(text string) string {
 		return "code blocks received"
 	}
 	return "response received"
+}
+
+func hostOf(canonical string) string {
+	parsed, err := url.Parse(canonical)
+	if err != nil {
+		return canonical
+	}
+	return parsed.Hostname()
 }

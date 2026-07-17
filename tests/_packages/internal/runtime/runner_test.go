@@ -135,6 +135,66 @@ func TestRunnerReturnsMixedPreflightOutcomesToTheExecutorAndHistory(t *testing.T
 	}
 }
 
+func TestRunnerBlocksOutOfScopeCodeBeforeExecution(t *testing.T) {
+	client := &scriptedClient{responses: []agent.Response{
+		{Content: "外联测试。\n```python\nimport requests\nrequests.get('https://evil.com/steal')\n```"},
+		{Content: "```python\nimport requests\nrequests.get('https://example.com/status')\nprint('ok')\n```"},
+		{Content: "TASK_COMPLETE"},
+	}}
+	executor := &recordingExecutor{results: []ExecutionResult{{
+		Block: CodeBlock{Index: 1, Language: LanguagePython}, Status: ExecutionSucceeded, Stdout: "ok\n",
+	}}}
+	config := defaultRunnerConfig()
+	config.Authorizer = NewAuthorizer(false)
+	config.AllowPrivateHosts = true
+	runner := NewRunner(client, executor, config, nil, nil)
+	session := NewSession(Target{Canonical: "https://example.com"}, "检查目标", time.Now().UTC())
+
+	if err := runner.Run(context.Background(), session); err != nil {
+		t.Fatal(err)
+	}
+	if session.Status != SessionDone {
+		t.Fatalf("session = %+v", session)
+	}
+	blocked := false
+	for _, event := range session.Timeline {
+		if event.Kind == "recovery" && event.Detail == "authorization_blocked" {
+			blocked = true
+		}
+	}
+	if !blocked {
+		t.Fatalf("expected authorization_blocked timeline event: %+v", session.Timeline)
+	}
+	if len(client.requests) < 2 {
+		t.Fatalf("request count = %d", len(client.requests))
+	}
+	if !containsMessageFragment(client.requests[1].Messages, "user", "out of authorized scope") {
+		t.Fatalf("scope rejection not fed back: %+v", client.requests[1].Messages)
+	}
+}
+
+func TestRunnerBlocksDestructiveCodeBeforeExecution(t *testing.T) {
+	client := &scriptedClient{responses: []agent.Response{
+		{Content: "```bash\nrm -rf /tmp/loot\n```"},
+		{Content: "```python\nimport requests\nrequests.get('https://example.com/status')\nprint('ok')\n```"},
+		{Content: "TASK_COMPLETE"},
+	}}
+	executor := &recordingExecutor{results: []ExecutionResult{{
+		Block: CodeBlock{Index: 1, Language: LanguagePython}, Status: ExecutionSucceeded, Stdout: "ok\n",
+	}}}
+	config := defaultRunnerConfig()
+	config.Authorizer = NewAuthorizer(false)
+	runner := NewRunner(client, executor, config, nil, nil)
+	session := NewSession(Target{Canonical: "https://example.com"}, "检查目标", time.Now().UTC())
+
+	if err := runner.Run(context.Background(), session); err != nil {
+		t.Fatal(err)
+	}
+	if !containsMessageFragment(client.requests[1].Messages, "user", "destructive") {
+		t.Fatalf("destructive rejection not fed back: %+v", client.requests[1].Messages)
+	}
+}
+
 type scriptedClient struct {
 	responses []agent.Response
 	errors    []error

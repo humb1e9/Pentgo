@@ -102,6 +102,7 @@ func (service *Service) Run(ctx context.Context, request Request, progress func(
 	runner := runtime.NewRunner(client, executor, runtime.RunnerConfig{
 		MaxTurns:           agentConfig.MaxTurns,
 		NoCodeLimit:        agentConfig.NoCodeLimit,
+		MaxBlocksPerTurn:   agentConfig.MaxBlocksPerTurn,
 		ProviderRetryDelay: time.Duration(agentConfig.ProviderRetryDelaySeconds) * time.Second,
 		NetworkBackoff:     time.Duration(agentConfig.NetworkBackoffSeconds) * time.Second,
 		SoftStuckTurns:     agentConfig.SoftStuckTurns,

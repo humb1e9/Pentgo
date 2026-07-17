@@ -30,6 +30,7 @@ type Sleeper func(context.Context, time.Duration) error
 type RunnerConfig struct {
 	MaxTurns           int
 	NoCodeLimit        int
+	MaxBlocksPerTurn   int
 	ProviderRetryDelay time.Duration
 	NetworkBackoff     time.Duration
 	SoftStuckTurns     int
@@ -188,6 +189,12 @@ func (runner *Runner) Run(ctx context.Context, session *AgentSession) error {
 			continue
 		}
 		noCodeCount = 0
+		if limit := runner.config.MaxBlocksPerTurn; limit > 0 && len(blocks) > limit {
+			ignored := len(blocks) - limit
+			session.AddEvent(turn, "recovery", "too_many_blocks", time.Now().UTC())
+			history.Append("user", fmt.Sprintf("TOO MANY BLOCKS: %d code blocks were provided but only the first %d run per turn to control request rate; the remaining %d were ignored. Send fewer blocks next turn.", len(blocks), limit, ignored))
+			blocks = blocks[:limit]
+		}
 
 		scope := NewScope(hostOf(session.Target.Canonical), runner.config.AllowedHosts, runner.config.AllowPrivateHosts)
 		preflight := make([]PreflightResult, 0, len(blocks))

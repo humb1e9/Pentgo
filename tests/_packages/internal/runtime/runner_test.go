@@ -290,6 +290,41 @@ func TestRunnerBlocksDestructiveCodeBeforeExecution(t *testing.T) {
 	}
 }
 
+func TestRunnerCapsBlocksPerTurn(t *testing.T) {
+	var blocks []string
+	for i := 0; i < 5; i++ {
+		blocks = append(blocks, "```python\nimport os\nprint('b"+string(rune('0'+i))+"')\n```")
+	}
+	client := &scriptedClient{responses: []agent.Response{
+		{Content: strings.Join(blocks, "\n")},
+		{Content: "TASK_COMPLETE"},
+	}}
+	executor := &recordingExecutor{results: []ExecutionResult{{Block: CodeBlock{Index: 1, Language: LanguagePython}, Status: ExecutionSucceeded, Stdout: "b0\n"}}}
+	config := defaultRunnerConfig()
+	config.MaxBlocksPerTurn = 2
+	runner := NewRunner(client, executor, config, nil, nil)
+	session := NewSession(Target{Canonical: "https://example.com"}, "检查目标", time.Now().UTC())
+
+	if err := runner.Run(context.Background(), session); err != nil {
+		t.Fatal(err)
+	}
+	capped := false
+	for _, event := range session.Timeline {
+		if event.Kind == "recovery" && event.Detail == "too_many_blocks" {
+			capped = true
+		}
+	}
+	if !capped {
+		t.Fatalf("expected too_many_blocks event: %+v", session.Timeline)
+	}
+	if !containsMessageFragment(client.requests[1].Messages, "user", "TOO MANY BLOCKS") {
+		t.Fatalf("cap reminder not fed back: %+v", client.requests[1].Messages)
+	}
+	if got := executor.lastBlockCount(); got != 2 {
+		t.Fatalf("executed %d blocks, want 2", got)
+	}
+}
+
 type scriptedClient struct {
 	responses []agent.Response
 	errors    []error
@@ -318,6 +353,13 @@ type recordingExecutor struct {
 func (executor *recordingExecutor) Execute(_ context.Context, input ExecutionInput) []ExecutionResult {
 	executor.inputs = append(executor.inputs, input)
 	return executor.results
+}
+
+func (executor *recordingExecutor) lastBlockCount() int {
+	if len(executor.inputs) == 0 {
+		return 0
+	}
+	return len(executor.inputs[len(executor.inputs)-1].Blocks)
 }
 
 func defaultRunnerConfig() RunnerConfig {

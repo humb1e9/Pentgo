@@ -201,7 +201,6 @@ func Load() (Config, error) {
 
 type legacyAgentConfig struct {
 	Provider       string              `json:"provider"`
-	MaxTurns       int                 `json:"max_turns"`
 	TimeoutSeconds int                 `json:"timeout_seconds"`
 	OpenAI         ModelProviderConfig `json:"openai"`
 	Anthropic      ModelProviderConfig `json:"anthropic"`
@@ -227,7 +226,6 @@ func legacyAgent(data []byte) (legacyAgentConfig, bool) {
 func migrateLegacyAgent(legacy legacyAgentConfig) AgentConfig {
 	config := defaultAgentConfig()
 	config.Provider = legacy.Provider
-	config.MaxTurns = legacy.MaxTurns
 	config.RequestTimeoutSeconds = legacy.TimeoutSeconds
 	config.OpenAI = legacy.OpenAI
 	config.Anthropic = legacy.Anthropic

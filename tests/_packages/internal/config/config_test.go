@@ -142,7 +142,7 @@ func TestLoadMigratesLegacyReconAgentConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Agent.Provider != "openai" || cfg.Agent.MaxTurns != 9 || cfg.Agent.RequestTimeoutSeconds != 45 {
+	if cfg.Agent.Provider != "openai" || cfg.Agent.MaxTurns != Default().Agent.MaxTurns || cfg.Agent.RequestTimeoutSeconds != 45 {
 		t.Fatalf("agent = %+v", cfg.Agent)
 	}
 	if cfg.Agent.OpenAI.BaseURL != "https://api.deepseek.com" || cfg.Agent.OpenAI.Model != "legacy-model" || cfg.Agent.OpenAI.APIKey != "legacy-key" || cfg.Agent.OpenAI.ThinkingMode != "disabled" {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -37,6 +38,31 @@ func TestDefaultDoesNotContainFixedPipelineConfiguration(t *testing.T) {
 		if strings.Contains(string(data), `"`+field+`"`) {
 			t.Fatalf("default config contains fixed pipeline field %q: %s", field, data)
 		}
+	}
+}
+
+func TestAuthorizationDefaultsAreSafe(t *testing.T) {
+	auth := Default().Agent.Authorization
+	if !auth.IsEnabled() {
+		t.Fatal("authorization should default to enabled")
+	}
+	if auth.AllowDestructive {
+		t.Fatal("destructive operations should default to blocked")
+	}
+	if !auth.PrivateAllowed() {
+		t.Fatal("private hosts should default to allowed")
+	}
+	if len(auth.AllowedHosts) != 0 {
+		t.Fatalf("allowed hosts default = %v", auth.AllowedHosts)
+	}
+}
+
+func TestAuthorizationConfigOverrides(t *testing.T) {
+	disabled := false
+	privateOff := false
+	cfg := AuthorizationConfig{Enabled: &disabled, AllowDestructive: true, AllowPrivateHosts: &privateOff}
+	if cfg.IsEnabled() || !cfg.AllowDestructive || cfg.PrivateAllowed() {
+		t.Fatalf("override accessors = %+v", cfg)
 	}
 }
 
@@ -90,7 +116,7 @@ func TestLoadNormalizesInvalidRootAgentRuntimeValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Agent != Default().Agent {
+	if !reflect.DeepEqual(cfg.Agent, Default().Agent) {
 		t.Fatalf("agent = %+v, want defaults %+v", cfg.Agent, Default().Agent)
 	}
 }

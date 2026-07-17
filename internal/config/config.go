@@ -32,6 +32,7 @@ type AgentConfig struct {
 	ScanLineRepeatLimit       int                 `json:"scan_line_repeat_limit"`
 	OpenAI                    ModelProviderConfig `json:"openai"`
 	Anthropic                 ModelProviderConfig `json:"anthropic"`
+	Authorization             AuthorizationConfig `json:"authorization"`
 }
 
 // ModelProviderConfig 描述一个模型提供商的连接信息。
@@ -41,6 +42,25 @@ type ModelProviderConfig struct {
 	APIKey       string `json:"api_key,omitempty"`
 	APIKeyEnv    string `json:"api_key_env"`
 	ThinkingMode string `json:"thinking_mode,omitempty"`
+}
+
+// AuthorizationConfig 描述执行前授权门的开关与范围策略。
+// 布尔指针字段为 nil 时表示使用安全默认值。
+type AuthorizationConfig struct {
+	Enabled           *bool    `json:"enabled,omitempty"`
+	AllowDestructive  bool     `json:"allow_destructive,omitempty"`
+	AllowPrivateHosts *bool    `json:"allow_private_hosts,omitempty"`
+	AllowedHosts      []string `json:"allowed_hosts,omitempty"`
+}
+
+// IsEnabled 在未显式配置时默认开启授权门。
+func (c AuthorizationConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
+}
+
+// PrivateAllowed 在未显式配置时默认允许 localhost 与私网地址。
+func (c AuthorizationConfig) PrivateAllowed() bool {
+	return c.AllowPrivateHosts == nil || *c.AllowPrivateHosts
 }
 
 // Default 返回单一终端 Agent Runtime 的默认配置。

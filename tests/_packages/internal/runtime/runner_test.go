@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"pentgo/internal/agent"
+	"pentgo/skills"
 )
 
 func TestRunnerFeedsAssistantDecisionAndExecutionResultIntoNextTurn(t *testing.T) {
@@ -132,6 +133,28 @@ func TestRunnerReturnsMixedPreflightOutcomesToTheExecutorAndHistory(t *testing.T
 	}
 	if !containsMessageFragment(client.requests[1].Messages, "user", "preflight_rejected") {
 		t.Fatalf("history = %+v", client.requests[1].Messages)
+	}
+}
+
+func TestRunnerInjectsSkillCatalogIntoSystemPrompt(t *testing.T) {
+	client := &scriptedClient{responses: []agent.Response{
+		{Content: "```python\nimport os\nprint('evidence')\n```"},
+		{Content: "TASK_COMPLETE"},
+	}}
+	config := defaultRunnerConfig()
+	config.SkillCatalog = []skills.Skill{{Name: "recon", Description: "信息收集方法论"}}
+	runner := NewRunner(client, &recordingExecutor{results: []ExecutionResult{{Block: CodeBlock{Index: 1, Language: LanguagePython}, Status: ExecutionSucceeded, Stdout: "evidence\n"}}}, config, nil, nil)
+	session := NewSession(Target{Canonical: "https://example.com"}, "检查目标", time.Now().UTC())
+
+	if err := runner.Run(context.Background(), session); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.requests) == 0 {
+		t.Fatal("no requests recorded")
+	}
+	prompt := client.requests[0].SystemPrompt
+	if !strings.Contains(prompt, "recon") || !strings.Contains(prompt, "信息收集方法论") {
+		t.Fatalf("system prompt missing catalog: %s", prompt)
 	}
 }
 

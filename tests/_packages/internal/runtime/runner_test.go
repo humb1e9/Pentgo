@@ -71,6 +71,29 @@ func TestRunnerStopsAfterConfiguredNoCodeLimit(t *testing.T) {
 	}
 }
 
+func TestRunnerRunsUnboundedUntilCompletionWhenMaxTurnsZero(t *testing.T) {
+	responses := make([]agent.Response, 0, 26)
+	for i := 0; i < 25; i++ {
+		responses = append(responses, agent.Response{Content: "```python\nimport os\nprint('probe')\n```"})
+	}
+	responses = append(responses, agent.Response{Content: "TASK_COMPLETE"})
+	client := &scriptedClient{responses: responses}
+	executor := &recordingExecutor{results: []ExecutionResult{{Block: CodeBlock{Index: 1, Language: LanguagePython}, Status: ExecutionSucceeded, Stdout: "probe\n"}}}
+	config := defaultRunnerConfig()
+	config.MaxTurns = 0
+	config.SoftStuckTurns = 1000
+	config.HardStuckTurns = 1000
+	runner := NewRunner(client, executor, config, nil, nil)
+	session := NewSession(Target{Canonical: "https://example.com"}, "检查目标", time.Now().UTC())
+
+	if err := runner.Run(context.Background(), session); err != nil {
+		t.Fatal(err)
+	}
+	if session.Status != SessionDone || session.Turn != 26 {
+		t.Fatalf("session = %+v", session)
+	}
+}
+
 func TestRunnerInjectsSkillContextOnlyOnce(t *testing.T) {
 	client := &scriptedClient{responses: []agent.Response{{Content: "SKILL_LOAD: recon"}, {Content: "```python\nimport os\nprint('evidence')\n```"}, {Content: "TASK_COMPLETE"}}}
 	loader := func(name string) (string, error) {

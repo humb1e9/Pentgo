@@ -71,7 +71,7 @@ func Default() Config {
 func defaultAgentConfig() AgentConfig {
 	return AgentConfig{
 		Provider:                  "openai",
-		MaxTurns:                  20,
+		MaxTurns:                  0,
 		RequestTimeoutSeconds:     60,
 		ExecutionTimeoutSeconds:   1800,
 		MaxOutputBytes:            65536,
@@ -98,9 +98,6 @@ func normalizeAgentConfig(agent *AgentConfig) {
 	defaults := defaultAgentConfig()
 	if agent.Provider == "" {
 		agent.Provider = defaults.Provider
-	}
-	if agent.MaxTurns <= 0 {
-		agent.MaxTurns = defaults.MaxTurns
 	}
 	if agent.RequestTimeoutSeconds <= 0 {
 		agent.RequestTimeoutSeconds = defaults.RequestTimeoutSeconds

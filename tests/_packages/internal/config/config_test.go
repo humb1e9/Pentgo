@@ -12,7 +12,7 @@ import (
 
 func TestDefaultContainsRootAgentRuntimeConfiguration(t *testing.T) {
 	agent := Default().Agent
-	if agent.Provider != "openai" || agent.MaxTurns != 20 || agent.RequestTimeoutSeconds != 60 {
+	if agent.Provider != "openai" || agent.MaxTurns != 0 || agent.RequestTimeoutSeconds != 60 {
 		t.Fatalf("agent default = %+v", agent)
 	}
 	if agent.ExecutionTimeoutSeconds != 1800 || agent.MaxOutputBytes != 65536 || agent.MaxParallelBlocks != 4 {

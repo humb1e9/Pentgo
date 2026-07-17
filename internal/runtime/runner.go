@@ -63,9 +63,6 @@ type Runner struct {
 
 // NewRunner 创建一个模型循环。nil loader 和 sleeper 使用默认实现。
 func NewRunner(client agent.Client, executor BlockExecutor, config RunnerConfig, load SkillLoader, sleep Sleeper) *Runner {
-	if config.MaxTurns <= 0 {
-		config.MaxTurns = 20
-	}
 	if config.NoCodeLimit <= 0 {
 		config.NoCodeLimit = 3
 	}
@@ -115,7 +112,7 @@ func (runner *Runner) Run(ctx context.Context, session *AgentSession) error {
 	lastFingerprint := ""
 	fingerprintCount := 0
 
-	for session.Turn < runner.config.MaxTurns {
+	for runner.config.MaxTurns <= 0 || session.Turn < runner.config.MaxTurns {
 		if err := ctx.Err(); err != nil {
 			_ = session.Cancel("cancelled", time.Now().UTC())
 			return nil

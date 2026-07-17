@@ -25,22 +25,40 @@ func TestLoadRejectsUnknownAndTraversalNames(t *testing.T) {
 
 func TestNamesListsRegisteredSkills(t *testing.T) {
 	names := Names()
-	if len(names) != 2 || names[0] != "recon" || names[1] != "terminal" {
+	want := []string{"nosql-injection", "recon", "terminal", "type-juggling", "waf-bypass"}
+	if len(names) != len(want) {
 		t.Fatalf("names = %q", names)
+	}
+	for i := range want {
+		if names[i] != want[i] {
+			t.Fatalf("names = %q, want %q", names, want)
+		}
 	}
 }
 
 func TestCatalogListsSkillsWithDescriptions(t *testing.T) {
 	catalog := Catalog()
-	if len(catalog) != 2 {
+	if len(catalog) != 5 {
 		t.Fatalf("catalog length = %d", len(catalog))
 	}
-	if catalog[0].Name != "recon" || catalog[1].Name != "terminal" {
+	if catalog[0].Name != "nosql-injection" {
 		t.Fatalf("catalog order = %+v", catalog)
 	}
 	for _, skill := range catalog {
 		if strings.TrimSpace(skill.Description) == "" {
 			t.Fatalf("skill %q has empty description", skill.Name)
+		}
+	}
+}
+
+func TestLoadMigratedSkill(t *testing.T) {
+	for _, name := range []string{"waf-bypass", "nosql-injection", "type-juggling"} {
+		content, err := Load(name)
+		if err != nil {
+			t.Fatalf("Load(%q) error = %v", name, err)
+		}
+		if strings.TrimSpace(content) == "" {
+			t.Fatalf("Load(%q) returned empty", name)
 		}
 	}
 }

@@ -6,13 +6,22 @@ import (
 	"sort"
 )
 
-const maxSkillBytes = 4000
+const maxSkillBytes = 16000
 
 //go:embed recon/SKILL.md
 var reconPrompt string
 
 //go:embed terminal/SKILL.md
 var terminalPrompt string
+
+//go:embed waf-bypass/SKILL.md
+var wafBypassPrompt string
+
+//go:embed nosql-injection/SKILL.md
+var nosqlInjectionPrompt string
+
+//go:embed type-juggling/SKILL.md
+var typeJugglingPrompt string
 
 type skillEntry struct {
 	description string
@@ -27,6 +36,18 @@ var registered = map[string]skillEntry{
 	"terminal": {
 		description: "终端 Agent 通用准则：只把已执行并回灌的输出当作证据。",
 		content:     terminalPrompt,
+	},
+	"waf-bypass": {
+		description: "WAF 绕过技法：编码/大小写/注释/分块/HTTP 层面的检测规避手法。",
+		content:     wafBypassPrompt,
+	},
+	"nosql-injection": {
+		description: "NoSQL 注入：MongoDB/Redis 等运算符注入、认证绕过与盲注提取。",
+		content:     nosqlInjectionPrompt,
+	},
+	"type-juggling": {
+		description: "类型混淆：PHP 松散比较、魔术哈希与 JSON 类型强制导致的认证/逻辑绕过。",
+		content:     typeJugglingPrompt,
 	},
 }
 

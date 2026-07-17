@@ -14,7 +14,7 @@ Use this file for token-centric attacks and flow abuse. Also load:
 
 - [oauth oidc misconfiguration](../oauth-oidc-misconfiguration/SKILL.md) for redirect URI, state, nonce, PKCE, and account-binding validation
 - [cors cross origin misconfiguration](../cors-cross-origin-misconfiguration/SKILL.md) when browser-readable APIs or token leakage may exist cross-origin
-- [saml sso assertion attacks](../saml-sso-assertion-attacks/SKILL.md) when the target uses enterprise SSO outside OAuth/OIDC
+- saml sso assertion attacks when the target uses enterprise SSO outside OAuth/OIDC
 
 ---
 

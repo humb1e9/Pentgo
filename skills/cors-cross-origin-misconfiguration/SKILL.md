@@ -6,11 +6,11 @@ description: >-
 
 # SKILL: CORS Misconfiguration — Credentialed Origins, Reflection, and Trust Boundary Errors
 
-> **AI LOAD INSTRUCTION**: Use this skill when browsers can access authenticated APIs cross-origin. Focus on reflected origins, credentialed requests, wildcard trust, parser mistakes, and origin allowlist bypasses. For JSONP hijacking deep dives, same-origin policy internals, honeypot de-anonymization, and CORS vs JSONP comparison, load the companion [SCENARIOS.md](./SCENARIOS.md).
+> **AI LOAD INSTRUCTION**: Use this skill when browsers can access authenticated APIs cross-origin. Focus on reflected origins, credentialed requests, wildcard trust, parser mistakes, and origin allowlist bypasses. For JSONP hijacking deep dives, same-origin policy internals, honeypot de-anonymization, and CORS vs JSONP comparison.
 
 ### Extended Scenarios
 
-Also load [SCENARIOS.md](./SCENARIOS.md) when you need:
+Advanced scenarios to research when you need:
 - JSONP hijacking complete attack scenario — watering hole + `<script>` cross-origin data theft
 - Honeypot de-anonymization via JSONP — use social platform JSONP endpoints to identify anonymous visitors
 - Same-origin policy deep dive — protocol/hostname/port definition, `document.domain` subdomain relaxation and its security risks
@@ -48,7 +48,7 @@ Load when:
 
 - Session or JSON action abuse: [csrf cross site request forgery](../csrf-cross-site-request-forgery/SKILL.md)
 - OAuth token leakage and callback binding: [oauth oidc misconfiguration](../oauth-oidc-misconfiguration/SKILL.md)
-- API auth context: [api auth and jwt abuse](../api-auth-and-jwt-abuse/SKILL.md)
+- API auth context: api auth and jwt abuse
 
 ---
 

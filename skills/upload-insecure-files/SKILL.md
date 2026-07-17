@@ -6,13 +6,13 @@ description: >-
 
 # SKILL: Upload Insecure Files — Validation Bypass, Storage Abuse, and Processing Chains
 
-> **AI LOAD INSTRUCTION**: Expert file upload attack playbook. Use when the target accepts files, imports, avatars, media, documents, or archives and you need the full workflow: validation bypass, storage path abuse, post-upload access, parser exploitation, multi-tenant overwrite, and chaining into XSS, XXE, CMDi, traversal, or business logic impact. For web server parsing vulnerabilities, PUT method exploitation, and specific CVEs (WebLogic, Flink, Tomcat), load the companion [SCENARIOS.md](./SCENARIOS.md).
+> **AI LOAD INSTRUCTION**: Expert file upload attack playbook. Use when the target accepts files, imports, avatars, media, documents, or archives and you need the full workflow: validation bypass, storage path abuse, post-upload access, parser exploitation, multi-tenant overwrite, and chaining into XSS, XXE, CMDi, traversal, or business logic impact. For web server parsing vulnerabilities, PUT method exploitation, and specific CVEs (WebLogic, Flink, Tomcat).
 
 ## 0. RELATED ROUTING
 
 ### Extended Scenarios
 
-Also load [SCENARIOS.md](./SCENARIOS.md) when you need:
+Advanced scenarios to research when you need:
 - IIS parsing vulnerabilities — `x.asp/` directory parsing, `;` semicolon truncation (`shell.asp;.jpg`)
 - Nginx parsing misconfiguration — `avatar.jpg/.php` with `cgi.fix_pathinfo=1`
 - Apache parsing — multiple extensions, `AddHandler`, CVE-2017-15715 `\n` (0x0A) bypass
@@ -28,8 +28,8 @@ Use this file as the deep upload workflow reference. Also load:
 - [xss cross site scripting](../xss-cross-site-scripting/SKILL.md) when uploads are rendered in browser contexts
 - [xxe xml external entity](../xxe-xml-external-entity/SKILL.md) when SVG, OOXML, or XML imports are accepted
 - [cmdi command injection](../cmdi-command-injection/SKILL.md) when a processor, converter, or media pipeline executes system tools
-- [business logic vulnerabilities](../business-logic-vulnerabilities/SKILL.md) when quotas, overwrite rules, approvals, or storage paths create logic bugs
-- [ghost-bits-cast-attack](../ghost-bits-cast-attack/SKILL.md) when the server is **Apache Tomcat** and the WAF blocks `.jsp` in `filename*` — Tomcat's `RFC2231Utility` narrows each char to byte, so `1.陪sp` (U+966A low byte = `j`) writes `1.jsp` to disk while the WAF sees no `.jsp` literal
+- business logic vulnerabilities when quotas, overwrite rules, approvals, or storage paths create logic bugs
+- ghost-bits-cast-attack when the server is **Apache Tomcat** and the WAF blocks `.jsp` in `filename*` — Tomcat's `RFC2231Utility` narrows each char to byte, so `1.陪sp` (U+966A low byte = `j`) writes `1.jsp` to disk while the WAF sees no `.jsp` literal
 
 ---
 
@@ -203,7 +203,7 @@ When the upload path includes account, project, or organization identifiers, alw
 | filename or metadata reflected | [xss cross site scripting](../xss-cross-site-scripting/SKILL.md) |
 | converter or processor shells out | [cmdi command injection](../cmdi-command-injection/SKILL.md) |
 | extraction path looks controllable | [path traversal lfi](../path-traversal-lfi/SKILL.md) |
-| overwrite, quota, approval, or tenant bug | [business logic vulnerabilities](../business-logic-vulnerabilities/SKILL.md) |
+| overwrite, quota, approval, or tenant bug | business logic vulnerabilities |
 
 ---
 

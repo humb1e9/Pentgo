@@ -6,17 +6,17 @@ description: >-
 
 # SKILL: SQL Injection — Expert Attack Playbook
 
-> **AI LOAD INSTRUCTION**: Advanced SQLi techniques. Assumes basic UNION/error/boolean-blind fundamentals known. Focuses on: per-database exploitation, out-of-band exfiltration, second-order injection, parameterized query bypass scenarios, filter evasion, and escalation to OS. For real-world CVE cases, SMB/DNS OOB exfiltration, INSERT/UPDATE injection patterns, and framework-specific exploitation (ThinkPHP, Django GIS), load the companion [SCENARIOS.md](./SCENARIOS.md).
+> **AI LOAD INSTRUCTION**: Advanced SQLi techniques. Assumes basic UNION/error/boolean-blind fundamentals known. Focuses on: per-database exploitation, out-of-band exfiltration, second-order injection, parameterized query bypass scenarios, filter evasion, and escalation to OS. For real-world CVE cases, SMB/DNS OOB exfiltration, INSERT/UPDATE injection patterns, and framework-specific exploitation (ThinkPHP, Django GIS).
 
 ## 0. RELATED ROUTING
 
-- [ghost-bits-cast-attack](../ghost-bits-cast-attack/SKILL.md) when the backend is **Java with Jackson** and your SQL keywords are WAF-blocked — Jackson's `charToHex` table is indexed by `ch & 0xFF`, so a Unicode character like `丰` (U+4E30) resolves to hex digit `0` inside a `\uXXXX` escape sequence, letting you smuggle `UNION`, `SELECT`, `1`, etc. without the WAF ever seeing them
+- ghost-bits-cast-attack when the backend is **Java with Jackson** and your SQL keywords are WAF-blocked — Jackson's `charToHex` table is indexed by `ch & 0xFF`, so a Unicode character like `丰` (U+4E30) resolves to hex digit `0` inside a `\uXXXX` escape sequence, letting you smuggle `UNION`, `SELECT`, `1`, etc. without the WAF ever seeing them
 
 ## 1. QUICK START
 
 ### Extended Scenarios
 
-Also load [SCENARIOS.md](./SCENARIOS.md) when you need:
+Advanced scenarios to research when you need:
 - SMB out-of-band exfiltration via `LOAD_FILE` + UNC paths (Windows MySQL)
 - KEY injection / URI injection / non-parameter injection points
 - INSERT/DELETE/UPDATE statement injection differences
@@ -26,7 +26,7 @@ Also load [SCENARIOS.md](./SCENARIOS.md) when you need:
 
 ### Advanced Reference
 
-Also load [SQLMAP_ADVANCED.md](./SQLMAP_ADVANCED.md) when you need:
+Advanced scenarios to research when you need:
 - SQLMap tamper scripts matrix and WAF bypass tamper chain recipes (space2comment, between, charencode, etc.)
 - `--technique`, `--risk`/`--level` combinations and `--second-url` for second-order injection
 - `--os-shell` / `--os-pwn` OS-level exploitation via SQLMap

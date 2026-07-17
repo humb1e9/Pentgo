@@ -11,12 +11,12 @@ description: >-
 ## 0. RELATED ROUTING
 
 - [jndi-injection](../jndi-injection/SKILL.md) when deserialization leads to JNDI lookup (e.g., post-JDK 8u191 bypass via LDAP → deserialization)
-- [unauthorized-access-common-services](../unauthorized-access-common-services/SKILL.md) when the deserialization endpoint is an exposed management service (RMI Registry, T3, AJP)
-- [ghost-bits-cast-attack](../ghost-bits-cast-attack/SKILL.md) when a WAF blocks your BCEL ClassLoader or Fastjson `@type` payload — Ghost Bits wraps each bytecode byte in a Unicode char whose low 8 bits match, yielding a payload the WAF cannot fingerprint
+- unauthorized-access-common-services when the deserialization endpoint is an exposed management service (RMI Registry, T3, AJP)
+- ghost-bits-cast-attack when a WAF blocks your BCEL ClassLoader or Fastjson `@type` payload — Ghost Bits wraps each bytecode byte in a Unicode char whose low 8 bits match, yielding a payload the WAF cannot fingerprint
 
 ### Advanced Reference
 
-Also load [JAVA_GADGET_CHAINS.md](./JAVA_GADGET_CHAINS.md) when you need:
+Advanced scenarios to research when you need:
 - Java gadget chain version compatibility matrix (CommonsCollections 1–7, CommonsBeanutils, Spring, JDK-only, Groovy, Hibernate, ROME, C3P0, etc.)
 - SnakeYAML gadget (ScriptEngineManager/URLClassLoader) with exploit JAR structure
 - Hessian/Kryo/Avro/XStream deserialization patterns and traffic fingerprints

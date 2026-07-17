@@ -11,7 +11,7 @@ description: >-
 ## 0. RELATED ROUTING
 
 - [authbypass-authentication-flaws](../authbypass-authentication-flaws/SKILL.md) — broader auth bypass (login flaws, session handling)
-- [waf-bypass-techniques](../waf-bypass-techniques/SKILL.md) — when bypass is WAF-specific rather than access control
+- waf-bypass-techniques — when bypass is WAF-specific rather than access control
 - [http-host-header-attacks](../http-host-header-attacks/SKILL.md) — Host header manipulation for routing bypass
 - [request-smuggling](../request-smuggling/SKILL.md) — smuggle past access controls entirely
 - [http2-specific-attacks](../http2-specific-attacks/SKILL.md) — h2c smuggling to bypass proxy ACLs

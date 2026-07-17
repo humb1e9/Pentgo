@@ -15,7 +15,7 @@ Routing note: load this skill when you suspect CDN/reverse-proxy and origin disa
 
 ## 0. RELATED ROUTING
 
-- [ghost-bits-cast-attack](../ghost-bits-cast-attack/SKILL.md) when the HTTP client library is **Apache HttpClient <= 4.5.9** (HTTPCLIENT-1974/1978) — injecting `瘍瘊` (U+760D U+760A, low bytes `\r\n`) into a header value causes the underlying char-to-byte writer to emit a literal CRLF, splitting the request at the origin without relying on CL/TE disagreement
+- ghost-bits-cast-attack when the HTTP client library is **Apache HttpClient <= 4.5.9** (HTTPCLIENT-1974/1978) — injecting `瘍瘊` (U+760D U+760A, low bytes `\r\n`) into a header value causes the underlying char-to-byte writer to emit a literal CRLF, splitting the request at the origin without relying on CL/TE disagreement
 
 ## 1. QUICK START
 
@@ -295,7 +295,7 @@ fetch("https://target.example/vulnerable", {
 
 ### Advanced Reference
 
-Also load [H2_SMUGGLING_VARIANTS.md](./H2_SMUGGLING_VARIANTS.md) when you need:
+Advanced scenarios to research when you need:
 - H2.CL and H2.TE variants with byte-level payload examples
 - CL.0 (connection close desync) — technique and detection
 - Fat GET request smuggling (body in GET request)
@@ -307,7 +307,7 @@ Also load [H2_SMUGGLING_VARIANTS.md](./H2_SMUGGLING_VARIANTS.md) when you need:
 
 ## 12. RELATED ROUTING
 
-- **Input enters interpreter/query language/template** (not HTTP framing) -> [Injection Testing Router](../injection-checking/SKILL.md) (then drill down into XSS, SQLi, SSTI, etc.).
+- **Input enters interpreter/query language/template** (not HTTP framing) -> Injection Testing Router (then drill down into XSS, SQLi, SSTI, etc.).
 - **Response header splitting / Location CRLF** -> [CRLF Injection](../crlf-injection/SKILL.md).
 - **Cache and path-key confusion** -> [Web Cache Deception](../web-cache-deception/SKILL.md).
 

@@ -10,7 +10,7 @@ description: >-
 
 ### Advanced Reference
 
-Also load [CACHE_POISONING_TECHNIQUES.md](./CACHE_POISONING_TECHNIQUES.md) when you need:
+Advanced scenarios to research when you need:
 - Web Cache Poisoning vs Web Cache Deception — clear distinction and attack flow comparison
 - Unkeyed header poisoning (X-Forwarded-Host, X-Forwarded-Scheme, X-Original-URL, multiple Host headers)
 - Unkeyed parameter poisoning (utm_content, fbclid, callback, reflected but not in cache key)

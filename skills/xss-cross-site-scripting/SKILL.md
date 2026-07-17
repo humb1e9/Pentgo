@@ -6,13 +6,13 @@ description: >-
 
 # SKILL: Cross-Site Scripting (XSS) — Expert Attack Playbook
 
-> **AI LOAD INSTRUCTION**: This skill covers non-obvious XSS techniques, context-specific payload selection, WAF bypass, CSP bypass, and post-exploitation. Assume the reader already knows `<script>alert(1)</script>` — this file only covers what base models typically miss. For real-world CVE cases, HttpOnly bypass strategies, XS-Leaks side channels, and session fixation attacks, load the companion [SCENARIOS.md](./SCENARIOS.md).
+> **AI LOAD INSTRUCTION**: This skill covers non-obvious XSS techniques, context-specific payload selection, WAF bypass, CSP bypass, and post-exploitation. Assume the reader already knows `<script>alert(1)</script>` — this file only covers what base models typically miss. For real-world CVE cases, HttpOnly bypass strategies, XS-Leaks side channels, and session fixation attacks.
 
 ## 0. RELATED ROUTING
 
 ### Extended Scenarios
 
-Also load [SCENARIOS.md](./SCENARIOS.md) when you need:
+Advanced scenarios to research when you need:
 - Django debug page XSS (CVE-2017-12794) — duplicate key error → unescaped exception → XSS
 - UTF-7 XSS for legacy IE environments (`+ADw-script+AD4-`)
 - HttpOnly bypass methodology — proxy-the-browser, session riding, CSRF-via-XSS
@@ -22,7 +22,7 @@ Also load [SCENARIOS.md](./SCENARIOS.md) when you need:
 
 ### Advanced Tricks
 
-Also load [ADVANCED_XSS_TRICKS.md](./ADVANCED_XSS_TRICKS.md) when you need:
+Advanced scenarios to research when you need:
 - mXSS / DOMPurify bypass — namespace confusion, `<noscript>` parsing differential, form/table restructuring
 - DOM Clobbering — property override via `id`/`name`, HTMLCollection, deep property chains
 - Modern framework XSS — React `dangerouslySetInnerHTML`, Vue `v-html`, Angular `bypassSecurityTrust*`, Next.js SSR

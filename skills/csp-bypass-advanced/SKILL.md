@@ -13,10 +13,10 @@ description: >-
 ## 0. RELATED ROUTING
 
 - [xss-cross-site-scripting](../xss-cross-site-scripting/SKILL.md) for XSS vectors to deliver after CSP bypass
-- [dangling-markup-injection](../dangling-markup-injection/SKILL.md) when CSP blocks scripts but HTML injection exists — exfiltrate without JS
+- dangling-markup-injection when CSP blocks scripts but HTML injection exists — exfiltrate without JS
 - [crlf-injection](../crlf-injection/SKILL.md) when CRLF can inject CSP header or steal nonce via response splitting
-- [waf-bypass-techniques](../waf-bypass-techniques/SKILL.md) when both WAF and CSP must be bypassed
-- [clickjacking](../clickjacking/SKILL.md) when CSP lacks `frame-ancestors` — clickjacking still possible
+- waf-bypass-techniques when both WAF and CSP must be bypassed
+- clickjacking when CSP lacks `frame-ancestors` — clickjacking still possible
 
 ---
 
@@ -239,7 +239,7 @@ CSP present?
 │   └── Script gadget creating dynamic scripts from DOM data
 │
 └── All script execution blocked?
-    ├── Dangling markup injection → exfil without JS (see ../dangling-markup-injection/SKILL.md)
+    ├── Dangling markup injection → exfil without JS
     ├── DNS prefetch exfiltration
     ├── WebRTC exfiltration
     ├── CSS injection for data extraction

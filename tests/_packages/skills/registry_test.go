@@ -29,3 +29,18 @@ func TestNamesListsRegisteredSkills(t *testing.T) {
 		t.Fatalf("names = %q", names)
 	}
 }
+
+func TestCatalogListsSkillsWithDescriptions(t *testing.T) {
+	catalog := Catalog()
+	if len(catalog) != 2 {
+		t.Fatalf("catalog length = %d", len(catalog))
+	}
+	if catalog[0].Name != "recon" || catalog[1].Name != "terminal" {
+		t.Fatalf("catalog order = %+v", catalog)
+	}
+	for _, skill := range catalog {
+		if strings.TrimSpace(skill.Description) == "" {
+			t.Fatalf("skill %q has empty description", skill.Name)
+		}
+	}
+}

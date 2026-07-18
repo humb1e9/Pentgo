@@ -32,6 +32,9 @@ func TestServiceUsesThirdModelRequestForFinalReport(t *testing.T) {
 	if len(client.requests) != 3 || string(body) != "# 最终报告\n\n## 已验证发现\n未验证漏洞。\n" {
 		t.Fatalf("requests/report = %d/%q", len(client.requests), body)
 	}
+	if !strings.Contains(client.requests[2].Messages[0].Content, "反幻觉审计") {
+		t.Fatalf("report request missing audit: %q", client.requests[2].Messages[0].Content)
+	}
 	if !containsEvent(events, "Generating final report.") || !containsEvent(events, "Final report generated.") {
 		t.Fatalf("events = %q", events)
 	}

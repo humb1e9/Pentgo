@@ -126,7 +126,8 @@ func (service *Service) Run(ctx context.Context, request Request, progress func(
 	reportMarkdown := ""
 	if ctx.Err() == nil {
 		progress(Event{Message: "Generating final report."})
-		markdown, reportErr := report.GenerateTerminalMarkdown(ctx, client, runner.ReportContext(session))
+		validated := runtime.ValidateReportContext(runner.ReportContext(session))
+		markdown, reportErr := report.GenerateTerminalMarkdown(ctx, client, validated)
 		if reportErr == nil {
 			reportMarkdown = markdown
 			progress(Event{Message: "Final report generated."})

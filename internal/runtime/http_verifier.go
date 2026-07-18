@@ -5,13 +5,30 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"sort"
 	"strings"
 	"time"
 )
 
-const defaultVerificationBodyBytes = 64 * 1024
+const (
+	defaultVerificationBodyBytes = 64 * 1024
+	loginRedirectLimit           = 10
+	loginSnippetBytes            = 300
+)
+
+var (
+	genericLoginCookieNames = map[string]bool{
+		"aspsessionid": true,
+		"phpsessid":    true,
+		"jsessionid":   true,
+		"cfid":         true,
+		"cftoken":      true,
+	}
+	loginSuccessTexts = []string{"logout", "log out", "dashboard", "welcome,", "로그아웃", "대시보드"}
+	loginFailureTexts = []string{"incorrect", "invalid", "failed", "wrong", "틀렸", "잘못된"}
+)
 
 // FindingSpec is a model-declared, framework-executed verification request.
 type FindingSpec struct {
@@ -38,6 +55,22 @@ type HTTPVerifier struct {
 	scope         Scope
 	reproductions int
 	maxBodyBytes  int
+}
+
+// loginOutcome contains the framework's deterministic login-session evidence.
+// SessionCookieHeader is process-local and must never be persisted or reported.
+type loginOutcome struct {
+	Attempted           bool
+	Verified            bool
+	StatusCode          int
+	CookieNames         []string
+	MeaningfulCookie    bool
+	SuccessText         bool
+	FailText            bool
+	RedirectAway        bool
+	Snippet             string
+	SessionCookieHeader string
+	Error               string
 }
 
 // VerificationRecord captures the framework-owned HTTP exchanges used to
@@ -226,6 +259,139 @@ func (verifier *HTTPVerifier) request(ctx context.Context, method, rawURL, body 
 		StatusCode: response.StatusCode,
 		Location:   response.Header.Get("Location"),
 	}, nil
+}
+
+func (verifier *HTTPVerifier) verifyLogin(ctx context.Context, spec FindingSpec) loginOutcome {
+	outcome := loginOutcome{Attempted: true}
+	if verifier == nil || verifier.client == nil {
+		outcome.Error = "verifier is not configured"
+		return outcome
+	}
+	loginURL, err := parseVerificationURL(spec.LoginURL)
+	if err != nil {
+		outcome.Error = "login URL: " + err.Error()
+		return outcome
+	}
+	if !verifier.scope.HostAllowed(loginURL.Hostname()) {
+		outcome.Error = "scope: login host out of authorized range"
+		return outcome
+	}
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		outcome.Error = "cookie jar: " + err.Error()
+		return outcome
+	}
+	client := *verifier.client
+	client.Jar = jar
+	client.CheckRedirect = verifier.loginRedirectPolicy(&outcome)
+
+	method := normalizedLoginMethod(spec.LoginMethod)
+	if !supportedVerificationMethod(method) {
+		outcome.Error = "unsupported login HTTP method " + method
+		return outcome
+	}
+	contentType := strings.TrimSpace(spec.LoginContentType)
+	if contentType == "" {
+		contentType = "application/x-www-form-urlencoded"
+	}
+	request, err := http.NewRequestWithContext(ctx, method, loginURL.String(), strings.NewReader(spec.LoginBody))
+	if err != nil {
+		outcome.Error = err.Error()
+		return outcome
+	}
+	request.Header.Set("Content-Type", contentType)
+	response, err := client.Do(request)
+	if err != nil {
+		outcome.Error = err.Error()
+		return outcome
+	}
+	defer response.Body.Close()
+
+	outcome.StatusCode = response.StatusCode
+	body, err := io.ReadAll(io.LimitReader(response.Body, int64(verifier.maxBodyBytes)+1))
+	if err != nil {
+		outcome.Error = err.Error()
+		return outcome
+	}
+	if len(body) > verifier.maxBodyBytes {
+		body = body[:verifier.maxBodyBytes]
+	}
+	outcome.Snippet = truncateBytes(string(body), loginSnippetBytes)
+	outcome.SuccessText = containsLoginText(outcome.Snippet, loginSuccessTexts)
+	outcome.FailText = containsLoginText(outcome.Snippet, loginFailureTexts)
+
+	sessionURL := loginSessionURL(spec, loginURL)
+	cookies := jar.Cookies(sessionURL)
+	outcome.CookieNames, outcome.SessionCookieHeader = cookieEvidence(cookies)
+	for _, name := range outcome.CookieNames {
+		if !genericLoginCookieNames[strings.ToLower(name)] {
+			outcome.MeaningfulCookie = true
+			break
+		}
+	}
+	outcome.Verified = !outcome.FailText && (outcome.SuccessText || outcome.RedirectAway) && (outcome.MeaningfulCookie || outcome.RedirectAway)
+	return outcome
+}
+
+func (verifier *HTTPVerifier) loginRedirectPolicy(outcome *loginOutcome) func(*http.Request, []*http.Request) error {
+	return func(request *http.Request, via []*http.Request) error {
+		if len(via) >= loginRedirectLimit {
+			return fmt.Errorf("login redirect limit exceeded")
+		}
+		if !verifier.scope.HostAllowed(request.URL.Hostname()) {
+			return fmt.Errorf("scope: login redirect host out of authorized range")
+		}
+		if len(via) == 1 && request.Response != nil && isRedirectAwayFromLogin(request.Response) {
+			outcome.RedirectAway = true
+		}
+		return nil
+	}
+}
+
+func isRedirectAwayFromLogin(response *http.Response) bool {
+	if response.StatusCode < http.StatusMultipleChoices || response.StatusCode >= http.StatusBadRequest {
+		return false
+	}
+	return !strings.Contains(strings.ToLower(response.Header.Get("Location")), "login")
+}
+
+func containsLoginText(body string, terms []string) bool {
+	body = strings.ToLower(body)
+	for _, term := range terms {
+		if strings.Contains(body, strings.ToLower(term)) {
+			return true
+		}
+	}
+	return false
+}
+
+func loginSessionURL(spec FindingSpec, loginURL *url.URL) *url.URL {
+	if strings.TrimSpace(spec.URL) == "" {
+		return loginURL
+	}
+	payloadURL, err := parseVerificationURL(spec.URL)
+	if err != nil {
+		return loginURL
+	}
+	return payloadURL
+}
+
+func cookieEvidence(cookies []*http.Cookie) ([]string, string) {
+	if len(cookies) == 0 {
+		return nil, ""
+	}
+	sorted := append([]*http.Cookie(nil), cookies...)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Name < sorted[j].Name
+	})
+	names := make([]string, 0, len(sorted))
+	values := make([]string, 0, len(sorted))
+	for _, cookie := range sorted {
+		names = append(names, cookie.Name)
+		values = append(values, cookie.Name+"="+cookie.Value)
+	}
+	return names, strings.Join(values, "; ")
 }
 
 func parseVerificationURL(rawURL string) (*url.URL, error) {

@@ -249,6 +249,94 @@ func TestHTTPVerifierRejectsUnsupportedMethodWithoutRequest(t *testing.T) {
 	}
 }
 
+func TestVerifyLoginEstablishesMeaningfulCookieSession(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/login" || request.Method != http.MethodPost {
+			t.Fatalf("request = %s %s", request.Method, request.URL.Path)
+		}
+		body, err := io.ReadAll(request.Body)
+		if err != nil || string(body) != "username=admin&password=admin" {
+			t.Fatalf("body/error = %q/%v", body, err)
+		}
+		http.SetCookie(writer, &http.Cookie{Name: "sid", Value: "abc", Path: "/"})
+		_, _ = io.WriteString(writer, "dashboard")
+	}))
+	defer server.Close()
+
+	verifier := NewHTTPVerifier(server.Client(), NewScope(hostOf(server.URL), nil, true), 3)
+	outcome := verifier.verifyLogin(context.Background(), FindingSpec{
+		LoginURL:  server.URL + "/login",
+		LoginBody: "username=admin&password=admin",
+	})
+	if !outcome.Attempted || !outcome.Verified || !outcome.MeaningfulCookie || outcome.StatusCode != http.StatusOK {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+	if !strings.Contains(outcome.SessionCookieHeader, "sid=abc") || len(outcome.CookieNames) != 1 || outcome.CookieNames[0] != "sid" {
+		t.Fatalf("session cookies = %+v", outcome)
+	}
+}
+
+func TestVerifyLoginRejectsFailureTextAndGenericCookie(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		http.SetCookie(writer, &http.Cookie{Name: "PHPSESSID", Value: "generic", Path: "/"})
+		_, _ = io.WriteString(writer, "invalid credentials")
+	}))
+	defer server.Close()
+
+	verifier := NewHTTPVerifier(server.Client(), NewScope(hostOf(server.URL), nil, true), 3)
+	outcome := verifier.verifyLogin(context.Background(), FindingSpec{LoginURL: server.URL + "/login"})
+	if outcome.Verified || outcome.MeaningfulCookie || !outcome.FailText {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+}
+
+func TestVerifyLoginDoesNotTreatGenericCookieAsSession(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		http.SetCookie(writer, &http.Cookie{Name: "PHPSESSID", Value: "generic", Path: "/"})
+		_, _ = io.WriteString(writer, "sign in")
+	}))
+	defer server.Close()
+
+	verifier := NewHTTPVerifier(server.Client(), NewScope(hostOf(server.URL), nil, true), 3)
+	outcome := verifier.verifyLogin(context.Background(), FindingSpec{LoginURL: server.URL + "/login"})
+	if outcome.Verified || outcome.MeaningfulCookie || outcome.SuccessText {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+}
+
+func TestVerifyLoginRecognizesRedirectAwayFromLogin(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/login" {
+			writer.Header().Set("Location", "/dashboard")
+			writer.WriteHeader(http.StatusFound)
+			return
+		}
+		_, _ = io.WriteString(writer, "ok")
+	}))
+	defer server.Close()
+
+	verifier := NewHTTPVerifier(server.Client(), NewScope(hostOf(server.URL), nil, true), 3)
+	outcome := verifier.verifyLogin(context.Background(), FindingSpec{LoginURL: server.URL + "/login"})
+	if !outcome.RedirectAway || !outcome.Verified {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+}
+
+func TestVerifyLoginRejectsOutOfScopeBeforeRequest(t *testing.T) {
+	hits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		hits++
+		_, _ = io.WriteString(writer, "unexpected")
+	}))
+	defer server.Close()
+
+	verifier := NewHTTPVerifier(server.Client(), NewScope("target.example", nil, false), 3)
+	outcome := verifier.verifyLogin(context.Background(), FindingSpec{LoginURL: server.URL + "/login"})
+	if !outcome.Attempted || outcome.Error == "" || hits != 0 {
+		t.Fatalf("outcome/hits = %+v/%d", outcome, hits)
+	}
+}
+
 func TestCurlCommandIncludesHeadersAndBody(t *testing.T) {
 	command := CurlCommand(FindingSpec{
 		Method:  http.MethodPost,

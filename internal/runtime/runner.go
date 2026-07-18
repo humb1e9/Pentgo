@@ -74,26 +74,32 @@ type Runner struct {
 }
 
 type verificationEvidence struct {
-	SchemaVersion        string            `json:"schema_version"`
-	VulnType             VulnType          `json:"vuln_type"`
-	Verdict              Verdict           `json:"verdict"`
-	Confidence           float64           `json:"confidence"`
-	Method               string            `json:"method"`
-	PayloadURL           string            `json:"payload_url"`
-	BaselineURL          string            `json:"baseline_url,omitempty"`
-	RequestHeaders       map[string]string `json:"request_headers,omitempty"`
-	RequestBody          string            `json:"request_body,omitempty"`
-	BaselineRequestBody  string            `json:"baseline_request_body,omitempty"`
-	PayloadStatus        int               `json:"payload_status,omitempty"`
-	PayloadResponseBody  string            `json:"payload_response_body,omitempty"`
-	PayloadLocation      string            `json:"payload_location,omitempty"`
-	BaselineStatus       int               `json:"baseline_status,omitempty"`
-	BaselineResponseBody string            `json:"baseline_response_body,omitempty"`
-	Reproductions        int               `json:"reproductions,omitempty"`
-	ScopeRejected        bool              `json:"scope_rejected,omitempty"`
-	ChecksPassed         []string          `json:"checks_passed,omitempty"`
-	ChecksFailed         []string          `json:"checks_failed,omitempty"`
-	Curl                 string            `json:"curl,omitempty"`
+	SchemaVersion         string            `json:"schema_version"`
+	VulnType              VulnType          `json:"vuln_type"`
+	Verdict               Verdict           `json:"verdict"`
+	Confidence            float64           `json:"confidence"`
+	Method                string            `json:"method"`
+	PayloadURL            string            `json:"payload_url"`
+	BaselineURL           string            `json:"baseline_url,omitempty"`
+	RequestHeaders        map[string]string `json:"request_headers,omitempty"`
+	RequestBody           string            `json:"request_body,omitempty"`
+	BaselineRequestBody   string            `json:"baseline_request_body,omitempty"`
+	PayloadStatus         int               `json:"payload_status,omitempty"`
+	PayloadResponseBody   string            `json:"payload_response_body,omitempty"`
+	PayloadLocation       string            `json:"payload_location,omitempty"`
+	BaselineStatus        int               `json:"baseline_status,omitempty"`
+	BaselineResponseBody  string            `json:"baseline_response_body,omitempty"`
+	Reproductions         int               `json:"reproductions,omitempty"`
+	ScopeRejected         bool              `json:"scope_rejected,omitempty"`
+	LoginAttempted        bool              `json:"login_attempted"`
+	LoginVerified         bool              `json:"login_verified"`
+	LoginStatus           int               `json:"login_status,omitempty"`
+	LoginCookieNames      []string          `json:"login_cookie_names,omitempty"`
+	LoginMeaningfulCookie bool              `json:"login_meaningful_cookie"`
+	LoginSnippet          string            `json:"login_snippet,omitempty"`
+	ChecksPassed          []string          `json:"checks_passed,omitempty"`
+	ChecksFailed          []string          `json:"checks_failed,omitempty"`
+	Curl                  string            `json:"curl,omitempty"`
 }
 
 // NewRunner 创建一个模型循环。nil loader 和 sleeper 使用默认实现。
@@ -341,7 +347,11 @@ func (runner *Runner) ConsolidateAndVerify(ctx context.Context, session *AgentSe
 			result.VulnType = spec.VulnType
 		}
 		if result.Curl == "" {
-			result.Curl = CurlCommand(spec)
+			if spec.VulnType == VulnCredential {
+				result.Curl = loginCurlCommand(spec)
+			} else {
+				result.Curl = CurlCommand(spec)
+			}
 		}
 		runner.persistVerificationEvidence(session, index+1, &result, record)
 		runner.findings = append(runner.findings, result)
@@ -356,26 +366,32 @@ func (runner *Runner) persistVerificationEvidence(session *AgentSession, index i
 		return
 	}
 	evidence := verificationEvidence{
-		SchemaVersion:        "1",
-		VulnType:             result.VulnType,
-		Verdict:              result.Verdict,
-		Confidence:           result.Confidence,
-		Method:               record.Method,
-		PayloadURL:           record.PayloadURL,
-		BaselineURL:          record.BaselineURL,
-		RequestHeaders:       cloneStringMap(record.RequestHeaders),
-		RequestBody:          record.RequestBody,
-		BaselineRequestBody:  record.BaselineRequestBody,
-		PayloadStatus:        record.PayloadStatus,
-		PayloadResponseBody:  record.PayloadResponseBody,
-		PayloadLocation:      record.PayloadLocation,
-		BaselineStatus:       record.BaselineStatus,
-		BaselineResponseBody: record.BaselineResponseBody,
-		Reproductions:        record.Reproductions,
-		ScopeRejected:        record.ScopeRejected,
-		ChecksPassed:         append([]string(nil), result.ChecksPassed...),
-		ChecksFailed:         append([]string(nil), result.ChecksFailed...),
-		Curl:                 result.Curl,
+		SchemaVersion:         "1",
+		VulnType:              result.VulnType,
+		Verdict:               result.Verdict,
+		Confidence:            result.Confidence,
+		Method:                record.Method,
+		PayloadURL:            record.PayloadURL,
+		BaselineURL:           record.BaselineURL,
+		RequestHeaders:        redactCookieHeaders(record.RequestHeaders),
+		RequestBody:           record.RequestBody,
+		BaselineRequestBody:   record.BaselineRequestBody,
+		PayloadStatus:         record.PayloadStatus,
+		PayloadResponseBody:   record.PayloadResponseBody,
+		PayloadLocation:       record.PayloadLocation,
+		BaselineStatus:        record.BaselineStatus,
+		BaselineResponseBody:  record.BaselineResponseBody,
+		Reproductions:         record.Reproductions,
+		ScopeRejected:         record.ScopeRejected,
+		LoginAttempted:        record.LoginAttempted,
+		LoginVerified:         record.LoginVerified,
+		LoginStatus:           record.LoginStatus,
+		LoginCookieNames:      append([]string(nil), record.LoginCookieNames...),
+		LoginMeaningfulCookie: record.LoginMeaningfulCookie,
+		LoginSnippet:          record.LoginSnippet,
+		ChecksPassed:          append([]string(nil), result.ChecksPassed...),
+		ChecksFailed:          append([]string(nil), result.ChecksFailed...),
+		Curl:                  result.Curl,
 	}
 	name := fmt.Sprintf("verification-%03d", index)
 	path, err := runner.config.EvidenceSink.WriteEvidence(name, evidence)
@@ -386,6 +402,21 @@ func (runner *Runner) persistVerificationEvidence(session *AgentSession, index i
 		return
 	}
 	result.EvidencePath = path
+}
+
+func redactCookieHeaders(headers map[string]string) map[string]string {
+	if len(headers) == 0 {
+		return nil
+	}
+	redacted := make(map[string]string, len(headers))
+	for key, value := range headers {
+		if strings.EqualFold(key, "Cookie") || strings.EqualFold(key, "Set-Cookie") {
+			redacted[key] = "[redacted]"
+			continue
+		}
+		redacted[key] = value
+	}
+	return redacted
 }
 
 // ReportContext 返回本次 Runner 执行收集的有界、无代码报告上下文副本。

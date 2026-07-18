@@ -129,6 +129,22 @@ func TestRenderVerifiedFindingsClassifiesFrameworkVerdicts(t *testing.T) {
 	}
 }
 
+func TestRenderVerifiedFindingsRendersCredentialLoginMetadata(t *testing.T) {
+	markdown := RenderVerifiedFindings([]runtime.VerificationResult{{
+		Verdict:          runtime.VerdictVerified,
+		VulnType:         runtime.VulnCredential,
+		Confidence:       0.80,
+		LoginVerified:    true,
+		LoginCookieNames: []string{"sid", "csrf"},
+		Username:         "fixture",
+	}})
+	for _, want := range []string{"Login verified: true", "Session cookies: sid, csrf", "Username: fixture"} {
+		if !strings.Contains(markdown, want) {
+			t.Fatalf("markdown missing %q: %q", want, markdown)
+		}
+	}
+}
+
 func TestRenderVerifiedFindingsMarksEmptyInputAsUnverified(t *testing.T) {
 	if markdown := RenderVerifiedFindings(nil); !strings.Contains(markdown, "未验证漏洞") {
 		t.Fatalf("markdown = %q", markdown)

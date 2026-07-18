@@ -56,14 +56,20 @@ type Evidence struct {
 
 // VerificationResult is the deterministic result sent to the report pipeline.
 type VerificationResult struct {
-	Verdict      Verdict  `json:"verdict"`
-	VulnType     VulnType `json:"vuln_type"`
-	Confidence   float64  `json:"confidence"`
-	ChecksPassed []string `json:"checks_passed,omitempty"`
-	ChecksFailed []string `json:"checks_failed,omitempty"`
-	Summary      string   `json:"summary"`
-	Curl         string   `json:"curl,omitempty"`
-	EvidencePath string   `json:"evidence_path,omitempty"`
+	Verdict               Verdict  `json:"verdict"`
+	VulnType              VulnType `json:"vuln_type"`
+	Confidence            float64  `json:"confidence"`
+	ChecksPassed          []string `json:"checks_passed,omitempty"`
+	ChecksFailed          []string `json:"checks_failed,omitempty"`
+	Summary               string   `json:"summary"`
+	Curl                  string   `json:"curl,omitempty"`
+	EvidencePath          string   `json:"evidence_path,omitempty"`
+	LoginAttempted        bool     `json:"login_attempted,omitempty"`
+	LoginVerified         bool     `json:"login_verified,omitempty"`
+	LoginStatus           int      `json:"login_status,omitempty"`
+	LoginCookieNames      []string `json:"login_cookie_names,omitempty"`
+	LoginMeaningfulCookie bool     `json:"login_meaningful_cookie,omitempty"`
+	Username              string   `json:"username,omitempty"`
 }
 
 // Score applies bingo-style deterministic, reproducibility, causal, narrow-

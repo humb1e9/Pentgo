@@ -362,6 +362,9 @@ func TestVerifyWithEvidenceScoresCredentialLoginOnce(t *testing.T) {
 	if !record.LoginAttempted || !record.LoginVerified || record.LoginStatus != http.StatusOK || record.Reproductions != 1 {
 		t.Fatalf("record = %+v", record)
 	}
+	if strings.Contains(result.Curl, "password=fixture") || !strings.Contains(result.Curl, "password=REDACTED") {
+		t.Fatalf("credential curl = %q", result.Curl)
+	}
 }
 
 func TestVerifyWithEvidenceRefutesFailedCredentialLogin(t *testing.T) {

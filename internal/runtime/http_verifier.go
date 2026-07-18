@@ -223,6 +223,7 @@ func (verifier *HTTPVerifier) VerifyWithEvidence(ctx context.Context, spec Findi
 		ReproductionCount: repeats,
 		LoginVerified:     login.Verified,
 	})
+	result.applyLoginMetadata(login, spec.Username)
 	result.Curl = CurlCommand(spec)
 	if login.Attempted && !login.Verified {
 		result.ChecksFailed = append(result.ChecksFailed, "auth session not established")
@@ -267,12 +268,8 @@ func (verifier *HTTPVerifier) verifyCredential(ctx context.Context, spec Finding
 		ReproductionCount: record.Reproductions,
 		LoginVerified:     login.Verified,
 	})
-	credentialSpec := spec
-	credentialSpec.Method = method
-	credentialSpec.URL = loginURL.String()
-	credentialSpec.Body = spec.LoginBody
-	credentialSpec.Headers = map[string]string{"Content-Type": normalizedLoginContentType(spec.LoginContentType)}
-	result.Curl = CurlCommand(credentialSpec)
+	result.applyLoginMetadata(login, spec.Username)
+	result.Curl = loginCurlCommand(spec)
 	if !login.Verified {
 		result.ChecksFailed = append(result.ChecksFailed, "auth session not established")
 	}
@@ -302,6 +299,18 @@ func (record *VerificationRecord) applyLoginOutcome(outcome loginOutcome) {
 	record.LoginCookieNames = append([]string(nil), outcome.CookieNames...)
 	record.LoginMeaningfulCookie = outcome.MeaningfulCookie
 	record.LoginSnippet = outcome.Snippet
+}
+
+func (result *VerificationResult) applyLoginMetadata(outcome loginOutcome, username string) {
+	if result == nil || !outcome.Attempted {
+		return
+	}
+	result.LoginAttempted = true
+	result.LoginVerified = outcome.Verified
+	result.LoginStatus = outcome.StatusCode
+	result.LoginCookieNames = append([]string(nil), outcome.CookieNames...)
+	result.LoginMeaningfulCookie = outcome.MeaningfulCookie
+	result.Username = username
 }
 
 func cloneStringMap(values map[string]string) map[string]string {
@@ -470,6 +479,40 @@ func normalizedLoginContentType(contentType string) string {
 		return "application/x-www-form-urlencoded"
 	}
 	return contentType
+}
+
+func loginCurlCommand(spec FindingSpec) string {
+	credentialSpec := spec
+	credentialSpec.Method = normalizedLoginMethod(spec.LoginMethod)
+	credentialSpec.URL = spec.LoginURL
+	credentialSpec.Body = redactedLoginBody(spec.LoginBody, spec.LoginContentType)
+	credentialSpec.Headers = map[string]string{"Content-Type": normalizedLoginContentType(spec.LoginContentType)}
+	return CurlCommand(credentialSpec)
+}
+
+func redactedLoginBody(body, contentType string) string {
+	if !strings.HasPrefix(strings.ToLower(normalizedLoginContentType(contentType)), "application/x-www-form-urlencoded") {
+		return "REDACTED"
+	}
+	values, err := url.ParseQuery(body)
+	if err != nil {
+		return "REDACTED"
+	}
+	for key := range values {
+		if isSensitiveLoginField(key) {
+			values[key] = []string{"REDACTED"}
+		}
+	}
+	return values.Encode()
+}
+
+func isSensitiveLoginField(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "password", "pass", "passwd", "pwd", "secret", "token":
+		return true
+	default:
+		return false
+	}
 }
 
 func cookieEvidence(cookies []*http.Cookie) ([]string, string) {

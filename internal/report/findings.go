@@ -59,6 +59,15 @@ func renderFindingGroup(builder *strings.Builder, heading string, findings []run
 		if len(finding.ChecksFailed) > 0 {
 			fmt.Fprintf(builder, "- Checks failed: %s\n", inline(strings.Join(finding.ChecksFailed, "; ")))
 		}
+		if finding.VulnType == runtime.VulnCredential {
+			fmt.Fprintf(builder, "- Login verified: %t\n", finding.LoginVerified)
+			if len(finding.LoginCookieNames) > 0 {
+				fmt.Fprintf(builder, "- Session cookies: %s\n", inline(strings.Join(finding.LoginCookieNames, ", ")))
+			}
+			if finding.Username != "" {
+				fmt.Fprintf(builder, "- Username: %s\n", inline(finding.Username))
+			}
+		}
 		builder.WriteString("\n")
 	}
 }

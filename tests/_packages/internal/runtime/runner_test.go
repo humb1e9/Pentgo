@@ -446,6 +446,64 @@ payload: payload
 	}
 }
 
+func TestRunnerPersistsRedactedLoginEvidence(t *testing.T) {
+	client := &scriptedClient{responses: []agent.Response{{Content: `
+=== PENTGO FINDING ===
+type: credential
+login_url: https://example.com/login
+login_body: username=fixture&password=fixture-secret
+username: fixture
+=== END PENTGO FINDING ===`}}}
+	verifier := &recordingFindingVerifier{
+		results: []VerificationResult{{
+			Verdict:          VerdictLikely,
+			VulnType:         VulnCredential,
+			Confidence:       0.55,
+			Curl:             "curl --data-raw 'username=fixture&password=REDACTED'",
+			LoginVerified:    true,
+			LoginCookieNames: []string{"sid"},
+			Username:         "fixture",
+		}},
+		records: []VerificationRecord{{
+			Method:                "POST",
+			PayloadURL:            "https://example.com/login",
+			RequestHeaders:        map[string]string{"Cookie": "sid=fixture-cookie", "X-Test": "value"},
+			LoginAttempted:        true,
+			LoginVerified:         true,
+			LoginStatus:           200,
+			LoginCookieNames:      []string{"sid"},
+			LoginMeaningfulCookie: true,
+			LoginSnippet:          "dashboard",
+		}},
+	}
+	sink := &memoryEvidenceSink{}
+	config := defaultRunnerConfig()
+	config.Verifier = verifier
+	config.EvidenceSink = sink
+	runner := NewRunner(client, &recordingExecutor{}, config, nil, nil)
+	runner.history = NewHistory("https://example.com", "check target")
+	session := NewSession(Target{Canonical: "https://example.com"}, "check target", time.Now().UTC())
+	session.Status = SessionDone
+
+	runner.ConsolidateAndVerify(context.Background(), session)
+	evidence, ok := sink.value.(verificationEvidence)
+	if !ok {
+		t.Fatalf("evidence = %#v", sink.value)
+	}
+	if !evidence.LoginAttempted || !evidence.LoginVerified || evidence.LoginStatus != 200 || !evidence.LoginMeaningfulCookie || len(evidence.LoginCookieNames) != 1 || evidence.LoginCookieNames[0] != "sid" {
+		t.Fatalf("login evidence = %+v", evidence)
+	}
+	encoded, err := json.Marshal(evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"fixture-secret", "fixture-cookie"} {
+		if strings.Contains(string(encoded), secret) {
+			t.Fatalf("evidence leaked %q: %s", secret, encoded)
+		}
+	}
+}
+
 func TestRunnerContinuesWhenVerificationEvidenceWriteFails(t *testing.T) {
 	client := &scriptedClient{responses: []agent.Response{{Content: `
 === PENTGO FINDING ===

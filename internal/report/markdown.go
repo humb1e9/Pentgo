@@ -25,6 +25,8 @@ func renderMarkdown(session *runtime.AgentSession, generatedAt time.Time) string
 	if len(session.LoadedSkills) > 0 {
 		fmt.Fprintf(&builder, "- Loaded skills: `%s`\n", inline(strings.Join(session.LoadedSkills, ", ")))
 	}
+	builder.WriteString("\n")
+	builder.WriteString(RenderVerifiedFindings(session.Findings))
 	builder.WriteString("\n## Execution Timeline\n\n")
 	if len(session.Timeline) == 0 {
 		builder.WriteString("No runtime events recorded.\n")

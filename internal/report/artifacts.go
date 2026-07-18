@@ -138,9 +138,7 @@ func (writer *EngagementWriter) PublishWithReport(session *runtime.AgentSession,
 	if err := writeAtomic(filepath.Join(writer.stagingDir, "session.json"), sessionJSON, 0o600); err != nil {
 		return Artifacts{}, err
 	}
-	if strings.TrimSpace(markdown) == "" {
-		markdown = renderMarkdown(session, generatedAt)
-	}
+	markdown = renderPublishedMarkdown(session, generatedAt, markdown)
 	if err := writeAtomic(filepath.Join(writer.stagingDir, "report.md"), []byte(markdown), 0o600); err != nil {
 		return Artifacts{}, err
 	}
@@ -155,6 +153,19 @@ func (writer *EngagementWriter) PublishWithReport(session *runtime.AgentSession,
 		Markdown:      filepath.Join(writer.finalDir, "report.md"),
 		WorkDirectory: filepath.Join(writer.finalDir, "work"),
 	}, nil
+}
+
+func renderPublishedMarkdown(session *runtime.AgentSession, generatedAt time.Time, narrative string) string {
+	if strings.TrimSpace(narrative) == "" {
+		return renderMarkdown(session, generatedAt)
+	}
+	var builder strings.Builder
+	builder.WriteString("# PentGo Agent Report\n\n")
+	builder.WriteString(RenderVerifiedFindings(session.Findings))
+	builder.WriteString("\n")
+	builder.WriteString(strings.TrimSpace(narrative))
+	builder.WriteString("\n")
+	return builder.String()
 }
 
 // Abort 删除尚未发布的临时 engagement 目录。

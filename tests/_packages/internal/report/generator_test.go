@@ -12,7 +12,7 @@ import (
 )
 
 func TestGenerateTerminalMarkdownUsesIndependentEvidenceOnlyRequest(t *testing.T) {
-	client := &reportClient{response: agent.Response{Content: "# 最终报告\n\n## 已验证发现\n未验证漏洞。"}}
+	client := &reportClient{response: agent.Response{Content: "## 执行摘要\n已完成执行。"}}
 	markdown, err := GenerateTerminalMarkdown(context.Background(), client, runtime.ReportContext{
 		Target: "https://example.test",
 		Turns: []runtime.ReportTurn{{
@@ -24,14 +24,14 @@ func TestGenerateTerminalMarkdownUsesIndependentEvidenceOnlyRequest(t *testing.T
 			}},
 		}},
 	})
-	if err != nil || markdown != "# 最终报告\n\n## 已验证发现\n未验证漏洞。" || len(client.requests) != 1 {
+	if err != nil || markdown != "## 执行摘要\n已完成执行。" || len(client.requests) != 1 {
 		t.Fatalf("markdown/err/requests = %q/%v/%d", markdown, err, len(client.requests))
 	}
 	request := client.requests[0]
 	if len(request.Messages) != 1 || request.Messages[0].Role != "user" || strings.Contains(request.Messages[0].Content, "```python") {
 		t.Fatalf("request messages = %+v", request.Messages)
 	}
-	for _, section := range []string{"目标与范围", "执行摘要", "已验证发现", "证据索引", "影响与修复建议", "未完成或受阻项目"} {
+	for _, section := range []string{"目标与范围", "执行摘要", "影响与修复建议", "未完成或受阻项目", "确定性渲染"} {
 		if !strings.Contains(request.SystemPrompt, section) {
 			t.Fatalf("system prompt missing %q: %q", section, request.SystemPrompt)
 		}
@@ -46,7 +46,7 @@ func TestGenerateTerminalMarkdownRejectsEmptyModelResponse(t *testing.T) {
 }
 
 func TestGenerateTerminalMarkdownAcceptsValidatedReportContext(t *testing.T) {
-	client := &reportClient{response: agent.Response{Content: "# 最终报告\n\n## 已验证发现\n未验证漏洞。"}}
+	client := &reportClient{response: agent.Response{Content: "## 执行摘要\n已完成执行。"}}
 	validated := runtime.ValidateReportContext(runtime.ReportContext{
 		Target: "https://example.test",
 		Turns: []runtime.ReportTurn{{
@@ -75,8 +75,8 @@ func TestGenerateTerminalMarkdownAcceptsValidatedReportContext(t *testing.T) {
 	}
 }
 
-func TestGenerateTerminalMarkdownUsesFrameworkVerdictsForClassification(t *testing.T) {
-	client := &reportClient{response: agent.Response{Content: "# 最终报告\n"}}
+func TestGenerateTerminalMarkdownSeparatesNarrativeFromFrameworkFindings(t *testing.T) {
+	client := &reportClient{response: agent.Response{Content: "## 执行摘要\n已完成执行。"}}
 	_, err := GenerateTerminalMarkdown(context.Background(), client, runtime.ReportContext{
 		Target: "https://example.test",
 		VerifiedFindings: []runtime.VerificationResult{{
@@ -93,7 +93,7 @@ func TestGenerateTerminalMarkdownUsesFrameworkVerdictsForClassification(t *testi
 		t.Fatalf("request count = %d", len(client.requests))
 	}
 	request := client.requests[0]
-	for _, want := range []string{"框架验证发现", "Verdict=VERIFIED", "疑似发现", "INCONCLUSIVE/REFUTED"} {
+	for _, want := range []string{"确定性渲染", "仅撰写叙述性章节", "勿重复"} {
 		if !strings.Contains(request.SystemPrompt, want) {
 			t.Fatalf("system prompt missing %q: %q", want, request.SystemPrompt)
 		}
@@ -105,8 +105,45 @@ func TestGenerateTerminalMarkdownUsesFrameworkVerdictsForClassification(t *testi
 	}
 }
 
+func TestRenderVerifiedFindingsClassifiesFrameworkVerdicts(t *testing.T) {
+	markdown := RenderVerifiedFindings([]runtime.VerificationResult{
+		{
+			Verdict:      runtime.VerdictVerified,
+			VulnType:     runtime.VulnXSS,
+			Confidence:   0.95,
+			Summary:      "payload reflected verbatim",
+			Curl:         "curl -i -X GET 'https://example.test/?q=payload'",
+			EvidencePath: "evidence/verification-001.json",
+		},
+		{
+			Verdict:    runtime.VerdictInconclusive,
+			VulnType:   runtime.VulnSQLI,
+			Confidence: 0.40,
+			Summary:    "no causal difference",
+		},
+	})
+	for _, want := range []string{"## 已验证发现", "### 确认漏洞", "XSS", "curl -i -X GET", "evidence/verification-001.json", "### 声明未获框架验证", "INCONCLUSIVE"} {
+		if !strings.Contains(markdown, want) {
+			t.Fatalf("markdown missing %q: %q", want, markdown)
+		}
+	}
+}
+
+func TestRenderVerifiedFindingsMarksEmptyInputAsUnverified(t *testing.T) {
+	if markdown := RenderVerifiedFindings(nil); !strings.Contains(markdown, "未验证漏洞") {
+		t.Fatalf("markdown = %q", markdown)
+	}
+}
+
 func TestPublishWithReportWritesModelMarkdown(t *testing.T) {
 	session := artifactTestSession(t)
+	session.Findings = []runtime.VerificationResult{{
+		Verdict:      runtime.VerdictVerified,
+		VulnType:     runtime.VulnXSS,
+		Confidence:   0.95,
+		Curl:         "curl -i -X GET 'https://example.test/?q=payload'",
+		EvidencePath: "evidence/verification-001.json",
+	}}
 	writer, err := NewEngagementWriter(t.TempDir(), session.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -117,7 +154,15 @@ func TestPublishWithReportWritesModelMarkdown(t *testing.T) {
 		t.Fatal(err)
 	}
 	body, err := os.ReadFile(artifacts.Markdown)
-	if err != nil || string(body) != "# 模型报告\n" {
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"# PentGo Agent Report", "## 已验证发现", "curl -i -X GET", "evidence/verification-001.json", "# 模型报告"} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("report missing %q: %q", want, body)
+		}
+	}
+	if strings.Index(string(body), "## 已验证发现") > strings.Index(string(body), "# 模型报告") {
 		t.Fatalf("body/err = %q/%v", body, err)
 	}
 }
@@ -134,7 +179,7 @@ func TestPublishWithReportFallsBackForEmptyMarkdown(t *testing.T) {
 		t.Fatal(err)
 	}
 	body, err := os.ReadFile(artifacts.Markdown)
-	if err != nil || !strings.Contains(string(body), "## Execution Timeline") {
+	if err != nil || !strings.Contains(string(body), "## 已验证发现") || !strings.Contains(string(body), "## Execution Timeline") {
 		t.Fatalf("body/err = %q/%v", body, err)
 	}
 }

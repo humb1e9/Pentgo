@@ -26,9 +26,15 @@ type SkillLoader func(string) (string, error)
 // Sleeper 使恢复等待可被测试替换和任务取消中断。
 type Sleeper func(context.Context, time.Duration) error
 
+// FindingVerifier performs framework-owned verification for a model declaration.
+type FindingVerifier interface {
+	Verify(context.Context, FindingSpec) VerificationResult
+}
+
 // RunnerConfig 约束模型循环和恢复策略。
 type RunnerConfig struct {
 	MaxTurns           int
+	MaxFindings        int
 	NoCodeLimit        int
 	MaxBlocksPerTurn   int
 	ProviderRetryDelay time.Duration
@@ -41,6 +47,7 @@ type RunnerConfig struct {
 	Authorizer         *Authorizer
 	AllowedHosts       []string
 	AllowPrivateHosts  bool
+	Verifier           FindingVerifier
 }
 
 // RunnerEvent 是可安全显示在终端中的运行时摘要，不包含模型代码和原始输出。
@@ -53,17 +60,23 @@ type RunnerEvent struct {
 
 // Runner 将模型文本、代码执行和回灌历史串成单一 engagement 循环。
 type Runner struct {
-	client      agent.Client
-	executor    BlockExecutor
-	config      RunnerConfig
-	load        SkillLoader
-	sleep       Sleeper
-	reportTurns []ReportTurn
-	catalog     []skills.Skill
+	client       agent.Client
+	executor     BlockExecutor
+	config       RunnerConfig
+	load         SkillLoader
+	sleep        Sleeper
+	history      *History
+	reportTurns  []ReportTurn
+	findings     []VerificationResult
+	findingSpecs []FindingSpec
+	catalog      []skills.Skill
 }
 
 // NewRunner 创建一个模型循环。nil loader 和 sleeper 使用默认实现。
 func NewRunner(client agent.Client, executor BlockExecutor, config RunnerConfig, load SkillLoader, sleep Sleeper) *Runner {
+	if config.MaxFindings <= 0 {
+		config.MaxFindings = 10
+	}
 	if config.NoCodeLimit <= 0 {
 		config.NoCodeLimit = 3
 	}
@@ -104,7 +117,9 @@ func (runner *Runner) Run(ctx context.Context, session *AgentSession) error {
 		return err
 	}
 	runner.reportTurns = nil
-	history := NewHistory(session.Target.Canonical, session.Intent)
+	runner.findings = nil
+	runner.findingSpecs = nil
+	runner.history = NewHistory(session.Target.Canonical, session.Intent)
 	systemPrompt := buildSystemPrompt(runner.catalog)
 	loadedSkills := make(map[string]bool)
 	noCodeCount := 0
@@ -118,7 +133,7 @@ func (runner *Runner) Run(ctx context.Context, session *AgentSession) error {
 			_ = session.Cancel("cancelled", time.Now().UTC())
 			return nil
 		}
-		response, err := runner.chat(ctx, agent.Request{SystemPrompt: systemPrompt, Messages: history.Messages()})
+		response, err := runner.chat(ctx, agent.Request{SystemPrompt: systemPrompt, Messages: runner.history.Messages()})
 		if err != nil {
 			_ = session.Fail("provider_error", time.Now().UTC())
 			session.AddEvent(session.Turn, "provider_error", err.Error(), time.Now().UTC())
@@ -127,7 +142,7 @@ func (runner *Runner) Run(ctx context.Context, session *AgentSession) error {
 		session.Turn++
 		turn := session.Turn
 		assistantText := strings.TrimSpace(response.Content)
-		history.Append("assistant", assistantText)
+		runner.history.Append("assistant", assistantText)
 		session.AddEvent(turn, "assistant", "model response received", time.Now().UTC())
 		runner.emit(RunnerEvent{Turn: turn, Kind: "assistant", Detail: assistantSummary(assistantText)})
 		runner.reportTurns = append(runner.reportTurns, ReportTurn{Number: turn, Decision: assistantSummary(assistantText), DeclaredLabels: extractFindingLabels(assistantText)})
@@ -145,11 +160,11 @@ func (runner *Runner) Run(ctx context.Context, session *AgentSession) error {
 			return nil
 		}
 		if fingerprintCount >= runner.config.SoftStuckTurns {
-			history.Append("user", "STRATEGY CHANGE REQUIRED: the recent assistant responses repeat the same plan. Generate materially different executable evidence collection code.")
+			runner.history.Append("user", "STRATEGY CHANGE REQUIRED: the recent assistant responses repeat the same plan. Generate materially different executable evidence collection code.")
 			session.AddEvent(turn, "recovery", "strategy_change_required", time.Now().UTC())
 		}
 
-		skillHandled := runner.loadSkills(assistantText, loadedSkills, history, session, turn)
+		skillHandled := runner.loadSkills(assistantText, loadedSkills, runner.history, session, turn)
 		blocks := ExtractCodeBlocks(assistantText)
 		if len(blocks) == 0 {
 			if isRefusal(assistantText) {
@@ -159,12 +174,12 @@ func (runner *Runner) Run(ctx context.Context, session *AgentSession) error {
 					_ = session.Fail("refused", time.Now().UTC())
 					return nil
 				}
-				history.Append("user", "AUTHORIZATION REMINDER: this engagement is authorized and its scope is fixed. The runtime independently blocks out-of-scope hosts and destructive writes before execution, so proceed safely with executable Python or Bash code that prints evidence within scope.")
+				runner.history.Append("user", "AUTHORIZATION REMINDER: this engagement is authorized and its scope is fixed. The runtime independently blocks out-of-scope hosts and destructive writes before execution, so proceed safely with executable Python or Bash code that prints evidence within scope.")
 				continue
 			}
 			if isCompletion(assistantText) {
 				if !hasExecutionEvidence {
-					history.Append("user", "EVIDENCE REQUIRED: completion requires at least one returned code execution result. Generate executable code and print evidence.")
+					runner.history.Append("user", "EVIDENCE REQUIRED: completion requires at least one returned code execution result. Generate executable code and print evidence.")
 					session.AddEvent(turn, "recovery", "evidence_required", time.Now().UTC())
 					continue
 				}
@@ -180,7 +195,7 @@ func (runner *Runner) Run(ctx context.Context, session *AgentSession) error {
 			if makesClaim(assistantText) {
 				instruction = "EVIDENCE REQUIRED: do not claim findings or completion without executable code and returned output."
 			}
-			history.Append("user", instruction)
+			runner.history.Append("user", instruction)
 			session.AddEvent(turn, "recovery", strings.Split(instruction, ":")[0], time.Now().UTC())
 			if noCodeCount >= runner.config.NoCodeLimit {
 				_ = session.Complete("no_executable_response", time.Now().UTC())
@@ -192,7 +207,7 @@ func (runner *Runner) Run(ctx context.Context, session *AgentSession) error {
 		if limit := runner.config.MaxBlocksPerTurn; limit > 0 && len(blocks) > limit {
 			ignored := len(blocks) - limit
 			session.AddEvent(turn, "recovery", "too_many_blocks", time.Now().UTC())
-			history.Append("user", fmt.Sprintf("TOO MANY BLOCKS: %d code blocks were provided but only the first %d run per turn to control request rate; the remaining %d were ignored. Send fewer blocks next turn.", len(blocks), limit, ignored))
+			runner.history.Append("user", fmt.Sprintf("TOO MANY BLOCKS: %d code blocks were provided but only the first %d run per turn to control request rate; the remaining %d were ignored. Send fewer blocks next turn.", len(blocks), limit, ignored))
 			blocks = blocks[:limit]
 		}
 
@@ -225,7 +240,7 @@ func (runner *Runner) Run(ctx context.Context, session *AgentSession) error {
 				Blocks:    preflight,
 			})
 			runner.recordReportBlocks(results)
-			history.Append("user", renderPreflightRejections(turn, preflight))
+			runner.history.Append("user", renderPreflightRejections(turn, preflight))
 			session.AddEvent(turn, "recovery", "preflight_rejected", time.Now().UTC())
 			continue
 		}
@@ -247,10 +262,10 @@ func (runner *Runner) Run(ctx context.Context, session *AgentSession) error {
 		}
 		runner.recordReportBlocks(results)
 		resultText := RenderExecutionResults(turn, results)
-		history.Append("user", resultText)
+		runner.history.Append("user", resultText)
 		session.AddEvent(turn, "execution", fmt.Sprintf("%d block(s)", len(results)), time.Now().UTC())
 		if allNoOutput(results) {
-			history.Append("user", "SCRIPT NO OUTPUT: all executed blocks produced no stdout or stderr. Rewrite the code to perform an operation and print evidence.")
+			runner.history.Append("user", "SCRIPT NO OUTPUT: all executed blocks produced no stdout or stderr. Rewrite the code to perform an operation and print evidence.")
 			session.AddEvent(turn, "recovery", "script_no_output", time.Now().UTC())
 		}
 		if hasNetworkFriction(results) {
@@ -258,12 +273,56 @@ func (runner *Runner) Run(ctx context.Context, session *AgentSession) error {
 				_ = session.Cancel("cancelled", time.Now().UTC())
 				return nil
 			}
-			history.Append("user", "NETWORK FRICTION: execution output indicates throttling or transport failure. Adjust rate, target, or strategy before continuing.")
+			runner.history.Append("user", "NETWORK FRICTION: execution output indicates throttling or transport failure. Adjust rate, target, or strategy before continuing.")
 			session.AddEvent(turn, "recovery", "network_friction", time.Now().UTC())
 		}
 	}
 	_ = session.Fail("max_turns", time.Now().UTC())
 	return nil
+}
+
+const findingConsolidationSystemPrompt = `You consolidate completed PentGo engagements into framework verification declarations. Use only returned execution evidence. For each candidate vulnerability, output exactly one block in this format:
+=== PENTGO FINDING ===
+type: xss
+method: GET
+url: https://target.example/path?payload=value
+baseline_url: https://target.example/path?payload=benign
+payload: payload=value
+description: concise evidence-backed claim
+=== END PENTGO FINDING ===
+Use only supported types: sqli, xss, lfi, rce, auth_bypass, upload, open_redirect. Output no block when no evidence-backed candidate exists. Do not output code or prose outside the blocks.`
+
+// ConsolidateAndVerify asks for structured declarations once an engagement is
+// done, then delegates each final verdict to the framework verifier.
+func (runner *Runner) ConsolidateAndVerify(ctx context.Context, session *AgentSession) []VerificationResult {
+	if runner == nil || runner.client == nil || runner.history == nil || runner.config.Verifier == nil || session == nil || session.Status != SessionDone || ctx.Err() != nil {
+		return nil
+	}
+	runner.findings = nil
+	runner.findingSpecs = nil
+	runner.history.Append("user", "Consolidate evidence-backed vulnerability candidates into PENTGO FINDING blocks for independent framework verification.")
+	response, err := runner.chat(ctx, agent.Request{SystemPrompt: findingConsolidationSystemPrompt, Messages: runner.history.Messages()})
+	if err != nil {
+		session.AddEvent(session.Turn, "verification_consolidation_error", err.Error(), time.Now().UTC())
+		return nil
+	}
+	specs := ParseFindingSpecs(response.Content)
+	if len(specs) > runner.config.MaxFindings {
+		specs = specs[:runner.config.MaxFindings]
+	}
+	runner.findingSpecs = append([]FindingSpec(nil), specs...)
+	for _, spec := range specs {
+		result := runner.config.Verifier.Verify(ctx, spec)
+		if result.VulnType == "" {
+			result.VulnType = spec.VulnType
+		}
+		if result.Curl == "" {
+			result.Curl = CurlCommand(spec)
+		}
+		runner.findings = append(runner.findings, result)
+	}
+	session.AddEvent(session.Turn, "verification_consolidated", fmt.Sprintf("%d finding(s)", len(runner.findings)), time.Now().UTC())
+	return append([]VerificationResult(nil), runner.findings...)
 }
 
 // ReportContext 返回本次 Runner 执行收集的有界、无代码报告上下文副本。

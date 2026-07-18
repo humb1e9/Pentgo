@@ -19,6 +19,8 @@ type Config struct {
 type AgentConfig struct {
 	Provider                  string              `json:"provider"`
 	MaxTurns                  int                 `json:"max_turns"`
+	MaxFindings               int                 `json:"max_findings"`
+	VerificationReproductions int                 `json:"verification_reproductions"`
 	RequestTimeoutSeconds     int                 `json:"request_timeout_seconds"`
 	ExecutionTimeoutSeconds   int                 `json:"execution_timeout_seconds"`
 	MaxOutputBytes            int                 `json:"max_output_bytes"`
@@ -73,6 +75,8 @@ func defaultAgentConfig() AgentConfig {
 	return AgentConfig{
 		Provider:                  "openai",
 		MaxTurns:                  0,
+		MaxFindings:               10,
+		VerificationReproductions: 3,
 		RequestTimeoutSeconds:     60,
 		ExecutionTimeoutSeconds:   1800,
 		MaxOutputBytes:            65536,
@@ -103,6 +107,12 @@ func normalizeAgentConfig(agent *AgentConfig) {
 	}
 	if agent.RequestTimeoutSeconds <= 0 {
 		agent.RequestTimeoutSeconds = defaults.RequestTimeoutSeconds
+	}
+	if agent.MaxFindings <= 0 {
+		agent.MaxFindings = defaults.MaxFindings
+	}
+	if agent.VerificationReproductions <= 0 {
+		agent.VerificationReproductions = defaults.VerificationReproductions
 	}
 	if agent.ExecutionTimeoutSeconds <= 0 {
 		agent.ExecutionTimeoutSeconds = defaults.ExecutionTimeoutSeconds

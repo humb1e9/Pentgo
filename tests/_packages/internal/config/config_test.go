@@ -24,6 +24,9 @@ func TestDefaultContainsRootAgentRuntimeConfiguration(t *testing.T) {
 	if agent.SoftStuckTurns != 3 || agent.HardStuckTurns != 5 || agent.LineRepeatLimit != 100 || agent.ScanLineRepeatLimit != 500 {
 		t.Fatalf("stuck default = %+v", agent)
 	}
+	if agent.MaxFindings != 10 || agent.VerificationReproductions != 3 {
+		t.Fatalf("verification default = %+v", agent)
+	}
 	if agent.OpenAI.BaseURL != "https://api.openai.com/v1" || agent.OpenAI.APIKeyEnv != "OPENAI_API_KEY" {
 		t.Fatalf("openai default = %+v", agent.OpenAI)
 	}

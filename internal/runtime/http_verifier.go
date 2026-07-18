@@ -118,9 +118,12 @@ func (verifier *HTTPVerifier) VerifyWithEvidence(ctx context.Context, spec Findi
 			record.ScopeRejected = true
 			return inconclusiveResult(spec, "scope: host out of authorized range"), record
 		}
+		record.RequestHeaders = cloneStringMap(spec.Headers)
+		record.RequestBody = truncateBytes(spec.Body, verifier.maxBodyBytes)
 		// A baseline would be a second non-idempotent request, so only GET/HEAD
 		// obtain one after the declaration has passed the same scope check.
 		if isIdempotentMethod(method) {
+			record.BaselineRequestBody = truncateBytes(spec.BaselineBody, verifier.maxBodyBytes)
 			baseline, err = verifier.request(ctx, method, baselineURL.String(), spec.BaselineBody, spec.Headers)
 			if err != nil {
 				return inconclusiveResult(spec, "baseline request: "+err.Error()), record
@@ -128,6 +131,9 @@ func (verifier *HTTPVerifier) VerifyWithEvidence(ctx context.Context, spec Findi
 			record.BaselineStatus = baseline.StatusCode
 			record.BaselineResponseBody = baseline.Body
 		}
+	} else {
+		record.RequestHeaders = cloneStringMap(spec.Headers)
+		record.RequestBody = truncateBytes(spec.Body, verifier.maxBodyBytes)
 	}
 
 	repeats := 1
@@ -167,12 +173,9 @@ func (verifier *HTTPVerifier) VerifyWithEvidence(ctx context.Context, spec Findi
 
 func newVerificationRecord(spec FindingSpec) VerificationRecord {
 	return VerificationRecord{
-		Method:              normalizedHTTPMethod(spec.Method),
-		PayloadURL:          spec.URL,
-		BaselineURL:         spec.BaselineURL,
-		RequestHeaders:      cloneStringMap(spec.Headers),
-		RequestBody:         spec.Body,
-		BaselineRequestBody: spec.BaselineBody,
+		Method:      normalizedHTTPMethod(spec.Method),
+		PayloadURL:  spec.URL,
+		BaselineURL: spec.BaselineURL,
 	}
 }
 

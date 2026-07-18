@@ -69,16 +69,42 @@ func TestVerifyWithEvidenceCapturesRawBytes(t *testing.T) {
 func TestVerifyWithEvidenceScopeRejectedRecord(t *testing.T) {
 	verifier := NewHTTPVerifier(http.DefaultClient, NewScope("target.example", nil, false), 3)
 	result, record := verifier.VerifyWithEvidence(context.Background(), FindingSpec{
-		VulnType: VulnXSS,
-		Method:   http.MethodGet,
-		URL:      "https://evil.example/?q=x",
-		Payload:  "x",
+		VulnType:     VulnXSS,
+		Method:       http.MethodGet,
+		URL:          "https://evil.example/?q=x",
+		Body:         "payload-body",
+		BaselineBody: "baseline-body",
+		Payload:      "x",
+		Headers:      map[string]string{"X-Test": "value"},
 	})
 	if result.Verdict != VerdictInconclusive || !record.ScopeRejected {
 		t.Fatalf("result/scope rejected = %s/%v", result.Verdict, record.ScopeRejected)
 	}
-	if record.PayloadResponseBody != "" {
-		t.Fatalf("payload response = %q", record.PayloadResponseBody)
+	if record.PayloadResponseBody != "" || record.BaselineResponseBody != "" || record.RequestBody != "" || record.BaselineRequestBody != "" || len(record.RequestHeaders) != 0 {
+		t.Fatalf("scope-rejected record captured request or response data: %+v", record)
+	}
+}
+
+func TestVerifyWithEvidenceCapsRecordedRequestBodies(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_, _ = io.Copy(io.Discard, request.Body)
+		_, _ = io.WriteString(writer, "ok")
+	}))
+	defer server.Close()
+
+	verifier := NewHTTPVerifier(server.Client(), NewScope(hostOf(server.URL), nil, true), 3)
+	verifier.maxBodyBytes = 8
+	_, record := verifier.VerifyWithEvidence(context.Background(), FindingSpec{
+		VulnType:     VulnXSS,
+		Method:       http.MethodGet,
+		URL:          server.URL + "/?q=payload",
+		BaselineURL:  server.URL + "/?q=baseline",
+		Body:         "payload-body",
+		BaselineBody: "baseline-body",
+		Payload:      "payload",
+	})
+	if record.RequestBody != "payload-" || record.BaselineRequestBody != "baseline" {
+		t.Fatalf("recorded bodies = %q/%q", record.RequestBody, record.BaselineRequestBody)
 	}
 }
 

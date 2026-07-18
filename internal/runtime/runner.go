@@ -311,7 +311,7 @@ func (runner *Runner) Run(ctx context.Context, session *AgentSession) error {
 	return nil
 }
 
-const findingConsolidationSystemPrompt = `You consolidate completed PentGo engagements into framework verification declarations. Use only returned execution evidence. For each candidate vulnerability, output exactly one block in this format:
+const findingConsolidationSystemPrompt = `You consolidate completed PentGo engagements into framework verification declarations. Only execution evidence may support a declaration. For each candidate vulnerability, output exactly one block in this format:
 === PENTGO FINDING ===
 type: xss
 method: GET
@@ -320,7 +320,15 @@ baseline_url: https://target.example/path?payload=benign
 payload: payload=value
 description: concise evidence-backed claim
 === END PENTGO FINDING ===
-Use only supported types: sqli, xss, lfi, rce, auth_bypass, upload, open_redirect. Output no block when no evidence-backed candidate exists. Do not output code or prose outside the blocks.`
+Use only supported types: sqli, xss, lfi, rce, auth_bypass, credential, upload, open_redirect.
+For a credential finding, declare the observed login flow in the block:
+type: credential
+login_url: https://target.example/login
+login_method: POST
+login_body: username=observed&password=observed
+login_content_type: application/x-www-form-urlencoded
+username: observed
+The login_method, login_content_type, and username fields are optional. For findings that need an authenticated session (such as authorization differences), include login_url and login_body in the same block; the framework logs in and carries the resulting session only for the payload request. Declare login endpoints and credentials only when they appear in returned execution evidence; never infer or invent them. Output no block when no evidence-backed candidate exists. Do not output code or prose outside the blocks.`
 
 // ConsolidateAndVerify asks for structured declarations once an engagement is
 // done, then delegates each final verdict to the framework verifier.

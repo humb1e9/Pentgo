@@ -126,6 +126,64 @@ func TestServicePassesFrameworkVerifiedFindingToReport(t *testing.T) {
 	}
 }
 
+func TestServicePublishesAuthenticatedCredentialEvidenceFromLocalServer(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/login" || request.Method != http.MethodPost {
+			t.Fatalf("request = %s %s", request.Method, request.URL.Path)
+		}
+		http.SetCookie(writer, &http.Cookie{Name: "sid", Value: "fixture-cookie", Path: "/"})
+		_, _ = writer.Write([]byte("dashboard"))
+	}))
+	defer target.Close()
+
+	client := &scriptedClient{outcomes: []chatOutcome{
+		{response: agent.Response{Content: "```python\nimport os\nprint('evidence')\n```"}},
+		{response: agent.Response{Content: "TASK_COMPLETE"}},
+		{response: agent.Response{Content: "=== PENTGO FINDING ===\ntype: credential\nlogin_url: " + target.URL + "/login\nlogin_body: username=fixture&password=fixture-secret\nusername: fixture\npayload: username=fixture\n=== END PENTGO FINDING ==="}},
+		{response: agent.Response{Content: "## 执行摘要\n本地认证会话已验证。\n"}},
+	}}
+	service := newTestService(client)
+	result, err := service.Run(context.Background(), Request{
+		Target:     runtime.Target{Raw: target.URL, Canonical: target.URL},
+		Intent:     "验证本地认证会话",
+		OutputRoot: t.TempDir(),
+	}, nil)
+	if err != nil || result.RunError != nil || len(result.Session.Findings) != 1 {
+		t.Fatalf("result/err = %+v/%v", result, err)
+	}
+
+	evidencePath := filepath.Join(result.Artifacts.Directory, "evidence", "verification-001.json")
+	evidence, err := os.ReadFile(evidencePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record struct {
+		LoginVerified    bool     `json:"login_verified"`
+		LoginCookieNames []string `json:"login_cookie_names"`
+	}
+	if err := json.Unmarshal(evidence, &record); err != nil {
+		t.Fatal(err)
+	}
+	if !record.LoginVerified || len(record.LoginCookieNames) != 1 || record.LoginCookieNames[0] != "sid" {
+		t.Fatalf("login evidence = %+v", record)
+	}
+	for _, secret := range []string{"fixture-secret", "fixture-cookie"} {
+		if strings.Contains(string(evidence), secret) {
+			t.Fatalf("evidence leaked %q: %s", secret, evidence)
+		}
+	}
+
+	reportBody, err := os.ReadFile(result.Artifacts.Markdown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Login verified: true", "Session cookies: sid", "Username: fixture"} {
+		if !strings.Contains(string(reportBody), want) {
+			t.Fatalf("report missing %q: %s", want, reportBody)
+		}
+	}
+}
+
 func TestServiceSkipsReportCallForCancelledContext(t *testing.T) {
 	context, cancel := context.WithCancel(context.Background())
 	defer cancel()

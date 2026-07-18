@@ -446,6 +446,22 @@ payload: payload
 	}
 }
 
+func TestFindingConsolidationPromptDeclaresAuthenticatedFindingFields(t *testing.T) {
+	for _, want := range []string{
+		"credential",
+		"login_url",
+		"login_method",
+		"login_body",
+		"login_content_type",
+		"username",
+		"only execution evidence",
+	} {
+		if !strings.Contains(strings.ToLower(findingConsolidationSystemPrompt), strings.ToLower(want)) {
+			t.Fatalf("consolidation prompt missing %q: %s", want, findingConsolidationSystemPrompt)
+		}
+	}
+}
+
 func TestRunnerPersistsRedactedLoginEvidence(t *testing.T) {
 	client := &scriptedClient{responses: []agent.Response{{Content: `
 === PENTGO FINDING ===

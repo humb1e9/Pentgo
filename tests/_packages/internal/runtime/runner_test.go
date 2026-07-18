@@ -399,6 +399,84 @@ payload: payload
 	}
 }
 
+func TestRunnerPersistsFrameworkVerificationEvidence(t *testing.T) {
+	client := &scriptedClient{responses: []agent.Response{{Content: `
+=== PENTGO FINDING ===
+type: xss
+method: GET
+url: https://example.com/?q=payload
+baseline_url: https://example.com/?q=benign
+payload: payload
+=== END PENTGO FINDING ===`}}}
+	verifier := &recordingFindingVerifier{
+		results: []VerificationResult{{Verdict: VerdictVerified, VulnType: VulnXSS, Confidence: 0.95, Curl: "curl -i -X GET 'https://example.com/?q=payload'"}},
+		records: []VerificationRecord{{
+			Method:               "GET",
+			PayloadURL:           "https://example.com/?q=payload",
+			BaselineURL:          "https://example.com/?q=benign",
+			PayloadStatus:        200,
+			PayloadResponseBody:  "<div>payload</div>",
+			BaselineStatus:       200,
+			BaselineResponseBody: "<div>benign</div>",
+			Reproductions:        3,
+		}},
+	}
+	sink := &memoryEvidenceSink{}
+	config := defaultRunnerConfig()
+	config.Verifier = verifier
+	config.EvidenceSink = sink
+	runner := NewRunner(client, &recordingExecutor{}, config, nil, nil)
+	runner.history = NewHistory("https://example.com", "check target")
+	session := NewSession(Target{Canonical: "https://example.com"}, "check target", time.Now().UTC())
+	session.Status = SessionDone
+
+	findings := runner.ConsolidateAndVerify(context.Background(), session)
+	if len(findings) != 1 || findings[0].EvidencePath != "evidence/verification-001.json" {
+		t.Fatalf("findings = %+v", findings)
+	}
+	if sink.name != "verification-001" {
+		t.Fatalf("evidence name = %q", sink.name)
+	}
+	evidence, ok := sink.value.(verificationEvidence)
+	if !ok {
+		t.Fatalf("evidence = %#v", sink.value)
+	}
+	if evidence.PayloadResponseBody != "<div>payload</div>" || evidence.BaselineResponseBody != "<div>benign</div>" {
+		t.Fatalf("evidence bodies = %+v", evidence)
+	}
+}
+
+func TestRunnerContinuesWhenVerificationEvidenceWriteFails(t *testing.T) {
+	client := &scriptedClient{responses: []agent.Response{{Content: `
+=== PENTGO FINDING ===
+type: xss
+method: GET
+url: https://example.com/?q=payload
+payload: payload
+=== END PENTGO FINDING ===`}}}
+	verifier := &recordingFindingVerifier{results: []VerificationResult{{Verdict: VerdictVerified, VulnType: VulnXSS}}}
+	config := defaultRunnerConfig()
+	config.Verifier = verifier
+	config.EvidenceSink = evidenceSinkFunc(func(string, any) (string, error) {
+		return "", errors.New("disk unavailable")
+	})
+	runner := NewRunner(client, &recordingExecutor{}, config, nil, nil)
+	runner.history = NewHistory("https://example.com", "check target")
+	session := NewSession(Target{Canonical: "https://example.com"}, "check target", time.Now().UTC())
+	session.Status = SessionDone
+
+	findings := runner.ConsolidateAndVerify(context.Background(), session)
+	if len(findings) != 1 || len(session.Findings) != 1 {
+		t.Fatalf("findings/session findings = %+v/%+v", findings, session.Findings)
+	}
+	for _, event := range session.Timeline {
+		if event.Kind == "verification_evidence_error" && strings.Contains(event.Detail, "disk unavailable") {
+			return
+		}
+	}
+	t.Fatalf("timeline missing verification evidence error: %+v", session.Timeline)
+}
+
 func TestRunnerCapsConsolidatedFindings(t *testing.T) {
 	client := &scriptedClient{responses: []agent.Response{{Content: `
 === PENTGO FINDING ===
@@ -470,17 +548,23 @@ type recordingExecutor struct {
 
 type recordingFindingVerifier struct {
 	results []VerificationResult
+	records []VerificationRecord
 	specs   []FindingSpec
 }
 
-func (verifier *recordingFindingVerifier) Verify(_ context.Context, spec FindingSpec) VerificationResult {
+func (verifier *recordingFindingVerifier) VerifyWithEvidence(_ context.Context, spec FindingSpec) (VerificationResult, VerificationRecord) {
 	verifier.specs = append(verifier.specs, spec)
+	var record VerificationRecord
+	if len(verifier.records) > 0 {
+		record = verifier.records[0]
+		verifier.records = verifier.records[1:]
+	}
 	if len(verifier.results) == 0 {
-		return VerificationResult{Verdict: VerdictInconclusive, VulnType: spec.VulnType}
+		return VerificationResult{Verdict: VerdictInconclusive, VulnType: spec.VulnType}, record
 	}
 	result := verifier.results[0]
 	verifier.results = verifier.results[1:]
-	return result
+	return result, record
 }
 
 func (executor *recordingExecutor) Execute(_ context.Context, input ExecutionInput) []ExecutionResult {

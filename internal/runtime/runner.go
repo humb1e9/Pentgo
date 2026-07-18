@@ -28,7 +28,7 @@ type Sleeper func(context.Context, time.Duration) error
 
 // FindingVerifier performs framework-owned verification for a model declaration.
 type FindingVerifier interface {
-	Verify(context.Context, FindingSpec) VerificationResult
+	VerifyWithEvidence(context.Context, FindingSpec) (VerificationResult, VerificationRecord)
 }
 
 // RunnerConfig 约束模型循环和恢复策略。
@@ -48,6 +48,7 @@ type RunnerConfig struct {
 	AllowedHosts       []string
 	AllowPrivateHosts  bool
 	Verifier           FindingVerifier
+	EvidenceSink       EvidenceSink
 }
 
 // RunnerEvent 是可安全显示在终端中的运行时摘要，不包含模型代码和原始输出。
@@ -70,6 +71,29 @@ type Runner struct {
 	findings     []VerificationResult
 	findingSpecs []FindingSpec
 	catalog      []skills.Skill
+}
+
+type verificationEvidence struct {
+	SchemaVersion        string            `json:"schema_version"`
+	VulnType             VulnType          `json:"vuln_type"`
+	Verdict              Verdict           `json:"verdict"`
+	Confidence           float64           `json:"confidence"`
+	Method               string            `json:"method"`
+	PayloadURL           string            `json:"payload_url"`
+	BaselineURL          string            `json:"baseline_url,omitempty"`
+	RequestHeaders       map[string]string `json:"request_headers,omitempty"`
+	RequestBody          string            `json:"request_body,omitempty"`
+	BaselineRequestBody  string            `json:"baseline_request_body,omitempty"`
+	PayloadStatus        int               `json:"payload_status,omitempty"`
+	PayloadResponseBody  string            `json:"payload_response_body,omitempty"`
+	PayloadLocation      string            `json:"payload_location,omitempty"`
+	BaselineStatus       int               `json:"baseline_status,omitempty"`
+	BaselineResponseBody string            `json:"baseline_response_body,omitempty"`
+	Reproductions        int               `json:"reproductions,omitempty"`
+	ScopeRejected        bool              `json:"scope_rejected,omitempty"`
+	ChecksPassed         []string          `json:"checks_passed,omitempty"`
+	ChecksFailed         []string          `json:"checks_failed,omitempty"`
+	Curl                 string            `json:"curl,omitempty"`
 }
 
 // NewRunner 创建一个模型循环。nil loader 和 sleeper 使用默认实现。
@@ -311,19 +335,57 @@ func (runner *Runner) ConsolidateAndVerify(ctx context.Context, session *AgentSe
 		specs = specs[:runner.config.MaxFindings]
 	}
 	runner.findingSpecs = append([]FindingSpec(nil), specs...)
-	for _, spec := range specs {
-		result := runner.config.Verifier.Verify(ctx, spec)
+	for index, spec := range specs {
+		result, record := runner.config.Verifier.VerifyWithEvidence(ctx, spec)
 		if result.VulnType == "" {
 			result.VulnType = spec.VulnType
 		}
 		if result.Curl == "" {
 			result.Curl = CurlCommand(spec)
 		}
+		runner.persistVerificationEvidence(session, index+1, &result, record)
 		runner.findings = append(runner.findings, result)
 	}
 	session.Findings = append([]VerificationResult(nil), runner.findings...)
 	session.AddEvent(session.Turn, "verification_consolidated", fmt.Sprintf("%d finding(s)", len(runner.findings)), time.Now().UTC())
 	return append([]VerificationResult(nil), runner.findings...)
+}
+
+func (runner *Runner) persistVerificationEvidence(session *AgentSession, index int, result *VerificationResult, record VerificationRecord) {
+	if runner.config.EvidenceSink == nil || result == nil {
+		return
+	}
+	evidence := verificationEvidence{
+		SchemaVersion:        "1",
+		VulnType:             result.VulnType,
+		Verdict:              result.Verdict,
+		Confidence:           result.Confidence,
+		Method:               record.Method,
+		PayloadURL:           record.PayloadURL,
+		BaselineURL:          record.BaselineURL,
+		RequestHeaders:       cloneStringMap(record.RequestHeaders),
+		RequestBody:          record.RequestBody,
+		BaselineRequestBody:  record.BaselineRequestBody,
+		PayloadStatus:        record.PayloadStatus,
+		PayloadResponseBody:  record.PayloadResponseBody,
+		PayloadLocation:      record.PayloadLocation,
+		BaselineStatus:       record.BaselineStatus,
+		BaselineResponseBody: record.BaselineResponseBody,
+		Reproductions:        record.Reproductions,
+		ScopeRejected:        record.ScopeRejected,
+		ChecksPassed:         append([]string(nil), result.ChecksPassed...),
+		ChecksFailed:         append([]string(nil), result.ChecksFailed...),
+		Curl:                 result.Curl,
+	}
+	name := fmt.Sprintf("verification-%03d", index)
+	path, err := runner.config.EvidenceSink.WriteEvidence(name, evidence)
+	if err != nil {
+		if session != nil {
+			session.AddEvent(session.Turn, "verification_evidence_error", err.Error(), time.Now().UTC())
+		}
+		return
+	}
+	result.EvidencePath = path
 }
 
 // ReportContext 返回本次 Runner 执行收集的有界、无代码报告上下文副本。

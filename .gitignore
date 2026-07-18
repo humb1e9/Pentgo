@@ -1,8 +1,9 @@
 # Legacy reference tree
 /bingo/
 
-# Local design and planning documents
-/docs/
+# Local design and planning documents (keep the human map tracked)
+/docs/**
+!/docs/ARCHITECTURE.md
 
 # Go module build and analysis artifacts
 /pentgo
@@ -15,8 +16,9 @@ coverage.out
 *.coverprofile
 *.prof
 
-# PentGo engagement output
+# PentGo engagement output (default cwd publishes eng-<id>/)
 /eng-*/
+/output/
 /.pentgo-*/
 pentgo-report-*.md
 /pentgo-output/

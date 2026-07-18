@@ -4,6 +4,8 @@ PentGo 是一个终端 Agent Runtime。启动后输入包含 HTTP(S) URL 或域�
 
 运行时没有固定的 Recon、Scan 或 Verify 阶段，也没有预定义命令调用目录。任务的后续步骤由模型根据已回灌的真实 stdout、stderr、退出码和 evidence 路径决定。
 
+**读代码 / 改功能先看目录地图：** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)（本地 `docs/` 默认 gitignore，克隆后若缺失可向维护者索取）。
+
 ## 运行
 
 ```bash

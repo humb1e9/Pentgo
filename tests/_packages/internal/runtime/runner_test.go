@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -362,6 +363,39 @@ payload: id=1%27
 	}
 	if !containsMessageFragment(client.requests[0].Messages, "user", "PENTGO FINDING") {
 		t.Fatalf("consolidation prompt missing: %+v", client.requests[0].Messages)
+	}
+}
+
+func TestRunnerPersistsConsolidatedFindingsInSession(t *testing.T) {
+	client := &scriptedClient{responses: []agent.Response{{Content: `
+=== PENTGO FINDING ===
+type: xss
+method: GET
+url: https://example.com/?q=payload
+payload: payload
+=== END PENTGO FINDING ===`}}}
+	verifier := &recordingFindingVerifier{results: []VerificationResult{{
+		Verdict:  VerdictVerified,
+		VulnType: VulnXSS,
+		Summary:  "xss VERIFIED confidence=0.95",
+	}}}
+	config := defaultRunnerConfig()
+	config.Verifier = verifier
+	runner := NewRunner(client, &recordingExecutor{}, config, nil, nil)
+	runner.history = NewHistory("https://example.com", "check target")
+	session := NewSession(Target{Canonical: "https://example.com"}, "check target", time.Now().UTC())
+	session.Status = SessionDone
+
+	runner.ConsolidateAndVerify(context.Background(), session)
+	if len(session.Findings) != 1 || session.Findings[0].Verdict != VerdictVerified {
+		t.Fatalf("session findings = %+v", session.Findings)
+	}
+	encoded, err := json.Marshal(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"findings"`) || !strings.Contains(string(encoded), `"VERIFIED"`) {
+		t.Fatalf("session JSON = %s", encoded)
 	}
 }
 

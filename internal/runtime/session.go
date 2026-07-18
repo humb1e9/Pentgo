@@ -20,16 +20,17 @@ const (
 
 // AgentSession 保存终端 Agent 执行所需的独立领域状态。
 type AgentSession struct {
-	ID           string          `json:"id"`
-	Target       Target          `json:"target"`
-	Intent       string          `json:"intent"`
-	Status       SessionStatus   `json:"status"`
-	StartedAt    time.Time       `json:"started_at"`
-	FinishedAt   *time.Time      `json:"finished_at,omitempty"`
-	StopReason   string          `json:"stop_reason,omitempty"`
-	Turn         int             `json:"turn"`
-	LoadedSkills []string        `json:"loaded_skills,omitempty"`
-	Timeline     []TimelineEvent `json:"timeline,omitempty"`
+	ID           string               `json:"id"`
+	Target       Target               `json:"target"`
+	Intent       string               `json:"intent"`
+	Status       SessionStatus        `json:"status"`
+	StartedAt    time.Time            `json:"started_at"`
+	FinishedAt   *time.Time           `json:"finished_at,omitempty"`
+	StopReason   string               `json:"stop_reason,omitempty"`
+	Turn         int                  `json:"turn"`
+	LoadedSkills []string             `json:"loaded_skills,omitempty"`
+	Findings     []VerificationResult `json:"findings,omitempty"`
+	Timeline     []TimelineEvent      `json:"timeline,omitempty"`
 }
 
 // TimelineEvent 记录不会携带完整代码或原始输出的运行时事件。

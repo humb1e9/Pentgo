@@ -321,6 +321,7 @@ func (runner *Runner) ConsolidateAndVerify(ctx context.Context, session *AgentSe
 		}
 		runner.findings = append(runner.findings, result)
 	}
+	session.Findings = append([]VerificationResult(nil), runner.findings...)
 	session.AddEvent(session.Turn, "verification_consolidated", fmt.Sprintf("%d finding(s)", len(runner.findings)), time.Now().UTC())
 	return append([]VerificationResult(nil), runner.findings...)
 }

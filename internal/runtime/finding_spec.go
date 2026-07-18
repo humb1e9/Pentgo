@@ -20,7 +20,21 @@ func ParseFindingSpecs(text string) []FindingSpec {
 	var specs []FindingSpec
 	for _, match := range matches {
 		spec := parseFindingSpec(match[1])
-		if !knownVulnType(spec.VulnType) || strings.TrimSpace(spec.URL) == "" {
+		if !knownVulnType(spec.VulnType) {
+			continue
+		}
+		if spec.VulnType == VulnCredential {
+			if strings.TrimSpace(spec.LoginURL) == "" {
+				continue
+			}
+			spec.LoginMethod = normalizedLoginMethod(spec.LoginMethod)
+			if !supportedVerificationMethod(spec.LoginMethod) {
+				continue
+			}
+			if strings.TrimSpace(spec.LoginContentType) == "" {
+				spec.LoginContentType = "application/x-www-form-urlencoded"
+			}
+		} else if strings.TrimSpace(spec.URL) == "" {
 			continue
 		}
 		spec.Method = normalizedHTTPMethod(spec.Method)
@@ -65,6 +79,16 @@ func parseFindingSpec(block string) FindingSpec {
 			spec.Payload = value
 		case "description":
 			spec.Description = value
+		case "login_url":
+			spec.LoginURL = value
+		case "login_method":
+			spec.LoginMethod = value
+		case "login_body":
+			spec.LoginBody = value
+		case "login_content_type":
+			spec.LoginContentType = value
+		case "username":
+			spec.Username = value
 		case "header":
 			header, headerValue, valid := strings.Cut(value, ":")
 			if !valid || strings.TrimSpace(header) == "" {
@@ -81,7 +105,7 @@ func parseFindingSpec(block string) FindingSpec {
 
 func knownVulnType(vulnType VulnType) bool {
 	switch vulnType {
-	case VulnSQLI, VulnXSS, VulnLFI, VulnRCE, VulnAuthBypass, VulnUpload, VulnOpenRedirect:
+	case VulnSQLI, VulnXSS, VulnLFI, VulnRCE, VulnAuthBypass, VulnCredential, VulnUpload, VulnOpenRedirect:
 		return true
 	default:
 		return false
@@ -104,9 +128,22 @@ func findingSpecKey(spec FindingSpec) string {
 		spec.Payload,
 		spec.Severity,
 		spec.Description,
+		spec.LoginURL,
+		spec.LoginMethod,
+		spec.LoginBody,
+		spec.LoginContentType,
+		spec.Username,
 	}
 	for _, key := range keys {
 		parts = append(parts, key, spec.Headers[key])
 	}
 	return strings.Join(parts, "\x00")
+}
+
+func normalizedLoginMethod(method string) string {
+	method = strings.ToUpper(strings.TrimSpace(method))
+	if method == "" {
+		return "POST"
+	}
+	return method
 }

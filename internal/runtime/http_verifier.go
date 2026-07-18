@@ -15,16 +15,21 @@ const defaultVerificationBodyBytes = 64 * 1024
 
 // FindingSpec is a model-declared, framework-executed verification request.
 type FindingSpec struct {
-	VulnType     VulnType
-	Method       string
-	URL          string
-	BaselineURL  string
-	Body         string
-	BaselineBody string
-	Payload      string
-	Severity     string
-	Description  string
-	Headers      map[string]string
+	VulnType         VulnType
+	Method           string
+	URL              string
+	BaselineURL      string
+	Body             string
+	BaselineBody     string
+	Payload          string
+	Severity         string
+	Description      string
+	Headers          map[string]string
+	LoginURL         string
+	LoginMethod      string
+	LoginBody        string
+	LoginContentType string
+	Username         string
 }
 
 // HTTPVerifier independently collects target responses before scoring them.

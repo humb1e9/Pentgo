@@ -26,6 +26,7 @@ const (
 	VulnLFI          VulnType = "lfi"
 	VulnRCE          VulnType = "rce"
 	VulnAuthBypass   VulnType = "auth_bypass"
+	VulnCredential   VulnType = "credential"
 	VulnUpload       VulnType = "upload"
 	VulnOpenRedirect VulnType = "open_redirect"
 )

@@ -37,6 +37,64 @@ func TestHTTPVerifierConfirmsReflectedXSS(t *testing.T) {
 	}
 }
 
+func TestVerifyWithEvidenceCapturesRawBytes(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		value := request.URL.Query().Get("q")
+		_, _ = io.WriteString(writer, "<div>"+value+"</div>")
+	}))
+	defer server.Close()
+
+	verifier := NewHTTPVerifier(server.Client(), NewScope(hostOf(server.URL), nil, true), 3)
+	result, record := verifier.VerifyWithEvidence(context.Background(), FindingSpec{
+		VulnType:    VulnXSS,
+		Method:      http.MethodGet,
+		URL:         server.URL + "/?q=<script>alert(1)</script>",
+		BaselineURL: server.URL + "/?q=benign",
+		Payload:     "<script>alert(1)</script>",
+	})
+	if result.Verdict != VerdictVerified {
+		t.Fatalf("verdict = %s", result.Verdict)
+	}
+	if !strings.Contains(record.PayloadResponseBody, "<script>alert(1)</script>") {
+		t.Fatalf("payload response = %q", record.PayloadResponseBody)
+	}
+	if !strings.Contains(record.BaselineResponseBody, "benign") {
+		t.Fatalf("baseline response = %q", record.BaselineResponseBody)
+	}
+	if record.PayloadStatus != http.StatusOK || record.Reproductions != 3 {
+		t.Fatalf("status/reproductions = %d/%d", record.PayloadStatus, record.Reproductions)
+	}
+}
+
+func TestVerifyWithEvidenceScopeRejectedRecord(t *testing.T) {
+	verifier := NewHTTPVerifier(http.DefaultClient, NewScope("target.example", nil, false), 3)
+	result, record := verifier.VerifyWithEvidence(context.Background(), FindingSpec{
+		VulnType: VulnXSS,
+		Method:   http.MethodGet,
+		URL:      "https://evil.example/?q=x",
+		Payload:  "x",
+	})
+	if result.Verdict != VerdictInconclusive || !record.ScopeRejected {
+		t.Fatalf("result/scope rejected = %s/%v", result.Verdict, record.ScopeRejected)
+	}
+	if record.PayloadResponseBody != "" {
+		t.Fatalf("payload response = %q", record.PayloadResponseBody)
+	}
+}
+
+func TestVerifyStillReturnsResultOnly(t *testing.T) {
+	verifier := NewHTTPVerifier(http.DefaultClient, NewScope("target.example", nil, false), 3)
+	result := verifier.Verify(context.Background(), FindingSpec{
+		VulnType: VulnXSS,
+		Method:   http.MethodGet,
+		URL:      "https://evil.example/",
+		Payload:  "x",
+	})
+	if result.Verdict != VerdictInconclusive {
+		t.Fatalf("verdict = %s", result.Verdict)
+	}
+}
+
 func TestHTTPVerifierRejectsOutOfScope(t *testing.T) {
 	verifier := NewHTTPVerifier(http.DefaultClient, NewScope("target.example", nil, false), 3)
 	result := verifier.Verify(context.Background(), FindingSpec{

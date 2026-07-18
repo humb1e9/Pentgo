@@ -35,6 +35,24 @@ type HTTPVerifier struct {
 	maxBodyBytes  int
 }
 
+// VerificationRecord captures the framework-owned HTTP exchanges used to
+// reach a verification verdict.
+type VerificationRecord struct {
+	Method               string            `json:"method"`
+	PayloadURL           string            `json:"payload_url"`
+	BaselineURL          string            `json:"baseline_url,omitempty"`
+	RequestHeaders       map[string]string `json:"request_headers,omitempty"`
+	RequestBody          string            `json:"request_body,omitempty"`
+	BaselineRequestBody  string            `json:"baseline_request_body,omitempty"`
+	PayloadStatus        int               `json:"payload_status,omitempty"`
+	PayloadResponseBody  string            `json:"payload_response_body,omitempty"`
+	PayloadLocation      string            `json:"payload_location,omitempty"`
+	BaselineStatus       int               `json:"baseline_status,omitempty"`
+	BaselineResponseBody string            `json:"baseline_response_body,omitempty"`
+	Reproductions        int               `json:"reproductions,omitempty"`
+	ScopeRejected        bool              `json:"scope_rejected,omitempty"`
+}
+
 // NewHTTPVerifier creates a verifier that does not follow redirects so redirect
 // verdicts are based on the target's own Location response.
 func NewHTTPVerifier(client *http.Client, scope Scope, reproductions int) *HTTPVerifier {
@@ -62,37 +80,53 @@ func NewHTTPVerifier(client *http.Client, scope Scope, reproductions int) *HTTPV
 // Verify issues framework-owned baseline and payload requests, then scores the
 // bytes returned by the target. It never upgrades request failures to a finding.
 func (verifier *HTTPVerifier) Verify(ctx context.Context, spec FindingSpec) VerificationResult {
+	result, _ := verifier.VerifyWithEvidence(ctx, spec)
+	return result
+}
+
+// VerifyWithEvidence issues framework-owned baseline and payload requests,
+// returning both the deterministic verdict and the captured request/response
+// record used to reach it.
+func (verifier *HTTPVerifier) VerifyWithEvidence(ctx context.Context, spec FindingSpec) (VerificationResult, VerificationRecord) {
+	record := newVerificationRecord(spec)
 	if verifier == nil || verifier.client == nil {
-		return inconclusiveResult(spec, "verifier is not configured")
+		return inconclusiveResult(spec, "verifier is not configured"), record
 	}
 	payloadURL, err := parseVerificationURL(spec.URL)
 	if err != nil {
-		return inconclusiveResult(spec, "payload URL: "+err.Error())
+		return inconclusiveResult(spec, "payload URL: "+err.Error()), record
 	}
+	record.PayloadURL = payloadURL.String()
 	if !verifier.scope.HostAllowed(payloadURL.Hostname()) {
-		return inconclusiveResult(spec, "scope: host out of authorized range")
+		record.ScopeRejected = true
+		return inconclusiveResult(spec, "scope: host out of authorized range"), record
 	}
 
 	method := normalizedHTTPMethod(spec.Method)
+	record.Method = method
 	if !supportedVerificationMethod(method) {
-		return inconclusiveResult(spec, "unsupported HTTP method "+method)
+		return inconclusiveResult(spec, "unsupported HTTP method "+method), record
 	}
 	baseline := httpVerificationResponse{}
 	if strings.TrimSpace(spec.BaselineURL) != "" {
 		baselineURL, err := parseVerificationURL(spec.BaselineURL)
 		if err != nil {
-			return inconclusiveResult(spec, "baseline URL: "+err.Error())
+			return inconclusiveResult(spec, "baseline URL: "+err.Error()), record
 		}
+		record.BaselineURL = baselineURL.String()
 		if !verifier.scope.HostAllowed(baselineURL.Hostname()) {
-			return inconclusiveResult(spec, "scope: host out of authorized range")
+			record.ScopeRejected = true
+			return inconclusiveResult(spec, "scope: host out of authorized range"), record
 		}
 		// A baseline would be a second non-idempotent request, so only GET/HEAD
 		// obtain one after the declaration has passed the same scope check.
 		if isIdempotentMethod(method) {
 			baseline, err = verifier.request(ctx, method, baselineURL.String(), spec.BaselineBody, spec.Headers)
 			if err != nil {
-				return inconclusiveResult(spec, "baseline request: "+err.Error())
+				return inconclusiveResult(spec, "baseline request: "+err.Error()), record
 			}
+			record.BaselineStatus = baseline.StatusCode
+			record.BaselineResponseBody = baseline.Body
 		}
 	}
 
@@ -104,9 +138,13 @@ func (verifier *HTTPVerifier) Verify(ctx context.Context, spec FindingSpec) Veri
 	for attempt := 0; attempt < repeats; attempt++ {
 		payload, err = verifier.request(ctx, method, payloadURL.String(), spec.Body, spec.Headers)
 		if err != nil {
-			return inconclusiveResult(spec, "payload request: "+err.Error())
+			return inconclusiveResult(spec, "payload request: "+err.Error()), record
 		}
+		record.Reproductions++
 	}
+	record.PayloadStatus = payload.StatusCode
+	record.PayloadResponseBody = payload.Body
+	record.PayloadLocation = payload.Location
 
 	result := Score(Evidence{
 		VulnType:          spec.VulnType,
@@ -124,7 +162,29 @@ func (verifier *HTTPVerifier) Verify(ctx context.Context, spec FindingSpec) Veri
 		result.ChecksFailed = append(result.ChecksFailed, "P1 replay limited to one non-idempotent request")
 		result.Summary += "; non-idempotent request sent once"
 	}
-	return result
+	return result, record
+}
+
+func newVerificationRecord(spec FindingSpec) VerificationRecord {
+	return VerificationRecord{
+		Method:              normalizedHTTPMethod(spec.Method),
+		PayloadURL:          spec.URL,
+		BaselineURL:         spec.BaselineURL,
+		RequestHeaders:      cloneStringMap(spec.Headers),
+		RequestBody:         spec.Body,
+		BaselineRequestBody: spec.BaselineBody,
+	}
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 type httpVerificationResponse struct {

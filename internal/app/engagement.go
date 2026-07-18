@@ -125,6 +125,7 @@ func (service *Service) Run(ctx context.Context, request Request, progress func(
 		Authorizer:        authorizerFromConfig(agentConfig.Authorization),
 		AllowedHosts:      agentConfig.Authorization.AllowedHosts,
 		AllowPrivateHosts: agentConfig.Authorization.PrivateAllowed(),
+		EvidenceSink:      writer,
 		Verifier: runtime.NewHTTPVerifier(
 			verificationClient,
 			verificationScope,

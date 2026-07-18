@@ -47,7 +47,7 @@ func TestRunREPLNaturalLanguageTaskCreatesRuntimeEngagement(t *testing.T) {
 		}
 	}
 	reportBody, err := os.ReadFile(filepath.Join(output, entries[0].Name(), "report.md"))
-	if err != nil || !strings.HasPrefix(string(reportBody), "# 最终报告") {
+	if err != nil || !strings.HasPrefix(string(reportBody), "# PentGo Agent Report") || !strings.Contains(string(reportBody), "## 已验证发现") {
 		t.Fatalf("report/err = %q/%v", reportBody, err)
 	}
 }
@@ -92,7 +92,7 @@ func newModelServer(t *testing.T) *httptest.Server {
 		"{\"choices\":[{\"message\":{\"content\":\"```python\\nimport os\\nprint(os.environ['PENTGO_TARGET'])\\n```\"}}]}",
 		`{"choices":[{"message":{"content":"TASK_COMPLETE"}}]}`,
 		`{"choices":[{"message":{"content":"NO_FINDINGS"}}]}`,
-		`{"choices":[{"message":{"content":"# 最终报告\n\n## 已验证发现\n未验证漏洞。"}}]}`,
+		`{"choices":[{"message":{"content":"## 执行摘要\n已完成检查。"}}]}`,
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/chat/completions" {

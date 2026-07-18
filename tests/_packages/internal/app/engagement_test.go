@@ -2,10 +2,12 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -20,7 +22,7 @@ func TestServiceUsesFourthModelRequestForFinalReport(t *testing.T) {
 		{response: agent.Response{Content: "```python\nimport os\nprint('evidence')\n```"}},
 		{response: agent.Response{Content: "TASK_COMPLETE"}},
 		{response: agent.Response{Content: "NO_FINDINGS"}},
-		{response: agent.Response{Content: "# 最终报告\n\n## 已验证发现\n未验证漏洞。\n"}},
+		{response: agent.Response{Content: "## 执行摘要\n已完成检查。\n"}},
 	}}
 	service := newTestService(client)
 	var events []string
@@ -32,7 +34,7 @@ func TestServiceUsesFourthModelRequestForFinalReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(client.requests) != 4 || string(body) != "# 最终报告\n\n## 已验证发现\n未验证漏洞。\n" {
+	if len(client.requests) != 4 || !strings.Contains(string(body), "# PentGo Agent Report") || !strings.Contains(string(body), "## 已验证发现") || !strings.Contains(string(body), "## 执行摘要") {
 		t.Fatalf("requests/report = %d/%q", len(client.requests), body)
 	}
 	if !strings.Contains(client.requests[2].SystemPrompt, "PENTGO FINDING") {
@@ -80,7 +82,7 @@ func TestServicePassesFrameworkVerifiedFindingToReport(t *testing.T) {
 		{response: agent.Response{Content: "```python\nimport os\nprint('evidence')\n```"}},
 		{response: agent.Response{Content: "TASK_COMPLETE"}},
 		{response: agent.Response{Content: "=== PENTGO FINDING ===\ntype: xss\nmethod: GET\nurl: " + payloadURL + "\nbaseline_url: " + baselineURL + "\npayload: <script>alert(1)</script>\n=== END PENTGO FINDING ==="}},
-		{response: agent.Response{Content: "# 最终报告\n"}},
+		{response: agent.Response{Content: "## 执行摘要\n已完成检查。\n"}},
 	}}
 	service := newTestService(client)
 	result, err := service.Run(context.Background(), Request{
@@ -99,6 +101,28 @@ func TestServicePassesFrameworkVerifiedFindingToReport(t *testing.T) {
 		if !strings.Contains(reportContext, want) {
 			t.Fatalf("report context missing %q: %q", want, reportContext)
 		}
+	}
+	verificationEvidence, readErr := os.ReadFile(filepath.Join(result.Artifacts.Directory, "evidence", "verification-001.json"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	var record struct {
+		PayloadResponseBody  string `json:"payload_response_body"`
+		BaselineResponseBody string `json:"baseline_response_body"`
+	}
+	if err := json.Unmarshal(verificationEvidence, &record); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(record.PayloadResponseBody, "<script>alert(1)</script>") || !strings.Contains(record.BaselineResponseBody, "benign") {
+		t.Fatalf("verification record = %+v", record)
+	}
+	sessionJSON, readErr := os.ReadFile(result.Artifacts.SessionJSON)
+	if readErr != nil || !strings.Contains(string(sessionJSON), `"findings"`) || !strings.Contains(string(sessionJSON), `"evidence_path"`) {
+		t.Fatalf("session JSON/readErr = %s/%v", sessionJSON, readErr)
+	}
+	reportBody, readErr := os.ReadFile(result.Artifacts.Markdown)
+	if readErr != nil || !strings.Contains(string(reportBody), "## 已验证发现") || !strings.Contains(string(reportBody), "evidence/verification-001.json") {
+		t.Fatalf("report/readErr = %s/%v", reportBody, readErr)
 	}
 }
 
@@ -142,7 +166,7 @@ func TestServiceWiresAuthorizationFromConfig(t *testing.T) {
 		{Content: "```python\nimport os\nprint('ok')\n```"},
 		{Content: "TASK_COMPLETE"},
 		{Content: "NO_FINDINGS"},
-		{Content: "# 最终报告\n"},
+		{Content: "## 执行摘要\n已完成检查。\n"},
 	}
 	dir := t.TempDir()
 	service := NewService(cfg, Dependencies{

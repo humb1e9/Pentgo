@@ -45,6 +45,36 @@ func TestGenerateTerminalMarkdownRejectsEmptyModelResponse(t *testing.T) {
 	}
 }
 
+func TestGenerateTerminalMarkdownAcceptsValidatedReportContext(t *testing.T) {
+	client := &reportClient{response: agent.Response{Content: "# 最终报告\n\n## 已验证发现\n未验证漏洞。"}}
+	validated := runtime.ValidateReportContext(runtime.ReportContext{
+		Target: "https://example.test",
+		Turns: []runtime.ReportTurn{{
+			Number:         1,
+			Decision:       "探测首页",
+			DeclaredLabels: []runtime.EvidenceLevel{runtime.EvidenceVerified},
+			Blocks: []runtime.ReportBlock{{
+				Level:  runtime.EvidenceInferred,
+				Status: runtime.ExecutionFailed,
+			}},
+		}},
+	})
+
+	markdown, err := GenerateTerminalMarkdown(context.Background(), client, validated)
+	if err != nil || markdown == "" {
+		t.Fatalf("markdown/err = %q/%v", markdown, err)
+	}
+	if len(client.requests) != 1 {
+		t.Fatalf("request count = %d", len(client.requests))
+	}
+	if !strings.Contains(client.requests[0].Messages[0].Content, "反幻觉审计") {
+		t.Fatalf("audit section missing from request: %q", client.requests[0].Messages[0].Content)
+	}
+	if !strings.Contains(client.requests[0].SystemPrompt, "声明超过证据") {
+		t.Fatalf("system prompt does not prioritize audit findings: %q", client.requests[0].SystemPrompt)
+	}
+}
+
 func TestPublishWithReportWritesModelMarkdown(t *testing.T) {
 	session := artifactTestSession(t)
 	writer, err := NewEngagementWriter(t.TempDir(), session.ID)

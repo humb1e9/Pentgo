@@ -33,13 +33,14 @@ type ReportTurn struct {
 
 // ReportContext 是生成最终报告所需的有界执行上下文。
 type ReportContext struct {
-	Target         string
-	Intent         string
-	Status         SessionStatus
-	StopReason     string
-	Skills         []string
-	Turns          []ReportTurn
-	RecoveryEvents []TimelineEvent
+	Target           string
+	Intent           string
+	Status           SessionStatus
+	StopReason       string
+	Skills           []string
+	VerifiedFindings []VerificationResult
+	Turns            []ReportTurn
+	RecoveryEvents   []TimelineEvent
 }
 
 // PromptText 渲染不包含模型源码的报告证据文本。
@@ -48,6 +49,28 @@ func (context ReportContext) PromptText() string {
 	appendReportText(&builder, fmt.Sprintf("目标: %s\n任务: %s\n会话状态: %s\n停止原因: %s\n", context.Target, context.Intent, context.Status, context.StopReason))
 	if len(context.Skills) > 0 {
 		appendReportText(&builder, "已加载 Skill: "+strings.Join(context.Skills, ", ")+"\n")
+	}
+	if len(context.VerifiedFindings) > 0 {
+		if !appendReportText(&builder, "\n框架验证发现（PentGo 自发 HTTP 请求与确定性评分）:\n") {
+			return finishReportPrompt(&builder)
+		}
+		for _, finding := range context.VerifiedFindings {
+			label := "框架验证结果"
+			switch finding.Verdict {
+			case VerdictVerified:
+				label = "框架已验证"
+			case VerdictLikely:
+				label = "框架疑似"
+			case VerdictInconclusive:
+				label = "框架验证未决"
+			case VerdictRefuted:
+				label = "框架验证已驳回"
+			}
+			entry := fmt.Sprintf("- %s\n类型: %s\nVERDICT: %s\nconfidence: %.2f\n摘要: %s\ncurl: %s\n", label, finding.VulnType, finding.Verdict, finding.Confidence, finding.Summary, finding.Curl)
+			if !appendReportText(&builder, entry) {
+				return finishReportPrompt(&builder)
+			}
+		}
 	}
 	for _, turn := range context.Turns {
 		if !appendReportText(&builder, fmt.Sprintf("\n回合 %d\n决策摘要: %s\n", turn.Number, turn.Decision)) {

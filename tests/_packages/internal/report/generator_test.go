@@ -75,6 +75,36 @@ func TestGenerateTerminalMarkdownAcceptsValidatedReportContext(t *testing.T) {
 	}
 }
 
+func TestGenerateTerminalMarkdownUsesFrameworkVerdictsForClassification(t *testing.T) {
+	client := &reportClient{response: agent.Response{Content: "# 最终报告\n"}}
+	_, err := GenerateTerminalMarkdown(context.Background(), client, runtime.ReportContext{
+		Target: "https://example.test",
+		VerifiedFindings: []runtime.VerificationResult{{
+			Verdict:    runtime.VerdictVerified,
+			VulnType:   runtime.VulnXSS,
+			Confidence: 0.95,
+			Curl:       "curl -i -X GET 'https://example.test/?q=payload'",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(client.requests) != 1 {
+		t.Fatalf("request count = %d", len(client.requests))
+	}
+	request := client.requests[0]
+	for _, want := range []string{"框架验证发现", "Verdict=VERIFIED", "疑似发现", "INCONCLUSIVE/REFUTED"} {
+		if !strings.Contains(request.SystemPrompt, want) {
+			t.Fatalf("system prompt missing %q: %q", want, request.SystemPrompt)
+		}
+	}
+	for _, want := range []string{"框架已验证", "VERDICT: VERIFIED", "curl -i -X GET"} {
+		if !strings.Contains(request.Messages[0].Content, want) {
+			t.Fatalf("report context missing %q: %q", want, request.Messages[0].Content)
+		}
+	}
+}
+
 func TestPublishWithReportWritesModelMarkdown(t *testing.T) {
 	session := artifactTestSession(t)
 	writer, err := NewEngagementWriter(t.TempDir(), session.ID)

@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -13,10 +15,11 @@ import (
 	"pentgo/internal/runtime"
 )
 
-func TestServiceUsesThirdModelRequestForFinalReport(t *testing.T) {
+func TestServiceUsesFourthModelRequestForFinalReport(t *testing.T) {
 	client := &scriptedClient{outcomes: []chatOutcome{
 		{response: agent.Response{Content: "```python\nimport os\nprint('evidence')\n```"}},
 		{response: agent.Response{Content: "TASK_COMPLETE"}},
+		{response: agent.Response{Content: "NO_FINDINGS"}},
 		{response: agent.Response{Content: "# 最终报告\n\n## 已验证发现\n未验证漏洞。\n"}},
 	}}
 	service := newTestService(client)
@@ -29,11 +32,14 @@ func TestServiceUsesThirdModelRequestForFinalReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(client.requests) != 3 || string(body) != "# 最终报告\n\n## 已验证发现\n未验证漏洞。\n" {
+	if len(client.requests) != 4 || string(body) != "# 最终报告\n\n## 已验证发现\n未验证漏洞。\n" {
 		t.Fatalf("requests/report = %d/%q", len(client.requests), body)
 	}
-	if !strings.Contains(client.requests[2].Messages[0].Content, "反幻觉审计") {
-		t.Fatalf("report request missing audit: %q", client.requests[2].Messages[0].Content)
+	if !strings.Contains(client.requests[2].SystemPrompt, "PENTGO FINDING") {
+		t.Fatalf("consolidation request = %+v", client.requests[2])
+	}
+	if !strings.Contains(client.requests[3].Messages[0].Content, "反幻觉审计") {
+		t.Fatalf("report request missing audit: %q", client.requests[3].Messages[0].Content)
 	}
 	if !containsEvent(events, "Generating final report.") || !containsEvent(events, "Final report generated.") {
 		t.Fatalf("events = %q", events)
@@ -44,6 +50,7 @@ func TestServicePublishesTimelineWhenReportCallFails(t *testing.T) {
 	client := &scriptedClient{outcomes: []chatOutcome{
 		{response: agent.Response{Content: "```python\nimport os\nprint('evidence')\n```"}},
 		{response: agent.Response{Content: "TASK_COMPLETE"}},
+		{response: agent.Response{Content: "NO_FINDINGS"}},
 		{err: errors.New("report provider unavailable")},
 	}}
 	service := newTestService(client)
@@ -56,8 +63,42 @@ func TestServicePublishesTimelineWhenReportCallFails(t *testing.T) {
 	if readErr != nil || !strings.Contains(string(body), "## Execution Timeline") || result.RunError != nil {
 		t.Fatalf("body/readErr/runError = %q/%v/%v", body, readErr, result.RunError)
 	}
-	if len(client.requests) != 3 || !containsEvent(events, "Final report fell back to execution timeline.") {
+	if len(client.requests) != 4 || !containsEvent(events, "Final report fell back to execution timeline.") {
 		t.Fatalf("requests/events = %d/%q", len(client.requests), events)
+	}
+}
+
+func TestServicePassesFrameworkVerifiedFindingToReport(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		value := request.URL.Query().Get("q")
+		_, _ = writer.Write([]byte("<div>" + value + "</div>"))
+	}))
+	defer target.Close()
+	payloadURL := target.URL + "/?q=%3Cscript%3Ealert(1)%3C%2Fscript%3E"
+	baselineURL := target.URL + "/?q=benign"
+	client := &scriptedClient{outcomes: []chatOutcome{
+		{response: agent.Response{Content: "```python\nimport os\nprint('evidence')\n```"}},
+		{response: agent.Response{Content: "TASK_COMPLETE"}},
+		{response: agent.Response{Content: "=== PENTGO FINDING ===\ntype: xss\nmethod: GET\nurl: " + payloadURL + "\nbaseline_url: " + baselineURL + "\npayload: <script>alert(1)</script>\n=== END PENTGO FINDING ==="}},
+		{response: agent.Response{Content: "# 最终报告\n"}},
+	}}
+	service := newTestService(client)
+	result, err := service.Run(context.Background(), Request{
+		Target:     runtime.Target{Raw: target.URL, Canonical: target.URL},
+		Intent:     "检查反射输出",
+		OutputRoot: t.TempDir(),
+	}, nil)
+	if err != nil || result.RunError != nil {
+		t.Fatalf("result/err = %+v/%v", result, err)
+	}
+	if len(client.requests) != 4 {
+		t.Fatalf("request count = %d", len(client.requests))
+	}
+	reportContext := client.requests[3].Messages[0].Content
+	for _, want := range []string{"框架已验证", "VERDICT: VERIFIED", "curl -i -X GET"} {
+		if !strings.Contains(reportContext, want) {
+			t.Fatalf("report context missing %q: %q", want, reportContext)
+		}
 	}
 }
 
@@ -100,6 +141,8 @@ func TestServiceWiresAuthorizationFromConfig(t *testing.T) {
 		{Content: "```python\nimport requests\nrequests.get('https://evil.example.net/x')\n```"},
 		{Content: "```python\nimport os\nprint('ok')\n```"},
 		{Content: "TASK_COMPLETE"},
+		{Content: "NO_FINDINGS"},
+		{Content: "# 最终报告\n"},
 	}
 	dir := t.TempDir()
 	service := NewService(cfg, Dependencies{

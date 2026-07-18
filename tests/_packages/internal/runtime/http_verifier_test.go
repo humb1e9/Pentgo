@@ -53,6 +53,28 @@ func TestHTTPVerifierRejectsOutOfScope(t *testing.T) {
 	}
 }
 
+func TestHTTPVerifierRejectsOutOfScopeNonIdempotentBaselineWithoutPayloadRequest(t *testing.T) {
+	payloadHits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		payloadHits++
+		_, _ = io.WriteString(writer, `{"success": true}`)
+	}))
+	defer server.Close()
+
+	verifier := NewHTTPVerifier(server.Client(), NewScope(hostOf(server.URL), nil, true), 3)
+	result := verifier.Verify(context.Background(), FindingSpec{
+		VulnType:    VulnUpload,
+		Method:      http.MethodPost,
+		URL:         server.URL + "/upload",
+		BaselineURL: "https://evil.example/upload",
+		Body:        "file=payload.txt",
+		Payload:     "file=payload.txt",
+	})
+	if result.Verdict != VerdictInconclusive || payloadHits != 0 {
+		t.Fatalf("result/payload hits = %+v/%d", result, payloadHits)
+	}
+}
+
 func TestHTTPVerifierNonIdempotentSingleRequest(t *testing.T) {
 	hits := 0
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -65,11 +87,13 @@ func TestHTTPVerifierNonIdempotentSingleRequest(t *testing.T) {
 
 	verifier := NewHTTPVerifier(server.Client(), NewScope(hostOf(server.URL), nil, true), 3)
 	verifier.Verify(context.Background(), FindingSpec{
-		VulnType: VulnUpload,
-		Method:   http.MethodPost,
-		URL:      server.URL + "/upload",
-		Body:     "file=test.txt",
-		Payload:  "file=test.txt",
+		VulnType:     VulnUpload,
+		Method:       http.MethodPost,
+		URL:          server.URL + "/upload",
+		BaselineURL:  server.URL + "/upload?mode=baseline",
+		Body:         "file=test.txt",
+		BaselineBody: "file=benign.txt",
+		Payload:      "file=test.txt",
 	})
 	if hits != 1 {
 		t.Fatalf("POST request count = %d, want 1", hits)
@@ -118,6 +142,26 @@ func TestHTTPVerifierTransportFailureIsInconclusive(t *testing.T) {
 	})
 	if result.Verdict != VerdictInconclusive {
 		t.Fatalf("transport failure verdict = %s", result.Verdict)
+	}
+}
+
+func TestHTTPVerifierRejectsUnsupportedMethodWithoutRequest(t *testing.T) {
+	hits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		hits++
+		_, _ = io.WriteString(writer, "unexpected")
+	}))
+	defer server.Close()
+
+	verifier := NewHTTPVerifier(server.Client(), NewScope(hostOf(server.URL), nil, true), 3)
+	result := verifier.Verify(context.Background(), FindingSpec{
+		VulnType: VulnXSS,
+		Method:   "GET; touch /tmp/pentgo",
+		URL:      server.URL + "/?q=payload",
+		Payload:  "payload",
+	})
+	if result.Verdict != VerdictInconclusive || hits != 0 || result.Curl != "" {
+		t.Fatalf("result/hits = %+v/%d", result, hits)
 	}
 }
 

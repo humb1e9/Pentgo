@@ -116,7 +116,7 @@ func TestLoadNormalizesInvalidRootAgentRuntimeValues(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	data := []byte(`{"agent":{"max_turns":0,"request_timeout_seconds":-1,"execution_timeout_seconds":0,"max_output_bytes":0,"max_parallel_blocks":0,"no_code_limit":0,"provider_retry_delay_seconds":0,"network_backoff_seconds":0,"soft_stuck_turns":0,"hard_stuck_turns":0,"line_repeat_limit":0,"scan_line_repeat_limit":0}}`)
+	data := []byte(`{"agent":{"max_turns":0,"max_findings":0,"verification_reproductions":0,"request_timeout_seconds":-1,"execution_timeout_seconds":0,"max_output_bytes":0,"max_parallel_blocks":0,"no_code_limit":0,"provider_retry_delay_seconds":0,"network_backoff_seconds":0,"soft_stuck_turns":0,"hard_stuck_turns":0,"line_repeat_limit":0,"scan_line_repeat_limit":0}}`)
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}

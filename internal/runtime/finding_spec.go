@@ -24,6 +24,9 @@ func ParseFindingSpecs(text string) []FindingSpec {
 			continue
 		}
 		spec.Method = normalizedHTTPMethod(spec.Method)
+		if !supportedVerificationMethod(spec.Method) {
+			continue
+		}
 		key := findingSpecKey(spec)
 		if seen[key] {
 			continue

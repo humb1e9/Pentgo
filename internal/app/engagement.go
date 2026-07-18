@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -90,6 +91,9 @@ func (service *Service) Run(ctx context.Context, request Request, progress func(
 		return result, err
 	}
 	agentConfig := service.cfg.Agent
+	targetURL, _ := url.Parse(request.Target.Canonical)
+	verificationScope := runtime.NewScope(targetURL.Hostname(), agentConfig.Authorization.AllowedHosts, agentConfig.Authorization.PrivateAllowed())
+	verificationClient := &http.Client{Timeout: 15 * time.Second}
 	executor := runtime.NewExecutor(runtime.ExecutorConfig{
 		WorkDir:             writer.WorkDir(),
 		Timeout:             time.Duration(agentConfig.ExecutionTimeoutSeconds) * time.Second,
@@ -101,6 +105,7 @@ func (service *Service) Run(ctx context.Context, request Request, progress func(
 	})
 	runner := runtime.NewRunner(client, executor, runtime.RunnerConfig{
 		MaxTurns:           agentConfig.MaxTurns,
+		MaxFindings:        agentConfig.MaxFindings,
 		NoCodeLimit:        agentConfig.NoCodeLimit,
 		MaxBlocksPerTurn:   agentConfig.MaxBlocksPerTurn,
 		ProviderRetryDelay: time.Duration(agentConfig.ProviderRetryDelaySeconds) * time.Second,
@@ -120,9 +125,17 @@ func (service *Service) Run(ctx context.Context, request Request, progress func(
 		Authorizer:        authorizerFromConfig(agentConfig.Authorization),
 		AllowedHosts:      agentConfig.Authorization.AllowedHosts,
 		AllowPrivateHosts: agentConfig.Authorization.PrivateAllowed(),
+		Verifier: runtime.NewHTTPVerifier(
+			verificationClient,
+			verificationScope,
+			agentConfig.VerificationReproductions,
+		),
 	}, nil, nil)
 	progress(Event{Message: "Agent engagement started: " + engagementID})
 	result.RunError = runner.Run(ctx, session)
+	if result.RunError == nil && ctx.Err() == nil && session.Status == runtime.SessionDone {
+		runner.ConsolidateAndVerify(ctx, session)
+	}
 	reportMarkdown := ""
 	if ctx.Err() == nil {
 		progress(Event{Message: "Generating final report."})

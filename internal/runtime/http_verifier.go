@@ -74,6 +74,9 @@ func (verifier *HTTPVerifier) Verify(ctx context.Context, spec FindingSpec) Veri
 	}
 
 	method := normalizedHTTPMethod(spec.Method)
+	if !supportedVerificationMethod(method) {
+		return inconclusiveResult(spec, "unsupported HTTP method "+method)
+	}
 	baseline := httpVerificationResponse{}
 	if strings.TrimSpace(spec.BaselineURL) != "" {
 		baselineURL, err := parseVerificationURL(spec.BaselineURL)
@@ -83,9 +86,13 @@ func (verifier *HTTPVerifier) Verify(ctx context.Context, spec FindingSpec) Veri
 		if !verifier.scope.HostAllowed(baselineURL.Hostname()) {
 			return inconclusiveResult(spec, "scope: host out of authorized range")
 		}
-		baseline, err = verifier.request(ctx, method, baselineURL.String(), spec.BaselineBody, spec.Headers)
-		if err != nil {
-			return inconclusiveResult(spec, "baseline request: "+err.Error())
+		// A baseline would be a second non-idempotent request, so only GET/HEAD
+		// obtain one after the declaration has passed the same scope check.
+		if isIdempotentMethod(method) {
+			baseline, err = verifier.request(ctx, method, baselineURL.String(), spec.BaselineBody, spec.Headers)
+			if err != nil {
+				return inconclusiveResult(spec, "baseline request: "+err.Error())
+			}
 		}
 	}
 
@@ -175,6 +182,15 @@ func normalizedHTTPMethod(method string) string {
 	return method
 }
 
+func supportedVerificationMethod(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch:
+		return true
+	default:
+		return false
+	}
+}
+
 func isIdempotentMethod(method string) bool {
 	return method == http.MethodGet || method == http.MethodHead
 }
@@ -192,6 +208,9 @@ func inconclusiveResult(spec FindingSpec, reason string) VerificationResult {
 // CurlCommand renders a shell-safe reproduction command for report consumers.
 func CurlCommand(spec FindingSpec) string {
 	method := normalizedHTTPMethod(spec.Method)
+	if !supportedVerificationMethod(method) {
+		return ""
+	}
 	parts := []string{"curl", "-i", "-X", method}
 	keys := make([]string, 0, len(spec.Headers))
 	for key := range spec.Headers {

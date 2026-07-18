@@ -340,6 +340,12 @@ func (runner *Runner) ReportContext(session *AgentSession) ReportContext {
 			}
 		}
 	}
+	context.VerifiedFindings = make([]VerificationResult, len(runner.findings))
+	for index, finding := range runner.findings {
+		context.VerifiedFindings[index] = finding
+		context.VerifiedFindings[index].ChecksPassed = append([]string(nil), finding.ChecksPassed...)
+		context.VerifiedFindings[index].ChecksFailed = append([]string(nil), finding.ChecksFailed...)
+	}
 	context.Turns = make([]ReportTurn, len(runner.reportTurns))
 	for index, turn := range runner.reportTurns {
 		context.Turns[index] = ReportTurn{Number: turn.Number, Decision: turn.Decision, DeclaredLabels: append([]EvidenceLevel(nil), turn.DeclaredLabels...), Blocks: append([]ReportBlock(nil), turn.Blocks...)}

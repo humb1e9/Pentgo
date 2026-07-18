@@ -92,6 +92,19 @@ payload: id=1%27
 	}
 }
 
+func TestParseFindingSpecsSkipsUnsupportedMethod(t *testing.T) {
+	specs := ParseFindingSpecs(`
+=== PENTGO FINDING ===
+type: xss
+method: GET; touch /tmp/pentgo
+url: https://target.example/?q=payload
+payload: payload
+=== END PENTGO FINDING ===`)
+	if len(specs) != 0 {
+		t.Fatalf("unsupported method parsed: %+v", specs)
+	}
+}
+
 func TestParseFindingSpecsReturnsNilWithoutBlocks(t *testing.T) {
 	if specs := ParseFindingSpecs("no structured declarations"); specs != nil {
 		t.Fatalf("specs = %+v", specs)

@@ -54,6 +54,55 @@ func TestReportContextRendersDeclaredLabels(t *testing.T) {
 	}
 }
 
+func TestReportContextRendersFrameworkFindingsBeforeLongTurnHistory(t *testing.T) {
+	reportContext := ReportContext{
+		Target: "https://example.test",
+		VerifiedFindings: []VerificationResult{{
+			Verdict:    VerdictVerified,
+			VulnType:   VulnXSS,
+			Confidence: 0.95,
+			Summary:    "xss VERIFIED confidence=0.95",
+			Curl:       "curl -i -X GET 'https://example.test/?q=%3Cscript%3E'",
+		}},
+	}
+	for number := 1; number <= 300; number++ {
+		reportContext.Turns = append(reportContext.Turns, ReportTurn{
+			Number:   number,
+			Decision: strings.Repeat("execution summary ", 80),
+		})
+	}
+
+	text := reportContext.PromptText()
+	for _, want := range []string{"框架验证发现", "框架已验证", "VERDICT: VERIFIED", "confidence: 0.95", "curl -i -X GET"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("PromptText missing %q: %q", want, text)
+		}
+	}
+	if len(text) > maxReportContextBytes {
+		t.Fatalf("PromptText len = %d", len(text))
+	}
+}
+
+func TestRunnerCopiesFrameworkFindingsIntoReportContext(t *testing.T) {
+	runner := NewRunner(&scriptedClient{}, &recordingExecutor{}, defaultRunnerConfig(), nil, nil)
+	runner.findings = []VerificationResult{{
+		Verdict:      VerdictLikely,
+		VulnType:     VulnSQLI,
+		ChecksPassed: []string{"P2 causal difference"},
+		ChecksFailed: []string{"P1 reproduction count below 3"},
+	}}
+	session := NewSession(Target{Canonical: "https://example.test"}, "检查首页", time.Now().UTC())
+
+	reportContext := runner.ReportContext(session)
+	if len(reportContext.VerifiedFindings) != 1 || reportContext.VerifiedFindings[0].Verdict != VerdictLikely {
+		t.Fatalf("framework findings = %+v", reportContext.VerifiedFindings)
+	}
+	runner.findings[0].ChecksPassed[0] = "mutated"
+	if reportContext.VerifiedFindings[0].ChecksPassed[0] != "P2 causal difference" {
+		t.Fatalf("report context aliases runner findings: %+v", reportContext.VerifiedFindings)
+	}
+}
+
 func TestRunnerExposesCodeFreeExecutionReportContext(t *testing.T) {
 	client := &scriptedClient{responses: []agent.Response{
 		{Content: "[LIKELY] 检查首页。\n```python\nimport os\nprint(os.environ['PENTGO_TARGET'])\n```"},

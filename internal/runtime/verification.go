@@ -51,6 +51,7 @@ type Evidence struct {
 	StatusCode        int
 	BaselineStatus    int
 	ReproductionCount int
+	LoginVerified     bool
 }
 
 // VerificationResult is the deterministic result sent to the report pipeline.
@@ -170,6 +171,11 @@ func deterministicCheck(evidence Evidence) (bool, string) {
 			return true, "authentication status transition"
 		}
 		return false, "no authentication-bypass signature"
+	case VulnCredential:
+		if evidence.LoginVerified {
+			return true, "framework login verified"
+		}
+		return false, "login not verified"
 	case VulnUpload:
 		if newMatch(uploadSignature) {
 			return true, "upload success signature"

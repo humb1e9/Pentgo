@@ -111,6 +111,22 @@ func TestScoreOpenRedirectLocationOffsite(t *testing.T) {
 	}
 }
 
+func TestScoreCredentialUsesFrameworkLoginVerification(t *testing.T) {
+	verified := Score(Evidence{
+		VulnType:          VulnCredential,
+		Payload:           "username=fixture",
+		ResponseBody:      "dashboard",
+		LoginVerified:     true,
+		ReproductionCount: 1,
+	})
+	if verified.Verdict != VerdictLikely {
+		t.Fatalf("verified credential = %+v", verified)
+	}
+	if failed := Score(Evidence{VulnType: VulnCredential, ReproductionCount: 1}); failed.Verdict != VerdictRefuted {
+		t.Fatalf("failed credential = %+v", failed)
+	}
+}
+
 func TestScoreNoEvidenceRefuted(t *testing.T) {
 	evidence := Evidence{
 		VulnType:     VulnSQLI,

@@ -76,19 +76,25 @@ type loginOutcome struct {
 // VerificationRecord captures the framework-owned HTTP exchanges used to
 // reach a verification verdict.
 type VerificationRecord struct {
-	Method               string            `json:"method"`
-	PayloadURL           string            `json:"payload_url"`
-	BaselineURL          string            `json:"baseline_url,omitempty"`
-	RequestHeaders       map[string]string `json:"request_headers,omitempty"`
-	RequestBody          string            `json:"request_body,omitempty"`
-	BaselineRequestBody  string            `json:"baseline_request_body,omitempty"`
-	PayloadStatus        int               `json:"payload_status,omitempty"`
-	PayloadResponseBody  string            `json:"payload_response_body,omitempty"`
-	PayloadLocation      string            `json:"payload_location,omitempty"`
-	BaselineStatus       int               `json:"baseline_status,omitempty"`
-	BaselineResponseBody string            `json:"baseline_response_body,omitempty"`
-	Reproductions        int               `json:"reproductions,omitempty"`
-	ScopeRejected        bool              `json:"scope_rejected,omitempty"`
+	Method                string            `json:"method"`
+	PayloadURL            string            `json:"payload_url"`
+	BaselineURL           string            `json:"baseline_url,omitempty"`
+	RequestHeaders        map[string]string `json:"request_headers,omitempty"`
+	RequestBody           string            `json:"request_body,omitempty"`
+	BaselineRequestBody   string            `json:"baseline_request_body,omitempty"`
+	PayloadStatus         int               `json:"payload_status,omitempty"`
+	PayloadResponseBody   string            `json:"payload_response_body,omitempty"`
+	PayloadLocation       string            `json:"payload_location,omitempty"`
+	BaselineStatus        int               `json:"baseline_status,omitempty"`
+	BaselineResponseBody  string            `json:"baseline_response_body,omitempty"`
+	Reproductions         int               `json:"reproductions,omitempty"`
+	ScopeRejected         bool              `json:"scope_rejected,omitempty"`
+	LoginAttempted        bool              `json:"login_attempted,omitempty"`
+	LoginVerified         bool              `json:"login_verified,omitempty"`
+	LoginStatus           int               `json:"login_status,omitempty"`
+	LoginCookieNames      []string          `json:"login_cookie_names,omitempty"`
+	LoginMeaningfulCookie bool              `json:"login_meaningful_cookie,omitempty"`
+	LoginSnippet          string            `json:"login_snippet,omitempty"`
 }
 
 // NewHTTPVerifier creates a verifier that does not follow redirects so redirect
@@ -130,6 +136,9 @@ func (verifier *HTTPVerifier) VerifyWithEvidence(ctx context.Context, spec Findi
 	if verifier == nil || verifier.client == nil {
 		return inconclusiveResult(spec, "verifier is not configured"), record
 	}
+	if spec.VulnType == VulnCredential {
+		return verifier.verifyCredential(ctx, spec, record)
+	}
 	payloadURL, err := parseVerificationURL(spec.URL)
 	if err != nil {
 		return inconclusiveResult(spec, "payload URL: "+err.Error()), record
@@ -144,6 +153,18 @@ func (verifier *HTTPVerifier) VerifyWithEvidence(ctx context.Context, spec Findi
 	record.Method = method
 	if !supportedVerificationMethod(method) {
 		return inconclusiveResult(spec, "unsupported HTTP method "+method), record
+	}
+	login := loginOutcome{}
+	if strings.TrimSpace(spec.LoginURL) != "" {
+		login = verifier.verifyLogin(ctx, spec)
+		record.applyLoginOutcome(login)
+	}
+	payloadHeaders := cloneStringMap(spec.Headers)
+	if login.Verified && login.SessionCookieHeader != "" {
+		if payloadHeaders == nil {
+			payloadHeaders = make(map[string]string)
+		}
+		payloadHeaders["Cookie"] = login.SessionCookieHeader
 	}
 	baseline := httpVerificationResponse{}
 	if strings.TrimSpace(spec.BaselineURL) != "" {
@@ -180,7 +201,7 @@ func (verifier *HTTPVerifier) VerifyWithEvidence(ctx context.Context, spec Findi
 	}
 	payload := httpVerificationResponse{}
 	for attempt := 0; attempt < repeats; attempt++ {
-		payload, err = verifier.request(ctx, method, payloadURL.String(), spec.Body, spec.Headers)
+		payload, err = verifier.request(ctx, method, payloadURL.String(), spec.Body, payloadHeaders)
 		if err != nil {
 			return inconclusiveResult(spec, "payload request: "+err.Error()), record
 		}
@@ -200,8 +221,12 @@ func (verifier *HTTPVerifier) VerifyWithEvidence(ctx context.Context, spec Findi
 		StatusCode:        payload.StatusCode,
 		BaselineStatus:    baseline.StatusCode,
 		ReproductionCount: repeats,
+		LoginVerified:     login.Verified,
 	})
 	result.Curl = CurlCommand(spec)
+	if login.Attempted && !login.Verified {
+		result.ChecksFailed = append(result.ChecksFailed, "auth session not established")
+	}
 	if !isIdempotentMethod(method) {
 		result.ChecksFailed = append(result.ChecksFailed, "P1 replay limited to one non-idempotent request")
 		result.Summary += "; non-idempotent request sent once"
@@ -209,12 +234,74 @@ func (verifier *HTTPVerifier) VerifyWithEvidence(ctx context.Context, spec Findi
 	return result, record
 }
 
+func (verifier *HTTPVerifier) verifyCredential(ctx context.Context, spec FindingSpec, record VerificationRecord) (VerificationResult, VerificationRecord) {
+	loginURL, err := parseVerificationURL(spec.LoginURL)
+	if err != nil {
+		return inconclusiveResult(spec, "login URL: "+err.Error()), record
+	}
+	record.PayloadURL = loginURL.String()
+	if !verifier.scope.HostAllowed(loginURL.Hostname()) {
+		record.ScopeRejected = true
+		return inconclusiveResult(spec, "scope: host out of authorized range"), record
+	}
+	method := normalizedLoginMethod(spec.LoginMethod)
+	record.Method = method
+	if !supportedVerificationMethod(method) {
+		return inconclusiveResult(spec, "unsupported login HTTP method "+method), record
+	}
+
+	login := verifier.verifyLogin(ctx, spec)
+	record.applyLoginOutcome(login)
+	if login.Error == "" {
+		record.Reproductions = 1
+	}
+	record.PayloadStatus = login.StatusCode
+	record.PayloadResponseBody = login.Snippet
+
+	result := Score(Evidence{
+		VulnType:          spec.VulnType,
+		Payload:           spec.Payload,
+		ResponseBody:      login.Snippet,
+		TargetHost:        verifier.scope.targetHost,
+		StatusCode:        login.StatusCode,
+		ReproductionCount: record.Reproductions,
+		LoginVerified:     login.Verified,
+	})
+	credentialSpec := spec
+	credentialSpec.Method = method
+	credentialSpec.URL = loginURL.String()
+	credentialSpec.Body = spec.LoginBody
+	credentialSpec.Headers = map[string]string{"Content-Type": normalizedLoginContentType(spec.LoginContentType)}
+	result.Curl = CurlCommand(credentialSpec)
+	if !login.Verified {
+		result.ChecksFailed = append(result.ChecksFailed, "auth session not established")
+	}
+	result.ChecksFailed = append(result.ChecksFailed, "P1 replay limited to one login request")
+	result.Summary += "; login request sent once"
+	return result, record
+}
+
 func newVerificationRecord(spec FindingSpec) VerificationRecord {
+	if spec.VulnType == VulnCredential {
+		return VerificationRecord{
+			Method:     normalizedLoginMethod(spec.LoginMethod),
+			PayloadURL: spec.LoginURL,
+		}
+	}
 	return VerificationRecord{
 		Method:      normalizedHTTPMethod(spec.Method),
 		PayloadURL:  spec.URL,
 		BaselineURL: spec.BaselineURL,
 	}
+}
+
+func (record *VerificationRecord) applyLoginOutcome(outcome loginOutcome) {
+	record.LoginAttempted = outcome.Attempted
+	record.LoginVerified = outcome.Verified
+	record.LoginStatus = outcome.StatusCode
+	record.LoginCookieNames = append([]string(nil), outcome.CookieNames...)
+	record.LoginMeaningfulCookie = outcome.MeaningfulCookie
+	record.LoginSnippet = outcome.Snippet
 }
 
 func cloneStringMap(values map[string]string) map[string]string {
@@ -375,6 +462,14 @@ func loginSessionURL(spec FindingSpec, loginURL *url.URL) *url.URL {
 		return loginURL
 	}
 	return payloadURL
+}
+
+func normalizedLoginContentType(contentType string) string {
+	contentType = strings.TrimSpace(contentType)
+	if contentType == "" {
+		return "application/x-www-form-urlencoded"
+	}
+	return contentType
 }
 
 func cookieEvidence(cookies []*http.Cookie) ([]string, string) {

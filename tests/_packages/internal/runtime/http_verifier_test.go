@@ -337,6 +337,128 @@ func TestVerifyLoginRejectsOutOfScopeBeforeRequest(t *testing.T) {
 	}
 }
 
+func TestVerifyWithEvidenceScoresCredentialLoginOnce(t *testing.T) {
+	loginHits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/login" {
+			t.Fatalf("unexpected path %q", request.URL.Path)
+		}
+		loginHits++
+		http.SetCookie(writer, &http.Cookie{Name: "sid", Value: "fixture", Path: "/"})
+		_, _ = io.WriteString(writer, "dashboard")
+	}))
+	defer server.Close()
+
+	verifier := NewHTTPVerifier(server.Client(), NewScope(hostOf(server.URL), nil, true), 3)
+	result, record := verifier.VerifyWithEvidence(context.Background(), FindingSpec{
+		VulnType:  VulnCredential,
+		LoginURL:  server.URL + "/login",
+		LoginBody: "username=fixture&password=fixture",
+		Username:  "fixture",
+	})
+	if result.Verdict != VerdictLikely || loginHits != 1 {
+		t.Fatalf("result/login hits = %+v/%d", result, loginHits)
+	}
+	if !record.LoginAttempted || !record.LoginVerified || record.LoginStatus != http.StatusOK || record.Reproductions != 1 {
+		t.Fatalf("record = %+v", record)
+	}
+}
+
+func TestVerifyWithEvidenceRefutesFailedCredentialLogin(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/login" {
+			t.Fatalf("unexpected path %q", request.URL.Path)
+		}
+		_, _ = io.WriteString(writer, "invalid credentials")
+	}))
+	defer server.Close()
+
+	verifier := NewHTTPVerifier(server.Client(), NewScope(hostOf(server.URL), nil, true), 3)
+	result, record := verifier.VerifyWithEvidence(context.Background(), FindingSpec{
+		VulnType:  VulnCredential,
+		LoginURL:  server.URL + "/login",
+		LoginBody: "username=fixture&password=wrong",
+		Username:  "fixture",
+	})
+	if result.Verdict != VerdictInconclusive && result.Verdict != VerdictRefuted {
+		t.Fatalf("result = %+v", result)
+	}
+	if !record.LoginAttempted || record.LoginVerified {
+		t.Fatalf("record = %+v", record)
+	}
+}
+
+func TestVerifyWithEvidenceUsesSessionCookieOnlyForPayload(t *testing.T) {
+	anonymousHits := 0
+	authenticatedPayloadHits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/login":
+			http.SetCookie(writer, &http.Cookie{Name: "sid", Value: "fixture", Path: "/"})
+			_, _ = io.WriteString(writer, "dashboard")
+		case "/user/2":
+			if strings.Contains(request.Header.Get("Cookie"), "sid=fixture") {
+				authenticatedPayloadHits++
+				_, _ = io.WriteString(writer, "Welcome Admin Dashboard")
+				return
+			}
+			anonymousHits++
+			writer.Header().Set("Location", "/login")
+			writer.WriteHeader(http.StatusFound)
+		default:
+			t.Fatalf("unexpected path %q", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	verifier := NewHTTPVerifier(server.Client(), NewScope(hostOf(server.URL), nil, true), 3)
+	result, record := verifier.VerifyWithEvidence(context.Background(), FindingSpec{
+		VulnType:    VulnAuthBypass,
+		Method:      http.MethodGet,
+		URL:         server.URL + "/user/2",
+		BaselineURL: server.URL + "/user/2",
+		Payload:     "user=2",
+		LoginURL:    server.URL + "/login",
+		LoginBody:   "username=fixture&password=fixture",
+	})
+	if result.Verdict != VerdictVerified {
+		t.Fatalf("result = %+v", result)
+	}
+	if !record.LoginVerified || authenticatedPayloadHits != 3 || anonymousHits != 1 {
+		t.Fatalf("record/authenticated/anonymous = %+v/%d/%d", record, authenticatedPayloadHits, anonymousHits)
+	}
+}
+
+func TestVerifyWithEvidenceLoginFailureDoesNotUpgradeAnonymousFinding(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/login":
+			_, _ = io.WriteString(writer, "invalid credentials")
+		case "/feature":
+			_, _ = io.WriteString(writer, "login required")
+		default:
+			t.Fatalf("unexpected path %q", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	verifier := NewHTTPVerifier(server.Client(), NewScope(hostOf(server.URL), nil, true), 3)
+	result, record := verifier.VerifyWithEvidence(context.Background(), FindingSpec{
+		VulnType:  VulnXSS,
+		Method:    http.MethodGet,
+		URL:       server.URL + "/feature?q=payload",
+		Payload:   "payload",
+		LoginURL:  server.URL + "/login",
+		LoginBody: "username=fixture&password=fixture",
+	})
+	if result.Verdict == VerdictVerified || !strings.Contains(strings.Join(result.ChecksFailed, "\n"), "auth session not established") {
+		t.Fatalf("result = %+v", result)
+	}
+	if !record.LoginAttempted || record.LoginVerified {
+		t.Fatalf("record = %+v", record)
+	}
+}
+
 func TestCurlCommandIncludesHeadersAndBody(t *testing.T) {
 	command := CurlCommand(FindingSpec{
 		Method:  http.MethodPost,

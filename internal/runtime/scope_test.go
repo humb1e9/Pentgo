@@ -1,1 +1,0 @@
-../../tests/_packages/internal/runtime/scope_test.go

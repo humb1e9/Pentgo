@@ -1,1 +1,0 @@
-../../tests/_packages/internal/runtime/finding_spec_test.go

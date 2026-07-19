@@ -5,10 +5,10 @@ import (
 	"strings"
 	"time"
 
-	"pentgo/internal/runtime"
+	sess "pentgo/internal/runtime/session"
 )
 
-func renderMarkdown(session *runtime.AgentSession, generatedAt time.Time) string {
+func renderMarkdown(session *sess.AgentSession, generatedAt time.Time) string {
 	var builder strings.Builder
 	builder.WriteString("# PentGo Agent Report\n\n")
 	fmt.Fprintf(&builder, "- Engagement ID: `%s`\n", inline(session.ID))

@@ -11,7 +11,7 @@ import (
 	"sync"
 
 	"pentgo/internal/app"
-	"pentgo/internal/runtime"
+	sess "pentgo/internal/runtime/session"
 )
 
 // EngagementRunner 定义终端运行一个 engagement 所需的应用服务边界。
@@ -21,7 +21,7 @@ type EngagementRunner interface {
 
 // Task 保存从自然语言输入提取出的目标和完整任务意图。
 type Task struct {
-	Target runtime.Target
+	Target sess.Target
 	Intent string
 }
 
@@ -63,7 +63,7 @@ func ParseTask(line string) (Task, error) {
 	if intent == "" {
 		return Task{}, errors.New("task is empty")
 	}
-	target, err := runtime.ParseTarget(intent)
+	target, err := sess.ParseTarget(intent)
 	if err != nil {
 		return Task{}, fmt.Errorf("task must contain an HTTP(S) URL or domain: %w", err)
 	}
@@ -236,7 +236,7 @@ func (terminal *Terminal) printRunResult(completed terminalRunResult) {
 	if completed.result.Artifacts.Markdown != "" {
 		terminal.writeString("Report: " + completed.result.Artifacts.Markdown + "\n")
 	}
-	if completed.result.Session != nil && completed.result.Session.Status == runtime.SessionCancelled {
+	if completed.result.Session != nil && completed.result.Session.Status == sess.SessionCancelled {
 		terminal.writeString("Engagement cancelled.\n")
 		return
 	}

@@ -4,19 +4,19 @@ import (
 	"fmt"
 	"strings"
 
-	"pentgo/internal/runtime"
+	"pentgo/internal/runtime/verify"
 )
 
 // RenderVerifiedFindings renders framework verdicts without model involvement.
-func RenderVerifiedFindings(findings []runtime.VerificationResult) string {
-	verified := make([]runtime.VerificationResult, 0, len(findings))
-	likely := make([]runtime.VerificationResult, 0, len(findings))
-	unverified := make([]runtime.VerificationResult, 0, len(findings))
+func RenderVerifiedFindings(findings []verify.VerificationResult) string {
+	verified := make([]verify.VerificationResult, 0, len(findings))
+	likely := make([]verify.VerificationResult, 0, len(findings))
+	unverified := make([]verify.VerificationResult, 0, len(findings))
 	for _, finding := range findings {
 		switch finding.Verdict {
-		case runtime.VerdictVerified:
+		case verify.VerdictVerified:
 			verified = append(verified, finding)
-		case runtime.VerdictLikely:
+		case verify.VerdictLikely:
 			likely = append(likely, finding)
 		default:
 			unverified = append(unverified, finding)
@@ -35,7 +35,7 @@ func RenderVerifiedFindings(findings []runtime.VerificationResult) string {
 	return builder.String()
 }
 
-func renderFindingGroup(builder *strings.Builder, heading string, findings []runtime.VerificationResult) {
+func renderFindingGroup(builder *strings.Builder, heading string, findings []verify.VerificationResult) {
 	if len(findings) == 0 {
 		return
 	}
@@ -59,7 +59,7 @@ func renderFindingGroup(builder *strings.Builder, heading string, findings []run
 		if len(finding.ChecksFailed) > 0 {
 			fmt.Fprintf(builder, "- Checks failed: %s\n", inline(strings.Join(finding.ChecksFailed, "; ")))
 		}
-		if finding.VulnType == runtime.VulnCredential {
+		if finding.VulnType == verify.VulnCredential {
 			fmt.Fprintf(builder, "- Login verified: %t\n", finding.LoginVerified)
 			if len(finding.LoginCookieNames) > 0 {
 				fmt.Fprintf(builder, "- Session cookies: %s\n", inline(strings.Join(finding.LoginCookieNames, ", ")))

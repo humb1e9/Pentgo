@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"pentgo/internal/runtime"
+	sess "pentgo/internal/runtime/session"
 )
 
 // Artifacts 表示已发布 engagement 的运行时文件路径。
@@ -110,12 +110,12 @@ func (writer *EngagementWriter) WriteEvidence(name string, value any) (string, e
 }
 
 // Publish 写入 session.json 和 report.md，并原子发布已有 work 与 evidence 文件。
-func (writer *EngagementWriter) Publish(session *runtime.AgentSession, generatedAt time.Time) (Artifacts, error) {
+func (writer *EngagementWriter) Publish(session *sess.AgentSession, generatedAt time.Time) (Artifacts, error) {
 	return writer.PublishWithReport(session, generatedAt, "")
 }
 
 // PublishWithReport 写入模型生成的 Markdown；空文本时使用确定性时间线回退。
-func (writer *EngagementWriter) PublishWithReport(session *runtime.AgentSession, generatedAt time.Time, markdown string) (Artifacts, error) {
+func (writer *EngagementWriter) PublishWithReport(session *sess.AgentSession, generatedAt time.Time, markdown string) (Artifacts, error) {
 	if writer == nil {
 		return Artifacts{}, errors.New("nil engagement writer")
 	}
@@ -155,7 +155,7 @@ func (writer *EngagementWriter) PublishWithReport(session *runtime.AgentSession,
 	}, nil
 }
 
-func renderPublishedMarkdown(session *runtime.AgentSession, generatedAt time.Time, narrative string) string {
+func renderPublishedMarkdown(session *sess.AgentSession, generatedAt time.Time, narrative string) string {
 	if strings.TrimSpace(narrative) == "" {
 		return renderMarkdown(session, generatedAt)
 	}
@@ -186,7 +186,7 @@ func (writer *EngagementWriter) Abort() {
 }
 
 // WriteArtifacts 创建 writer 并发布终态 Runtime 会话。
-func WriteArtifacts(session *runtime.AgentSession, outputRoot string, generatedAt time.Time) (Artifacts, error) {
+func WriteArtifacts(session *sess.AgentSession, outputRoot string, generatedAt time.Time) (Artifacts, error) {
 	if session == nil {
 		return Artifacts{}, errors.New("nil session")
 	}

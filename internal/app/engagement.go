@@ -15,7 +15,11 @@ import (
 	"pentgo/internal/agent"
 	"pentgo/internal/config"
 	"pentgo/internal/report"
-	"pentgo/internal/runtime"
+	"pentgo/internal/runtime/authz"
+	"pentgo/internal/runtime/exec"
+	"pentgo/internal/runtime/loop"
+	sess "pentgo/internal/runtime/session"
+	"pentgo/internal/runtime/verify"
 )
 
 // Event 表示 engagement 执行期间可向交互层发送的进度消息。
@@ -25,14 +29,14 @@ type Event struct {
 
 // Request 描述一次自然语言 Agent engagement。
 type Request struct {
-	Target     runtime.Target
+	Target     sess.Target
 	Intent     string
 	OutputRoot string
 }
 
 // Result 保存已发布的 artifacts、会话和运行错误。
 type Result struct {
-	Session   *runtime.AgentSession
+	Session   *sess.AgentSession
 	Artifacts report.Artifacts
 	RunError  error
 }
@@ -77,7 +81,7 @@ func (service *Service) Run(ctx context.Context, request Request, progress func(
 	if err != nil {
 		return Result{}, fmt.Errorf("create engagement ID: %w", err)
 	}
-	session := runtime.NewSession(request.Target, request.Intent, startedAt)
+	session := sess.NewSession(request.Target, request.Intent, startedAt)
 	session.ID = engagementID
 	result := Result{Session: session}
 
@@ -92,9 +96,9 @@ func (service *Service) Run(ctx context.Context, request Request, progress func(
 	}
 	agentConfig := service.cfg.Agent
 	targetURL, _ := url.Parse(request.Target.Canonical)
-	verificationScope := runtime.NewScope(targetURL.Hostname(), agentConfig.Authorization.AllowedHosts, agentConfig.Authorization.PrivateAllowed())
+	verificationScope := authz.NewScope(targetURL.Hostname(), agentConfig.Authorization.AllowedHosts, agentConfig.Authorization.PrivateAllowed())
 	verificationClient := &http.Client{Timeout: 15 * time.Second}
-	executor := runtime.NewExecutor(runtime.ExecutorConfig{
+	executor := exec.NewExecutor(exec.ExecutorConfig{
 		WorkDir:             writer.WorkDir(),
 		Timeout:             time.Duration(agentConfig.ExecutionTimeoutSeconds) * time.Second,
 		MaxParallel:         agentConfig.MaxParallelBlocks,
@@ -103,7 +107,7 @@ func (service *Service) Run(ctx context.Context, request Request, progress func(
 		ScanLineRepeatLimit: agentConfig.ScanLineRepeatLimit,
 		Evidence:            writer,
 	})
-	runner := runtime.NewRunner(client, executor, runtime.RunnerConfig{
+	runner := loop.NewRunner(client, executor, loop.RunnerConfig{
 		MaxTurns:           agentConfig.MaxTurns,
 		MaxFindings:        agentConfig.MaxFindings,
 		NoCodeLimit:        agentConfig.NoCodeLimit,
@@ -112,7 +116,7 @@ func (service *Service) Run(ctx context.Context, request Request, progress func(
 		NetworkBackoff:     time.Duration(agentConfig.NetworkBackoffSeconds) * time.Second,
 		SoftStuckTurns:     agentConfig.SoftStuckTurns,
 		HardStuckTurns:     agentConfig.HardStuckTurns,
-		OnEvent: func(event runtime.RunnerEvent) {
+		OnEvent: func(event loop.RunnerEvent) {
 			switch event.Kind {
 			case "assistant":
 				progress(Event{Message: fmt.Sprintf("Assistant turn %d: %s", event.Turn, event.Detail)})
@@ -126,7 +130,7 @@ func (service *Service) Run(ctx context.Context, request Request, progress func(
 		AllowedHosts:      agentConfig.Authorization.AllowedHosts,
 		AllowPrivateHosts: agentConfig.Authorization.PrivateAllowed(),
 		EvidenceSink:      writer,
-		Verifier: runtime.NewHTTPVerifier(
+		Verifier: verify.NewHTTPVerifier(
 			verificationClient,
 			verificationScope,
 			agentConfig.VerificationReproductions,
@@ -134,13 +138,13 @@ func (service *Service) Run(ctx context.Context, request Request, progress func(
 	}, nil, nil)
 	progress(Event{Message: "Agent engagement started: " + engagementID})
 	result.RunError = runner.Run(ctx, session)
-	if result.RunError == nil && ctx.Err() == nil && session.Status == runtime.SessionDone {
+	if result.RunError == nil && ctx.Err() == nil && session.Status == sess.SessionDone {
 		runner.ConsolidateAndVerify(ctx, session)
 	}
 	reportMarkdown := ""
 	if ctx.Err() == nil {
 		progress(Event{Message: "Generating final report."})
-		validated := runtime.ValidateReportContext(runner.ReportContext(session))
+		validated := loop.ValidateReportContext(runner.ReportContext(session))
 		markdown, reportErr := report.GenerateTerminalMarkdown(ctx, client, validated)
 		if reportErr == nil {
 			reportMarkdown = markdown
@@ -227,9 +231,9 @@ func newEngagementID(now time.Time) (string, error) {
 	return "eng-" + now.UTC().Format("20060102-150405") + "-" + hex.EncodeToString(random), nil
 }
 
-func authorizerFromConfig(auth config.AuthorizationConfig) *runtime.Authorizer {
+func authorizerFromConfig(auth config.AuthorizationConfig) *authz.Authorizer {
 	if !auth.IsEnabled() {
 		return nil
 	}
-	return runtime.NewAuthorizer(auth.AllowDestructive)
+	return authz.NewAuthorizer(auth.AllowDestructive)
 }

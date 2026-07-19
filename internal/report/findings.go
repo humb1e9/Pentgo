@@ -59,13 +59,25 @@ func renderFindingGroup(builder *strings.Builder, heading string, findings []ver
 		if len(finding.ChecksFailed) > 0 {
 			fmt.Fprintf(builder, "- Checks failed: %s\n", inline(strings.Join(finding.ChecksFailed, "; ")))
 		}
-		if finding.VulnType == verify.VulnCredential {
+		if finding.VulnType == verify.VulnCredential || finding.VulnType == verify.VulnIDOR {
 			fmt.Fprintf(builder, "- Login verified: %t\n", finding.LoginVerified)
 			if len(finding.LoginCookieNames) > 0 {
 				fmt.Fprintf(builder, "- Session cookies: %s\n", inline(strings.Join(finding.LoginCookieNames, ", ")))
 			}
 			if finding.Username != "" {
 				fmt.Fprintf(builder, "- Username: %s\n", inline(finding.Username))
+			}
+		}
+		if finding.VulnType == verify.VulnIDOR {
+			fmt.Fprintf(builder, "- Login B verified: %t\n", finding.LoginBVerified)
+			if len(finding.LoginBCookieNames) > 0 {
+				fmt.Fprintf(builder, "- Session B cookies: %s\n", inline(strings.Join(finding.LoginBCookieNames, ", ")))
+			}
+			if finding.UsernameB != "" {
+				fmt.Fprintf(builder, "- Username B: %s\n", inline(finding.UsernameB))
+			}
+			if finding.IDORDiffReason != "" {
+				fmt.Fprintf(builder, "- IDOR diff: %s\n", inline(finding.IDORDiffReason))
 			}
 		}
 		builder.WriteString("\n")

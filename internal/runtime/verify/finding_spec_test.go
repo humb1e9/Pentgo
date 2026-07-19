@@ -155,3 +155,26 @@ func TestParseFindingSpecsReturnsNilWithoutBlocks(t *testing.T) {
 		t.Fatalf("specs = %+v", specs)
 	}
 }
+
+func TestParseFindingSpecsParsesIDORDualLoginFields(t *testing.T) {
+	specs := ParseFindingSpecs(`
+=== PENTGO FINDING ===
+type: idor
+method: GET
+url: https://target.example/user/2
+login_url: https://target.example/login
+login_body: username=userA&password=a
+username: userA
+login_url_b: https://target.example/login
+login_body_b: username=userB&password=b
+username_b: userB
+payload: user=2
+=== END PENTGO FINDING ===`)
+	if len(specs) != 1 {
+		t.Fatalf("spec count = %d, specs = %+v", len(specs), specs)
+	}
+	spec := specs[0]
+	if spec.VulnType != VulnIDOR || spec.URL != "https://target.example/user/2" || spec.LoginURL == "" || spec.LoginURLB == "" || spec.UsernameB != "userB" || spec.LoginMethodB != http.MethodPost {
+		t.Fatalf("spec = %+v", spec)
+	}
+}

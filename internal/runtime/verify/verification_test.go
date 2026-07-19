@@ -1,6 +1,7 @@
 package verify
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -165,5 +166,66 @@ func TestScoreUnknownTypeCannotVerify(t *testing.T) {
 	}
 	if result := Score(evidence); result.Verdict == VerdictVerified {
 		t.Fatalf("unknown type must not verify: %+v", result)
+	}
+}
+
+func TestResponseDiffersBingoStyle(t *testing.T) {
+	if ok, reason := ResponseDiffers("", "x"); ok || reason != "empty" {
+		t.Fatalf("empty: %v %s", ok, reason)
+	}
+	if ok, reason := ResponseDiffers("same-body-same-body-same-body-same", "short"); ok {
+		t.Fatalf("too short should not differ: %v %s", ok, reason)
+	}
+	a := `{"id":1,"username":"alice","email":"a@example.test","profile":"owner data here enough length"}`
+	b := `{"id":2,"username":"bob","email":"b@example.test","profile":"other user private profile data"}`
+	ok, reason := ResponseDiffers(a, b)
+	if !ok {
+		t.Fatalf("json identity fields should differ: %s", reason)
+	}
+	if ok, _ := ResponseDiffers(a, a); ok {
+		t.Fatal("identical JSON must not differ")
+	}
+	longA := strings.Repeat("owner-private-content-", 10)
+	longB := strings.Repeat("other-user-secret-data-", 12)
+	if ok, reason := ResponseDiffers(longA, longB); !ok {
+		t.Fatalf("content length diff should match: %s", reason)
+	}
+}
+
+func TestScoreIDORDualSessionDiff(t *testing.T) {
+	owner := `{"id":1,"username":"alice","email":"alice@example.test","note":"private owner profile content"}`
+	other := `{"id":2,"username":"bob","email":"bob@example.test","note":"private victim profile content"}`
+	result := Score(Evidence{
+		VulnType:          VulnIDOR,
+		Payload:           "user=2",
+		ResponseBody:      other,
+		BaselineBody:      owner,
+		StatusCode:        200,
+		BaselineStatus:    200,
+		ReproductionCount: 3,
+		LoginVerified:     true,
+		DualLoginVerified: true,
+	})
+	if result.Verdict != VerdictVerified {
+		t.Fatalf("dual-session idor should verify: %+v", result)
+	}
+	if result.IDORDiffReason == "" {
+		t.Fatalf("expected idor diff reason: %+v", result)
+	}
+}
+
+func TestScoreIDORNoDiffIsNotVerified(t *testing.T) {
+	body := strings.Repeat("same-profile-content-", 8)
+	result := Score(Evidence{
+		VulnType:          VulnIDOR,
+		ResponseBody:      body,
+		BaselineBody:      body,
+		StatusCode:        200,
+		ReproductionCount: 3,
+		LoginVerified:     true,
+		DualLoginVerified: true,
+	})
+	if result.Verdict == VerdictVerified {
+		t.Fatalf("identical responses must not verify idor: %+v", result)
 	}
 }

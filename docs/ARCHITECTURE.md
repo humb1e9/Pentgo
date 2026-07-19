@@ -41,7 +41,7 @@ exec  →  authz  →  verify  →  session  →  loop
 |----|------|----------|
 | `exec` | 块提取、预检、进程执行、EvidenceSink | `CodeBlock`, `Executor`, `EvidenceLevel` |
 | `authz` | 主机范围 + 破坏性操作门 | `Scope`, `Authorizer` |
-| `verify` | 框架自发 HTTP、登录 jar、Score | `HTTPVerifier`, `FindingSpec`, `VerificationResult` |
+| `verify` | 框架自发 HTTP、单/双会话登录 jar、Score（含 bingo 式 IDOR 差分） | `HTTPVerifier`, `FindingSpec`, `VulnIDOR`, `ResponseDiffers` |
 | `session` | 目标解析与会话状态 | `Target`, `AgentSession` |
 | `loop` | 模型循环、consolidation、报告上下文 | `Runner`, `History`, `ReportContext` |
 

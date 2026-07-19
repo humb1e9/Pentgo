@@ -37,6 +37,21 @@ func ParseFindingSpecs(text string) []FindingSpec {
 		} else if strings.TrimSpace(spec.URL) == "" {
 			continue
 		}
+		if strings.TrimSpace(spec.LoginURLB) != "" {
+			spec.LoginMethodB = normalizedLoginMethod(spec.LoginMethodB)
+			if !supportedVerificationMethod(spec.LoginMethodB) {
+				continue
+			}
+			if strings.TrimSpace(spec.LoginContentTypeB) == "" {
+				spec.LoginContentTypeB = "application/x-www-form-urlencoded"
+			}
+		}
+		if strings.TrimSpace(spec.LoginURL) != "" && spec.VulnType != VulnCredential {
+			spec.LoginMethod = normalizedLoginMethod(spec.LoginMethod)
+			if strings.TrimSpace(spec.LoginContentType) == "" {
+				spec.LoginContentType = "application/x-www-form-urlencoded"
+			}
+		}
 		spec.Method = normalizedHTTPMethod(spec.Method)
 		if !supportedVerificationMethod(spec.Method) {
 			continue
@@ -89,6 +104,16 @@ func parseFindingSpec(block string) FindingSpec {
 			spec.LoginContentType = value
 		case "username":
 			spec.Username = value
+		case "login_url_b":
+			spec.LoginURLB = value
+		case "login_method_b":
+			spec.LoginMethodB = value
+		case "login_body_b":
+			spec.LoginBodyB = value
+		case "login_content_type_b":
+			spec.LoginContentTypeB = value
+		case "username_b":
+			spec.UsernameB = value
 		case "header":
 			header, headerValue, valid := strings.Cut(value, ":")
 			if !valid || strings.TrimSpace(header) == "" {
@@ -105,7 +130,7 @@ func parseFindingSpec(block string) FindingSpec {
 
 func knownVulnType(vulnType VulnType) bool {
 	switch vulnType {
-	case VulnSQLI, VulnXSS, VulnLFI, VulnRCE, VulnAuthBypass, VulnCredential, VulnUpload, VulnOpenRedirect:
+	case VulnSQLI, VulnXSS, VulnLFI, VulnRCE, VulnAuthBypass, VulnCredential, VulnIDOR, VulnUpload, VulnOpenRedirect:
 		return true
 	default:
 		return false

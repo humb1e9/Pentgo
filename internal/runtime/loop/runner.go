@@ -101,6 +101,13 @@ type verificationEvidence struct {
 	LoginCookieNames      []string          `json:"login_cookie_names,omitempty"`
 	LoginMeaningfulCookie bool              `json:"login_meaningful_cookie"`
 	LoginSnippet          string            `json:"login_snippet,omitempty"`
+		LoginBAttempted        bool     `json:"login_b_attempted"`
+		LoginBVerified         bool     `json:"login_b_verified"`
+		LoginBStatus           int      `json:"login_b_status,omitempty"`
+		LoginBCookieNames      []string `json:"login_b_cookie_names,omitempty"`
+		LoginBMeaningfulCookie bool     `json:"login_b_meaningful_cookie"`
+		LoginBSnippet          string   `json:"login_b_snippet,omitempty"`
+		IDORDiffReason         string   `json:"idor_diff_reason,omitempty"`
 	ChecksPassed          []string          `json:"checks_passed,omitempty"`
 	ChecksFailed          []string          `json:"checks_failed,omitempty"`
 	Curl                  string            `json:"curl,omitempty"`
@@ -324,7 +331,7 @@ baseline_url: https://target.example/path?payload=benign
 payload: payload=value
 description: concise evidence-backed claim
 === END PENTGO FINDING ===
-Use only supported types: sqli, xss, lfi, rce, auth_bypass, credential, upload, open_redirect.
+Use only supported types: sqli, xss, lfi, rce, auth_bypass, credential, idor, upload, open_redirect.
 For a credential finding, declare the observed login flow in the block:
 type: credential
 login_url: https://target.example/login
@@ -332,7 +339,18 @@ login_method: POST
 login_body: username=observed&password=observed
 login_content_type: application/x-www-form-urlencoded
 username: observed
-The login_method, login_content_type, and username fields are optional. For findings that need an authenticated session (such as authorization differences), include login_url and login_body in the same block; the framework logs in and carries the resulting session only for the payload request. Declare login endpoints and credentials only when they appear in returned execution evidence; never infer or invent them. Output no block when no evidence-backed candidate exists. Do not output code or prose outside the blocks.`
+The login_method, login_content_type, and username fields are optional. For findings that need an authenticated session (such as authorization differences), include login_url and login_body in the same block; the framework logs in and carries the resulting session only for the payload request.
+For horizontal IDOR (bingo two-user mode), declare both sessions and the object URL:
+type: idor
+method: GET
+url: https://target.example/user/2
+login_url: https://target.example/login
+login_body: username=userA&password=observed
+username: userA
+login_url_b: https://target.example/login
+login_body_b: username=userB&password=observed
+username_b: userB
+The framework logs in as A for the payload request and as B for the baseline (same URL when baseline_url is omitted), then scores a meaningful response diff. Declare login endpoints and credentials only when they appear in returned execution evidence; never infer or invent them. Output no block when no evidence-backed candidate exists. Do not output code or prose outside the blocks.`
 
 // ConsolidateAndVerify asks for structured declarations once an engagement is
 // done, then delegates each final verdict to the framework verifier.
@@ -401,6 +419,13 @@ func (runner *Runner) persistVerificationEvidence(session *sess.AgentSession, in
 		LoginCookieNames:      append([]string(nil), record.LoginCookieNames...),
 		LoginMeaningfulCookie: record.LoginMeaningfulCookie,
 		LoginSnippet:          record.LoginSnippet,
+			LoginBAttempted:        record.LoginBAttempted,
+			LoginBVerified:         record.LoginBVerified,
+			LoginBStatus:           record.LoginBStatus,
+			LoginBCookieNames:      append([]string(nil), record.LoginBCookieNames...),
+			LoginBMeaningfulCookie: record.LoginBMeaningfulCookie,
+			LoginBSnippet:          record.LoginBSnippet,
+			IDORDiffReason:         result.IDORDiffReason,
 		ChecksPassed:          append([]string(nil), result.ChecksPassed...),
 		ChecksFailed:          append([]string(nil), result.ChecksFailed...),
 		Curl:                  result.Curl,

@@ -215,3 +215,23 @@ func (client *reportClient) Chat(_ context.Context, request agent.Request) (agen
 	}
 	return client.response, nil
 }
+
+func TestRenderVerifiedFindingsRendersIDORDualLogin(t *testing.T) {
+	markdown := RenderVerifiedFindings([]verify.VerificationResult{{
+		Verdict:          verify.VerdictVerified,
+		VulnType:         verify.VulnIDOR,
+		Confidence:       0.90,
+		LoginVerified:    true,
+		LoginBVerified:   true,
+		LoginCookieNames: []string{"sid"},
+		LoginBCookieNames: []string{"sid"},
+		Username:         "userA",
+		UsernameB:        "userB",
+		IDORDiffReason:   "dual-session idor diff: different_email: b@example.test",
+	}})
+	for _, want := range []string{"IDOR", "Login verified: true", "Login B verified: true", "Username B: userB", "IDOR diff:"} {
+		if !strings.Contains(markdown, want) {
+			t.Fatalf("markdown missing %q: %q", want, markdown)
+		}
+	}
+}

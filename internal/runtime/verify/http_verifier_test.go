@@ -493,3 +493,103 @@ func hostOf(rawURL string) string {
 	}
 	return u.Hostname()
 }
+
+func TestVerifyWithEvidenceDualSessionIDOR(t *testing.T) {
+	// bingo two-user mode: A accesses B's object; B baseline is owner view of same URL? 
+	// Our semantics: payload Cookie=A hits /user/2 (B's object); baseline Cookie=B hits /user/2.
+	// Server returns different JSON per cookie identity.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/login":
+			body, _ := io.ReadAll(r.Body)
+			form := string(body)
+			if strings.Contains(form, "username=userA") {
+				http.SetCookie(w, &http.Cookie{Name: "sid", Value: "session-a", Path: "/"})
+				_, _ = io.WriteString(w, "dashboard logout")
+				return
+			}
+			if strings.Contains(form, "username=userB") {
+				http.SetCookie(w, &http.Cookie{Name: "sid", Value: "session-b", Path: "/"})
+				_, _ = io.WriteString(w, "dashboard logout")
+				return
+			}
+			_, _ = io.WriteString(w, "invalid credentials")
+		case "/user/2":
+			cookie := r.Header.Get("Cookie")
+			w.Header().Set("Content-Type", "application/json")
+			if strings.Contains(cookie, "sid=session-a") {
+				// A reading B's object (IDOR)
+				_, _ = io.WriteString(w, `{"id":2,"username":"userB","email":"b@example.test","secret":"victim-private-data-here"}`)
+				return
+			}
+			if strings.Contains(cookie, "sid=session-b") {
+				// B reading own object
+				_, _ = io.WriteString(w, `{"id":2,"username":"userB","email":"b@example.test","secret":"owner-view-of-self-data"}`)
+				return
+			}
+			w.WriteHeader(http.StatusFound)
+			w.Header().Set("Location", "/login")
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	verifier := NewHTTPVerifier(server.Client(), authz.NewScope(hostOf(server.URL), nil, true), 3)
+	result, record := verifier.VerifyWithEvidence(context.Background(), FindingSpec{
+		VulnType:    VulnIDOR,
+		Method:      http.MethodGet,
+		URL:         server.URL + "/user/2",
+		Payload:     "user=2",
+		LoginURL:    server.URL + "/login",
+		LoginBody:   "username=userA&password=a",
+		Username:    "userA",
+		LoginURLB:   server.URL + "/login",
+		LoginBodyB:  "username=userB&password=b",
+		UsernameB:   "userB",
+	})
+	if !record.LoginVerified || !record.LoginBVerified {
+		t.Fatalf("both logins must verify: %+v", record)
+	}
+	if result.Verdict != VerdictVerified && result.Verdict != VerdictLikely {
+		t.Fatalf("dual-session idor verdict = %+v", result)
+	}
+	if !strings.Contains(record.PayloadResponseBody, "victim-private-data") {
+		t.Fatalf("payload should be A viewing B: %q", record.PayloadResponseBody)
+	}
+	if !strings.Contains(record.BaselineResponseBody, "owner-view") {
+		t.Fatalf("baseline should be B own view: %q", record.BaselineResponseBody)
+	}
+	if result.UsernameB != "userB" || !result.LoginBVerified {
+		t.Fatalf("result login B metadata = %+v", result)
+	}
+}
+
+func TestVerifyWithEvidenceIDORNoDiffRefutes(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/login":
+			http.SetCookie(w, &http.Cookie{Name: "sid", Value: "same", Path: "/"})
+			_, _ = io.WriteString(w, "dashboard logout")
+		case "/user/2":
+			_, _ = io.WriteString(w, strings.Repeat("identical-profile-body-", 6))
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	verifier := NewHTTPVerifier(server.Client(), authz.NewScope(hostOf(server.URL), nil, true), 3)
+	result, _ := verifier.VerifyWithEvidence(context.Background(), FindingSpec{
+		VulnType:   VulnIDOR,
+		Method:     http.MethodGet,
+		URL:        server.URL + "/user/2",
+		LoginURL:   server.URL + "/login",
+		LoginBody:  "username=userA&password=a",
+		LoginURLB:  server.URL + "/login",
+		LoginBodyB: "username=userB&password=b",
+	})
+	if result.Verdict == VerdictVerified {
+		t.Fatalf("identical dual-session responses must not verify: %+v", result)
+	}
+}

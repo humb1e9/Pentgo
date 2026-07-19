@@ -49,6 +49,12 @@ type FindingSpec struct {
 	LoginBody        string
 	LoginContentType string
 	Username         string
+	// Dual-session fields (bingo IdorScanner headers_a / headers_b).
+	LoginURLB         string
+	LoginMethodB      string
+	LoginBodyB        string
+	LoginContentTypeB string
+	UsernameB         string
 }
 
 // HTTPVerifier independently collects target responses before scoring them.
@@ -97,6 +103,12 @@ type VerificationRecord struct {
 	LoginCookieNames      []string          `json:"login_cookie_names,omitempty"`
 	LoginMeaningfulCookie bool              `json:"login_meaningful_cookie,omitempty"`
 	LoginSnippet          string            `json:"login_snippet,omitempty"`
+	LoginBAttempted        bool     `json:"login_b_attempted,omitempty"`
+	LoginBVerified         bool     `json:"login_b_verified,omitempty"`
+	LoginBStatus           int      `json:"login_b_status,omitempty"`
+	LoginBCookieNames      []string `json:"login_b_cookie_names,omitempty"`
+	LoginBMeaningfulCookie bool     `json:"login_b_meaningful_cookie,omitempty"`
+	LoginBSnippet          string   `json:"login_b_snippet,omitempty"`
 }
 
 // NewHTTPVerifier creates a verifier that does not follow redirects so redirect
@@ -161,6 +173,11 @@ func (verifier *HTTPVerifier) VerifyWithEvidence(ctx context.Context, spec Findi
 		login = verifier.verifyLogin(ctx, spec)
 		record.applyLoginOutcome(login)
 	}
+	loginB := loginOutcome{}
+	if strings.TrimSpace(spec.LoginURLB) != "" {
+		loginB = verifier.verifyLoginB(ctx, spec)
+		record.applyLoginBOutcome(loginB)
+	}
 	payloadHeaders := cloneStringMap(spec.Headers)
 	if login.Verified && login.SessionCookieHeader != "" {
 		if payloadHeaders == nil {
@@ -168,9 +185,22 @@ func (verifier *HTTPVerifier) VerifyWithEvidence(ctx context.Context, spec Findi
 		}
 		payloadHeaders["Cookie"] = login.SessionCookieHeader
 	}
+	// bingo IdorScanner: baseline uses headers_b (user B) when dual-session; else anonymous
+	baselineHeaders := cloneStringMap(spec.Headers)
+	if loginB.Verified && loginB.SessionCookieHeader != "" {
+		if baselineHeaders == nil {
+			baselineHeaders = make(map[string]string)
+		}
+		baselineHeaders["Cookie"] = loginB.SessionCookieHeader
+	}
 	baseline := httpVerificationResponse{}
-	if strings.TrimSpace(spec.BaselineURL) != "" {
-		baselineURL, err := parseVerificationURL(spec.BaselineURL)
+	// IDOR default baseline URL = payload URL when dual-session and baseline omitted (A vs B same resource)
+	baselineRaw := strings.TrimSpace(spec.BaselineURL)
+	if baselineRaw == "" && loginB.Verified && (spec.VulnType == VulnIDOR || strings.TrimSpace(spec.LoginURLB) != "") {
+		baselineRaw = spec.URL
+	}
+	if baselineRaw != "" {
+		baselineURL, err := parseVerificationURL(baselineRaw)
 		if err != nil {
 			return inconclusiveResult(spec, "baseline URL: "+err.Error()), record
 		}
@@ -185,7 +215,7 @@ func (verifier *HTTPVerifier) VerifyWithEvidence(ctx context.Context, spec Findi
 		// obtain one after the declaration has passed the same scope check.
 		if isIdempotentMethod(method) {
 			record.BaselineRequestBody = truncateBytes(spec.BaselineBody, verifier.maxBodyBytes)
-			baseline, err = verifier.request(ctx, method, baselineURL.String(), spec.BaselineBody, spec.Headers)
+			baseline, err = verifier.request(ctx, method, baselineURL.String(), spec.BaselineBody, baselineHeaders)
 			if err != nil {
 				return inconclusiveResult(spec, "baseline request: "+err.Error()), record
 			}
@@ -224,11 +254,16 @@ func (verifier *HTTPVerifier) VerifyWithEvidence(ctx context.Context, spec Findi
 		BaselineStatus:    baseline.StatusCode,
 		ReproductionCount: repeats,
 		LoginVerified:     login.Verified,
+		DualLoginVerified: login.Verified && loginB.Verified,
 	})
 	result.applyLoginMetadata(login, spec.Username)
+	result.applyLoginBMetadata(loginB, spec.UsernameB)
 	result.Curl = CurlCommand(spec)
 	if login.Attempted && !login.Verified {
 		result.ChecksFailed = append(result.ChecksFailed, "auth session not established")
+	}
+	if loginB.Attempted && !loginB.Verified {
+		result.ChecksFailed = append(result.ChecksFailed, "auth session B not established")
 	}
 	if !isIdempotentMethod(method) {
 		result.ChecksFailed = append(result.ChecksFailed, "P1 replay limited to one non-idempotent request")
@@ -313,6 +348,27 @@ func (result *VerificationResult) applyLoginMetadata(outcome loginOutcome, usern
 	result.LoginCookieNames = append([]string(nil), outcome.CookieNames...)
 	result.LoginMeaningfulCookie = outcome.MeaningfulCookie
 	result.Username = username
+}
+
+func (record *VerificationRecord) applyLoginBOutcome(outcome loginOutcome) {
+	record.LoginBAttempted = outcome.Attempted
+	record.LoginBVerified = outcome.Verified
+	record.LoginBStatus = outcome.StatusCode
+	record.LoginBCookieNames = append([]string(nil), outcome.CookieNames...)
+	record.LoginBMeaningfulCookie = outcome.MeaningfulCookie
+	record.LoginBSnippet = outcome.Snippet
+}
+
+func (result *VerificationResult) applyLoginBMetadata(outcome loginOutcome, username string) {
+	if result == nil || !outcome.Attempted {
+		return
+	}
+	result.LoginBAttempted = true
+	result.LoginBVerified = outcome.Verified
+	result.LoginBStatus = outcome.StatusCode
+	result.LoginBCookieNames = append([]string(nil), outcome.CookieNames...)
+	result.LoginBMeaningfulCookie = outcome.MeaningfulCookie
+	result.UsernameB = username
 }
 
 func cloneStringMap(values map[string]string) map[string]string {
@@ -532,6 +588,19 @@ func cookieEvidence(cookies []*http.Cookie) ([]string, string) {
 		values = append(values, cookie.Name+"="+cookie.Value)
 	}
 	return names, strings.Join(values, "; ")
+}
+
+
+// verifyLoginB authenticates identity B (bingo headers_b) using login_*_b fields.
+func (verifier *HTTPVerifier) verifyLoginB(ctx context.Context, spec FindingSpec) loginOutcome {
+	b := FindingSpec{
+		LoginURL:         spec.LoginURLB,
+		LoginMethod:      spec.LoginMethodB,
+		LoginBody:        spec.LoginBodyB,
+		LoginContentType: spec.LoginContentTypeB,
+		URL:              spec.URL,
+	}
+	return verifier.verifyLogin(ctx, b)
 }
 
 func parseVerificationURL(rawURL string) (*url.URL, error) {

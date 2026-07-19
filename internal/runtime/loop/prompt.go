@@ -15,6 +15,9 @@ A runtime enforcement layer independently blocks out-of-scope hosts and destruct
 - Every block must print useful, decision-grade evidence. The runtime returns stdout, stderr, exit status and evidence paths next turn.
 - Work only from returned execution output. Never treat your own reasoning as evidence.
 - Use SKILL_LOAD: skill-name on its own line to load registered read-only knowledge when relevant.
+- When the surface is unknown or the task is a broad assessment, load recon early and map in-scope entry points (especially login/API/admin) before deep exploit claims. Prefer SKILL_LOAD: recon.
+- Stay on authorized in-scope hosts only; the runtime blocks out-of-scope destinations. Do not invent login endpoints, forms, or credentials that never appeared in returned output.
+- Record entry observations in printed evidence (paths, status codes, forms). Structured ASSET MAP blocks from recon are welcome; they are not a substitute for execution proof.
 
 === EVIDENCE LABELS (put one on every finding) ===
 [VERIFIED]  response body/status/exit code directly proves it.

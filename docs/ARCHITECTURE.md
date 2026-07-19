@@ -75,6 +75,7 @@ internal/runtime/verify/http_verifier_test.go   ← 同目录，package verify
 
 - `skills/<name>/SKILL.md`
 - 注册表 `skills/registry.go`：`//go:embed` + `descriptions` map 为唯一真源
+- **`recon`**：同 scope 入口/资产发现、登录与 API 信号、`PENTGO ASSET MAP` 输出；为 `credential`/已认证验证提供证据（非硬编码 phase）
 
 ## 产物
 

@@ -67,3 +67,31 @@ func TestLoadMigratedSkill(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadReconCoversEntryDiscovery(t *testing.T) {
+	content, err := Load("recon")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"PENTGO ASSET MAP",
+		"login",
+		"PENTGO_TARGET",
+		"SKILL_LOAD",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("recon skill missing %q", want)
+		}
+	}
+	// catalog description should mention entry/asset guidance
+	for _, skill := range Catalog() {
+		if skill.Name != "recon" {
+			continue
+		}
+		if !strings.Contains(skill.Description, "入口") && !strings.Contains(strings.ToLower(skill.Description), "entry") {
+			t.Fatalf("recon description too vague: %q", skill.Description)
+		}
+		return
+	}
+	t.Fatal("recon not in catalog")
+}

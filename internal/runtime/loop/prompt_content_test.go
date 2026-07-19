@@ -16,6 +16,10 @@ func TestSystemPromptContainsPentestDiscipline(t *testing.T) {
 		"INFERRED",
 		"7-GATE",
 		"SKILL_LOAD",
+		"recon",
+		"in-scope",
+		"login",
+		"Do not invent login",
 	}
 	for _, want := range required {
 		if !strings.Contains(prompt, want) {

@@ -47,7 +47,7 @@ var skillFS embed.FS
 
 // descriptions 是已登记 Skill 的唯一真源：名称 -> 目录清单描述。
 var descriptions = map[string]string{
-	"recon":           "信息收集方法论：以已回灌的执行输出为依据，逐步减少目标未知信息。",
+	"recon":           "入口与资产发现：同 scope 主机/路径 recon、登录与 API 入口信号、ASSET MAP 输出；为后续认证验证提供证据。",
 	"terminal":        "终端 Agent 通用准则：只把已执行并回灌的输出当作证据。",
 	"waf-bypass":      "WAF 绕过技法：编码/大小写/注释/分块/HTTP 层面的检测规避手法。",
 	"nosql-injection": "NoSQL 注入：MongoDB/Redis 等运算符注入、认证绕过与盲注提取。",

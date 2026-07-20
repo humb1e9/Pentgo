@@ -1,18 +1,17 @@
 package verify
 
 import (
-	"net/url"
 	"context"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
 	"pentgo/internal/runtime/authz"
 )
-
 
 func TestHTTPVerifierConfirmsReflectedXSS(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -254,10 +253,21 @@ func TestHTTPVerifierRejectsUnsupportedMethodWithoutRequest(t *testing.T) {
 }
 
 func TestVerifyLoginEstablishesMeaningfulCookieSession(t *testing.T) {
+	getHits := 0
+	postHits := 0
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/login" || request.Method != http.MethodPost {
+		if request.URL.Path != "/login" {
 			t.Fatalf("request = %s %s", request.Method, request.URL.Path)
 		}
+		if request.Method == http.MethodGet {
+			getHits++
+			_, _ = io.WriteString(writer, "login form")
+			return
+		}
+		if request.Method != http.MethodPost {
+			t.Fatalf("method = %s", request.Method)
+		}
+		postHits++
 		body, err := io.ReadAll(request.Body)
 		if err != nil || string(body) != "username=admin&password=admin" {
 			t.Fatalf("body/error = %q/%v", body, err)
@@ -277,6 +287,9 @@ func TestVerifyLoginEstablishesMeaningfulCookieSession(t *testing.T) {
 	}
 	if !strings.Contains(outcome.SessionCookieHeader, "sid=abc") || len(outcome.CookieNames) != 1 || outcome.CookieNames[0] != "sid" {
 		t.Fatalf("session cookies = %+v", outcome)
+	}
+	if getHits != 1 || postHits != 1 {
+		t.Fatalf("GET/POST hits = %d/%d", getHits, postHits)
 	}
 }
 
@@ -347,9 +360,13 @@ func TestVerifyWithEvidenceScoresCredentialLoginOnce(t *testing.T) {
 		if request.URL.Path != "/login" {
 			t.Fatalf("unexpected path %q", request.URL.Path)
 		}
-		loginHits++
-		http.SetCookie(writer, &http.Cookie{Name: "sid", Value: "fixture", Path: "/"})
-		_, _ = io.WriteString(writer, "dashboard")
+		if request.Method == http.MethodPost {
+			loginHits++
+			http.SetCookie(writer, &http.Cookie{Name: "sid", Value: "fixture", Path: "/"})
+			_, _ = io.WriteString(writer, "dashboard")
+			return
+		}
+		_, _ = io.WriteString(writer, "login form")
 	}))
 	defer server.Close()
 
@@ -495,7 +512,7 @@ func hostOf(rawURL string) string {
 }
 
 func TestVerifyWithEvidenceDualSessionIDOR(t *testing.T) {
-	// bingo two-user mode: A accesses B's object; B baseline is owner view of same URL? 
+	// bingo two-user mode: A accesses B's object; B baseline is owner view of same URL?
 	// Our semantics: payload Cookie=A hits /user/2 (B's object); baseline Cookie=B hits /user/2.
 	// Server returns different JSON per cookie identity.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -537,16 +554,16 @@ func TestVerifyWithEvidenceDualSessionIDOR(t *testing.T) {
 
 	verifier := NewHTTPVerifier(server.Client(), authz.NewScope(hostOf(server.URL), nil, true), 3)
 	result, record := verifier.VerifyWithEvidence(context.Background(), FindingSpec{
-		VulnType:    VulnIDOR,
-		Method:      http.MethodGet,
-		URL:         server.URL + "/user/2",
-		Payload:     "user=2",
-		LoginURL:    server.URL + "/login",
-		LoginBody:   "username=userA&password=a",
-		Username:    "userA",
-		LoginURLB:   server.URL + "/login",
-		LoginBodyB:  "username=userB&password=b",
-		UsernameB:   "userB",
+		VulnType:   VulnIDOR,
+		Method:     http.MethodGet,
+		URL:        server.URL + "/user/2",
+		Payload:    "user=2",
+		LoginURL:   server.URL + "/login",
+		LoginBody:  "username=userA&password=a",
+		Username:   "userA",
+		LoginURLB:  server.URL + "/login",
+		LoginBodyB: "username=userB&password=b",
+		UsernameB:  "userB",
 	})
 	if !record.LoginVerified || !record.LoginBVerified {
 		t.Fatalf("both logins must verify: %+v", record)
@@ -591,5 +608,81 @@ func TestVerifyWithEvidenceIDORNoDiffRefutes(t *testing.T) {
 	})
 	if result.Verdict == VerdictVerified {
 		t.Fatalf("identical dual-session responses must not verify: %+v", result)
+	}
+}
+
+func TestEstablishSessionCSRFPrefetch(t *testing.T) {
+	postBodies := []string{}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.Method {
+		case http.MethodGet:
+			_, _ = io.WriteString(writer, `<form><input name="csrf_token" value="tok-csrf"></form>`)
+		case http.MethodPost:
+			body, _ := io.ReadAll(request.Body)
+			postBodies = append(postBodies, string(body))
+			if !strings.Contains(string(body), "tok-csrf") {
+				writer.WriteHeader(http.StatusForbidden)
+				_, _ = io.WriteString(writer, "invalid csrf")
+				return
+			}
+			http.SetCookie(writer, &http.Cookie{Name: "sid", Value: "authed", Path: "/"})
+			_, _ = io.WriteString(writer, "dashboard")
+		default:
+			t.Fatalf("method %s", request.Method)
+		}
+	}))
+	defer server.Close()
+	verifier := NewHTTPVerifier(server.Client(), authz.NewScope(hostOf(server.URL), nil, true), 1)
+	outcome := verifier.EstablishSession(context.Background(), LoginSpec{
+		LoginURL:  server.URL + "/login",
+		LoginBody: "username=a&password=b",
+	})
+	if !outcome.Verified || outcome.CSRFToken != "tok-csrf" || !strings.Contains(outcome.SessionCookieHeader, "sid=authed") {
+		t.Fatalf("outcome = %+v posts=%v", outcome, postBodies)
+	}
+	if len(postBodies) != 1 || !strings.Contains(postBodies[0], "tok-csrf") {
+		t.Fatalf("post bodies = %v", postBodies)
+	}
+}
+
+func TestVerifyWithEvidenceOptionsReusesCookieWithoutLogin(t *testing.T) {
+	loginPosts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/login":
+			if request.Method == http.MethodPost {
+				loginPosts++
+			}
+			writer.WriteHeader(http.StatusInternalServerError)
+		case "/user/2":
+			if strings.Contains(request.Header.Get("Cookie"), "sid=pool") {
+				_, _ = io.WriteString(writer, "Welcome Admin Dashboard")
+				return
+			}
+			writer.WriteHeader(http.StatusFound)
+			writer.Header().Set("Location", "/login")
+		default:
+			t.Fatalf("path %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+	verifier := NewHTTPVerifier(server.Client(), authz.NewScope(hostOf(server.URL), nil, true), 3)
+	result, record := verifier.VerifyWithEvidenceOptions(context.Background(), FindingSpec{
+		VulnType:    VulnAuthBypass,
+		Method:      http.MethodGet,
+		URL:         server.URL + "/user/2",
+		BaselineURL: server.URL + "/user/2",
+		Payload:     "user=2",
+		LoginURL:    server.URL + "/login",
+		LoginBody:   "username=a&password=b",
+	}, VerifyOptions{CookieA: "sid=pool", CookieNamesA: []string{"sid"}})
+	if result.Verdict != VerdictVerified {
+		t.Fatalf("result = %+v", result)
+	}
+	if loginPosts != 0 {
+		t.Fatalf("login posts = %d", loginPosts)
+	}
+	if !record.LoginVerified || len(record.LoginCookieNames) != 1 || record.LoginCookieNames[0] != "sid" {
+		t.Fatalf("record = %+v", record)
 	}
 }

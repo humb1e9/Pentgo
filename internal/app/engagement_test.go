@@ -128,8 +128,15 @@ func TestServicePassesFrameworkVerifiedFindingToReport(t *testing.T) {
 
 func TestServicePublishesAuthenticatedCredentialEvidenceFromLocalServer(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/login" || request.Method != http.MethodPost {
+		if request.URL.Path != "/login" {
 			t.Fatalf("request = %s %s", request.Method, request.URL.Path)
+		}
+		if request.Method == http.MethodGet {
+			_, _ = writer.Write([]byte("login form"))
+			return
+		}
+		if request.Method != http.MethodPost {
+			t.Fatalf("method = %s", request.Method)
 		}
 		http.SetCookie(writer, &http.Cookie{Name: "sid", Value: "fixture-cookie", Path: "/"})
 		_, _ = writer.Write([]byte("dashboard"))

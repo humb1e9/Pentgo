@@ -55,6 +55,28 @@ type FindingSpec struct {
 	LoginBodyB        string
 	LoginContentTypeB string
 	UsernameB         string
+	// Optional pool keys (engagement session pool).
+	SessionName  string
+	SessionNameB string
+}
+
+// LoginSpec is a framework login request (SESSION blocks and FINDING login_*).
+type LoginSpec struct {
+	LoginURL         string
+	LoginMethod      string
+	LoginBody        string
+	LoginContentType string
+	// ResourceURL is optional; used only to resolve jar cookies after login.
+	ResourceURL string
+}
+
+// VerifyOptions supplies engagement-scoped session reuse without import cycles.
+// Cookie values are process-local and must never be persisted by callers.
+type VerifyOptions struct {
+	CookieA      string
+	CookieNamesA []string
+	CookieB      string
+	CookieNamesB []string
 }
 
 // HTTPVerifier independently collects target responses before scoring them.
@@ -65,9 +87,9 @@ type HTTPVerifier struct {
 	maxBodyBytes  int
 }
 
-// loginOutcome contains the framework's deterministic login-session evidence.
+// LoginResult contains the framework's deterministic login-session evidence.
 // SessionCookieHeader is process-local and must never be persisted or reported.
-type loginOutcome struct {
+type LoginResult struct {
 	Attempted           bool
 	Verified            bool
 	StatusCode          int
@@ -78,6 +100,7 @@ type loginOutcome struct {
 	RedirectAway        bool
 	Snippet             string
 	SessionCookieHeader string
+	CSRFToken           string
 	Error               string
 }
 
@@ -146,12 +169,18 @@ func (verifier *HTTPVerifier) Verify(ctx context.Context, spec FindingSpec) Veri
 // returning both the deterministic verdict and the captured request/response
 // record used to reach it.
 func (verifier *HTTPVerifier) VerifyWithEvidence(ctx context.Context, spec FindingSpec) (VerificationResult, VerificationRecord) {
+	return verifier.VerifyWithEvidenceOptions(ctx, spec, VerifyOptions{})
+}
+
+// VerifyWithEvidenceOptions is VerifyWithEvidence plus optional engagement
+// session cookies (skip login when CookieA/CookieB are already established).
+func (verifier *HTTPVerifier) VerifyWithEvidenceOptions(ctx context.Context, spec FindingSpec, opts VerifyOptions) (VerificationResult, VerificationRecord) {
 	record := newVerificationRecord(spec)
 	if verifier == nil || verifier.client == nil {
 		return inconclusiveResult(spec, "verifier is not configured"), record
 	}
 	if spec.VulnType == VulnCredential {
-		return verifier.verifyCredential(ctx, spec, record)
+		return verifier.verifyCredential(ctx, spec, record, opts)
 	}
 	payloadURL, err := parseVerificationURL(spec.URL)
 	if err != nil {
@@ -168,13 +197,19 @@ func (verifier *HTTPVerifier) VerifyWithEvidence(ctx context.Context, spec Findi
 	if !supportedVerificationMethod(method) {
 		return inconclusiveResult(spec, "unsupported HTTP method "+method), record
 	}
-	login := loginOutcome{}
-	if strings.TrimSpace(spec.LoginURL) != "" {
+	login := LoginResult{}
+	if strings.TrimSpace(opts.CookieA) != "" {
+		login = reusedLogin(opts.CookieA, opts.CookieNamesA)
+		record.applyLoginOutcome(login)
+	} else if strings.TrimSpace(spec.LoginURL) != "" {
 		login = verifier.verifyLogin(ctx, spec)
 		record.applyLoginOutcome(login)
 	}
-	loginB := loginOutcome{}
-	if strings.TrimSpace(spec.LoginURLB) != "" {
+	loginB := LoginResult{}
+	if strings.TrimSpace(opts.CookieB) != "" {
+		loginB = reusedLogin(opts.CookieB, opts.CookieNamesB)
+		record.applyLoginBOutcome(loginB)
+	} else if strings.TrimSpace(spec.LoginURLB) != "" {
 		loginB = verifier.verifyLoginB(ctx, spec)
 		record.applyLoginBOutcome(loginB)
 	}
@@ -272,7 +307,7 @@ func (verifier *HTTPVerifier) VerifyWithEvidence(ctx context.Context, spec Findi
 	return result, record
 }
 
-func (verifier *HTTPVerifier) verifyCredential(ctx context.Context, spec FindingSpec, record VerificationRecord) (VerificationResult, VerificationRecord) {
+func (verifier *HTTPVerifier) verifyCredential(ctx context.Context, spec FindingSpec, record VerificationRecord, opts VerifyOptions) (VerificationResult, VerificationRecord) {
 	loginURL, err := parseVerificationURL(spec.LoginURL)
 	if err != nil {
 		return inconclusiveResult(spec, "login URL: "+err.Error()), record
@@ -288,7 +323,12 @@ func (verifier *HTTPVerifier) verifyCredential(ctx context.Context, spec Finding
 		return inconclusiveResult(spec, "unsupported login HTTP method "+method), record
 	}
 
-	login := verifier.verifyLogin(ctx, spec)
+	var login LoginResult
+	if strings.TrimSpace(opts.CookieA) != "" {
+		login = reusedLogin(opts.CookieA, opts.CookieNamesA)
+	} else {
+		login = verifier.verifyLogin(ctx, spec)
+	}
 	record.applyLoginOutcome(login)
 	if login.Error == "" {
 		record.Reproductions = 1
@@ -329,7 +369,7 @@ func newVerificationRecord(spec FindingSpec) VerificationRecord {
 	}
 }
 
-func (record *VerificationRecord) applyLoginOutcome(outcome loginOutcome) {
+func (record *VerificationRecord) applyLoginOutcome(outcome LoginResult) {
 	record.LoginAttempted = outcome.Attempted
 	record.LoginVerified = outcome.Verified
 	record.LoginStatus = outcome.StatusCode
@@ -338,7 +378,7 @@ func (record *VerificationRecord) applyLoginOutcome(outcome loginOutcome) {
 	record.LoginSnippet = outcome.Snippet
 }
 
-func (result *VerificationResult) applyLoginMetadata(outcome loginOutcome, username string) {
+func (result *VerificationResult) applyLoginMetadata(outcome LoginResult, username string) {
 	if result == nil || !outcome.Attempted {
 		return
 	}
@@ -350,7 +390,7 @@ func (result *VerificationResult) applyLoginMetadata(outcome loginOutcome, usern
 	result.Username = username
 }
 
-func (record *VerificationRecord) applyLoginBOutcome(outcome loginOutcome) {
+func (record *VerificationRecord) applyLoginBOutcome(outcome LoginResult) {
 	record.LoginBAttempted = outcome.Attempted
 	record.LoginBVerified = outcome.Verified
 	record.LoginBStatus = outcome.StatusCode
@@ -359,7 +399,7 @@ func (record *VerificationRecord) applyLoginBOutcome(outcome loginOutcome) {
 	record.LoginBSnippet = outcome.Snippet
 }
 
-func (result *VerificationResult) applyLoginBMetadata(outcome loginOutcome, username string) {
+func (result *VerificationResult) applyLoginBMetadata(outcome LoginResult, username string) {
 	if result == nil || !outcome.Attempted {
 		return
 	}
@@ -415,8 +455,19 @@ func (verifier *HTTPVerifier) request(ctx context.Context, method, rawURL, body 
 	}, nil
 }
 
-func (verifier *HTTPVerifier) verifyLogin(ctx context.Context, spec FindingSpec) loginOutcome {
-	outcome := loginOutcome{Attempted: true}
+func (verifier *HTTPVerifier) verifyLogin(ctx context.Context, spec FindingSpec) LoginResult {
+	return verifier.EstablishSession(ctx, LoginSpec{
+		LoginURL:         spec.LoginURL,
+		LoginMethod:      spec.LoginMethod,
+		LoginBody:        spec.LoginBody,
+		LoginContentType: spec.LoginContentType,
+		ResourceURL:      spec.URL,
+	})
+}
+
+// EstablishSession performs framework login with optional CSRF prefetch (bingo SessionManager).
+func (verifier *HTTPVerifier) EstablishSession(ctx context.Context, spec LoginSpec) LoginResult {
+	outcome := LoginResult{Attempted: true}
 	if verifier == nil || verifier.client == nil {
 		outcome.Error = "verifier is not configured"
 		return outcome
@@ -440,16 +491,28 @@ func (verifier *HTTPVerifier) verifyLogin(ctx context.Context, spec FindingSpec)
 	client.Jar = jar
 	client.CheckRedirect = verifier.loginRedirectPolicy(&outcome)
 
+	loginBody := spec.LoginBody
+	contentType := normalizedLoginContentType(spec.LoginContentType)
+
+	// bingo SessionManager: GET login page first to extract CSRF when possible.
+	getReq, err := http.NewRequestWithContext(ctx, http.MethodGet, loginURL.String(), nil)
+	if err == nil {
+		if getResp, getErr := client.Do(getReq); getErr == nil {
+			bodyBytes, _ := io.ReadAll(io.LimitReader(getResp.Body, int64(verifier.maxBodyBytes)+1))
+			_ = getResp.Body.Close()
+			if token := ExtractCSRFToken(string(bodyBytes)); token != "" {
+				outcome.CSRFToken = token
+				loginBody = mergeCSRFToken(loginBody, contentType, token)
+			}
+		}
+	}
+
 	method := normalizedLoginMethod(spec.LoginMethod)
 	if !supportedVerificationMethod(method) {
 		outcome.Error = "unsupported login HTTP method " + method
 		return outcome
 	}
-	contentType := strings.TrimSpace(spec.LoginContentType)
-	if contentType == "" {
-		contentType = "application/x-www-form-urlencoded"
-	}
-	request, err := http.NewRequestWithContext(ctx, method, loginURL.String(), strings.NewReader(spec.LoginBody))
+	request, err := http.NewRequestWithContext(ctx, method, loginURL.String(), strings.NewReader(loginBody))
 	if err != nil {
 		outcome.Error = err.Error()
 		return outcome
@@ -475,7 +538,7 @@ func (verifier *HTTPVerifier) verifyLogin(ctx context.Context, spec FindingSpec)
 	outcome.SuccessText = containsLoginText(outcome.Snippet, loginSuccessTexts)
 	outcome.FailText = containsLoginText(outcome.Snippet, loginFailureTexts)
 
-	sessionURL := loginSessionURL(spec, loginURL)
+	sessionURL := loginSessionURLFromResource(spec.ResourceURL, loginURL)
 	cookies := jar.Cookies(sessionURL)
 	outcome.CookieNames, outcome.SessionCookieHeader = cookieEvidence(cookies)
 	for _, name := range outcome.CookieNames {
@@ -488,7 +551,48 @@ func (verifier *HTTPVerifier) verifyLogin(ctx context.Context, spec FindingSpec)
 	return outcome
 }
 
-func (verifier *HTTPVerifier) loginRedirectPolicy(outcome *loginOutcome) func(*http.Request, []*http.Request) error {
+func reusedLogin(cookieHeader string, cookieNames []string) LoginResult {
+	outcome := LoginResult{
+		Attempted:           true,
+		Verified:            true,
+		SessionCookieHeader: strings.TrimSpace(cookieHeader),
+		CookieNames:         append([]string(nil), cookieNames...),
+	}
+	if len(outcome.CookieNames) == 0 {
+		outcome.CookieNames = cookieNamesFromHeader(outcome.SessionCookieHeader)
+	}
+	for _, name := range outcome.CookieNames {
+		if !genericLoginCookieNames[strings.ToLower(name)] {
+			outcome.MeaningfulCookie = true
+			break
+		}
+	}
+	return outcome
+}
+
+func cookieNamesFromHeader(header string) []string {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return nil
+	}
+	parts := strings.Split(header, ";")
+	names := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		name, _, _ := strings.Cut(part, "=")
+		name = strings.TrimSpace(name)
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+func (verifier *HTTPVerifier) loginRedirectPolicy(outcome *LoginResult) func(*http.Request, []*http.Request) error {
 	return func(request *http.Request, via []*http.Request) error {
 		if len(via) >= loginRedirectLimit {
 			return fmt.Errorf("login redirect limit exceeded")
@@ -521,10 +625,14 @@ func containsLoginText(body string, terms []string) bool {
 }
 
 func loginSessionURL(spec FindingSpec, loginURL *url.URL) *url.URL {
-	if strings.TrimSpace(spec.URL) == "" {
+	return loginSessionURLFromResource(spec.URL, loginURL)
+}
+
+func loginSessionURLFromResource(resourceURL string, loginURL *url.URL) *url.URL {
+	if strings.TrimSpace(resourceURL) == "" {
 		return loginURL
 	}
-	payloadURL, err := parseVerificationURL(spec.URL)
+	payloadURL, err := parseVerificationURL(resourceURL)
 	if err != nil {
 		return loginURL
 	}
@@ -592,7 +700,7 @@ func cookieEvidence(cookies []*http.Cookie) ([]string, string) {
 
 
 // verifyLoginB authenticates identity B (bingo headers_b) using login_*_b fields.
-func (verifier *HTTPVerifier) verifyLoginB(ctx context.Context, spec FindingSpec) loginOutcome {
+func (verifier *HTTPVerifier) verifyLoginB(ctx context.Context, spec FindingSpec) LoginResult {
 	b := FindingSpec{
 		LoginURL:         spec.LoginURLB,
 		LoginMethod:      spec.LoginMethodB,

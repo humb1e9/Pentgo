@@ -454,12 +454,16 @@ payload: payload
 func TestFindingConsolidationPromptDeclaresAuthenticatedFindingFields(t *testing.T) {
 	for _, want := range []string{
 		"credential",
+		"idor",
 		"login_url",
+		"login_url_b",
 		"login_method",
 		"login_body",
 		"login_content_type",
 		"username",
+		"username_b",
 		"only execution evidence",
+		"two-user",
 	} {
 		if !strings.Contains(strings.ToLower(findingConsolidationSystemPrompt), strings.ToLower(want)) {
 			t.Fatalf("consolidation prompt missing %q: %s", want, findingConsolidationSystemPrompt)

@@ -35,6 +35,10 @@ type FindingVerifier interface {
 	VerifyWithEvidence(context.Context, verify.FindingSpec) (verify.VerificationResult, verify.VerificationRecord)
 }
 
+type sessionEstablisher interface {
+	EstablishSession(context.Context, verify.LoginSpec) verify.LoginResult
+}
+
 // RunnerConfig 约束模型循环和恢复策略。
 type RunnerConfig struct {
 	MaxTurns           int
@@ -75,42 +79,43 @@ type Runner struct {
 	findings     []verify.VerificationResult
 	findingSpecs []verify.FindingSpec
 	catalog      []skills.Skill
+	sessionPool  *sess.SessionPool
 }
 
 type verificationEvidence struct {
-	SchemaVersion         string            `json:"schema_version"`
-	VulnType              verify.VulnType          `json:"vuln_type"`
-	Verdict               verify.Verdict           `json:"verdict"`
-	Confidence            float64           `json:"confidence"`
-	Method                string            `json:"method"`
-	PayloadURL            string            `json:"payload_url"`
-	BaselineURL           string            `json:"baseline_url,omitempty"`
-	RequestHeaders        map[string]string `json:"request_headers,omitempty"`
-	RequestBody           string            `json:"request_body,omitempty"`
-	BaselineRequestBody   string            `json:"baseline_request_body,omitempty"`
-	PayloadStatus         int               `json:"payload_status,omitempty"`
-	PayloadResponseBody   string            `json:"payload_response_body,omitempty"`
-	PayloadLocation       string            `json:"payload_location,omitempty"`
-	BaselineStatus        int               `json:"baseline_status,omitempty"`
-	BaselineResponseBody  string            `json:"baseline_response_body,omitempty"`
-	Reproductions         int               `json:"reproductions,omitempty"`
-	ScopeRejected         bool              `json:"scope_rejected,omitempty"`
-	LoginAttempted        bool              `json:"login_attempted"`
-	LoginVerified         bool              `json:"login_verified"`
-	LoginStatus           int               `json:"login_status,omitempty"`
-	LoginCookieNames      []string          `json:"login_cookie_names,omitempty"`
-	LoginMeaningfulCookie bool              `json:"login_meaningful_cookie"`
-	LoginSnippet          string            `json:"login_snippet,omitempty"`
-		LoginBAttempted        bool     `json:"login_b_attempted"`
-		LoginBVerified         bool     `json:"login_b_verified"`
-		LoginBStatus           int      `json:"login_b_status,omitempty"`
-		LoginBCookieNames      []string `json:"login_b_cookie_names,omitempty"`
-		LoginBMeaningfulCookie bool     `json:"login_b_meaningful_cookie"`
-		LoginBSnippet          string   `json:"login_b_snippet,omitempty"`
-		IDORDiffReason         string   `json:"idor_diff_reason,omitempty"`
-	ChecksPassed          []string          `json:"checks_passed,omitempty"`
-	ChecksFailed          []string          `json:"checks_failed,omitempty"`
-	Curl                  string            `json:"curl,omitempty"`
+	SchemaVersion          string            `json:"schema_version"`
+	VulnType               verify.VulnType   `json:"vuln_type"`
+	Verdict                verify.Verdict    `json:"verdict"`
+	Confidence             float64           `json:"confidence"`
+	Method                 string            `json:"method"`
+	PayloadURL             string            `json:"payload_url"`
+	BaselineURL            string            `json:"baseline_url,omitempty"`
+	RequestHeaders         map[string]string `json:"request_headers,omitempty"`
+	RequestBody            string            `json:"request_body,omitempty"`
+	BaselineRequestBody    string            `json:"baseline_request_body,omitempty"`
+	PayloadStatus          int               `json:"payload_status,omitempty"`
+	PayloadResponseBody    string            `json:"payload_response_body,omitempty"`
+	PayloadLocation        string            `json:"payload_location,omitempty"`
+	BaselineStatus         int               `json:"baseline_status,omitempty"`
+	BaselineResponseBody   string            `json:"baseline_response_body,omitempty"`
+	Reproductions          int               `json:"reproductions,omitempty"`
+	ScopeRejected          bool              `json:"scope_rejected,omitempty"`
+	LoginAttempted         bool              `json:"login_attempted"`
+	LoginVerified          bool              `json:"login_verified"`
+	LoginStatus            int               `json:"login_status,omitempty"`
+	LoginCookieNames       []string          `json:"login_cookie_names,omitempty"`
+	LoginMeaningfulCookie  bool              `json:"login_meaningful_cookie"`
+	LoginSnippet           string            `json:"login_snippet,omitempty"`
+	LoginBAttempted        bool              `json:"login_b_attempted"`
+	LoginBVerified         bool              `json:"login_b_verified"`
+	LoginBStatus           int               `json:"login_b_status,omitempty"`
+	LoginBCookieNames      []string          `json:"login_b_cookie_names,omitempty"`
+	LoginBMeaningfulCookie bool              `json:"login_b_meaningful_cookie"`
+	LoginBSnippet          string            `json:"login_b_snippet,omitempty"`
+	IDORDiffReason         string            `json:"idor_diff_reason,omitempty"`
+	ChecksPassed           []string          `json:"checks_passed,omitempty"`
+	ChecksFailed           []string          `json:"checks_failed,omitempty"`
+	Curl                   string            `json:"curl,omitempty"`
 }
 
 // NewRunner 创建一个模型循环。nil loader 和 sleeper 使用默认实现。
@@ -160,6 +165,8 @@ func (runner *Runner) Run(ctx context.Context, session *sess.AgentSession) error
 	runner.reportTurns = nil
 	runner.findings = nil
 	runner.findingSpecs = nil
+	runner.sessionPool = sess.NewSessionPool()
+	session.Sessions = nil
 	runner.history = NewHistory(session.Target.Canonical, session.Intent)
 	systemPrompt := buildSystemPrompt(runner.catalog)
 	loadedSkills := make(map[string]bool)
@@ -206,6 +213,7 @@ func (runner *Runner) Run(ctx context.Context, session *sess.AgentSession) error
 		}
 
 		skillHandled := runner.loadSkills(assistantText, loadedSkills, runner.history, session, turn)
+		sessionHandled := runner.establishDeclaredSessions(ctx, assistantText, session, turn)
 		blocks := exec.ExtractCodeBlocks(assistantText)
 		if len(blocks) == 0 {
 			if isRefusal(assistantText) {
@@ -228,7 +236,7 @@ func (runner *Runner) Run(ctx context.Context, session *sess.AgentSession) error
 				_ = session.Complete(reason, time.Now().UTC())
 				return nil
 			}
-			if skillHandled {
+			if skillHandled || sessionHandled {
 				continue
 			}
 			noCodeCount++
@@ -274,13 +282,15 @@ func (runner *Runner) Run(ctx context.Context, session *sess.AgentSession) error
 			session.AddEvent(turn, "recovery", "authorization_blocked", time.Now().UTC())
 		}
 		if len(approved) == 0 {
+			extraEnv := runner.sessionEnv()
 			results := runner.executor.Execute(ctx, exec.ExecutionInput{
 				SessionID: session.ID,
 				Target:    session.Target.Canonical,
 				Turn:      turn,
 				Blocks:    preflight,
+				ExtraEnv:  extraEnv,
 			})
-			runner.recordReportBlocks(results)
+			runner.recordReportBlocks(redactExecutionResults(results, extraEnv))
 			runner.history.Append("user", renderPreflightRejections(turn, preflight))
 			session.AddEvent(turn, "recovery", "preflight_rejected", time.Now().UTC())
 			continue
@@ -289,11 +299,13 @@ func (runner *Runner) Run(ctx context.Context, session *sess.AgentSession) error
 		for _, block := range approved {
 			runner.emit(RunnerEvent{Turn: turn, Kind: "block_started", BlockIndex: block.Block.Index, Detail: string(block.Block.Language)})
 		}
+		extraEnv := runner.sessionEnv()
 		results := runner.executor.Execute(ctx, exec.ExecutionInput{
 			SessionID: session.ID,
 			Target:    session.Target.Canonical,
 			Turn:      turn,
 			Blocks:    preflight,
+			ExtraEnv:  extraEnv,
 		})
 		if len(approved) > 0 {
 			hasExecutionEvidence = true
@@ -301,8 +313,9 @@ func (runner *Runner) Run(ctx context.Context, session *sess.AgentSession) error
 		for _, result := range results {
 			runner.emit(RunnerEvent{Turn: turn, Kind: "block_finished", BlockIndex: result.Block.Index, Detail: string(result.Status)})
 		}
-		runner.recordReportBlocks(results)
-		resultText := RenderExecutionResults(turn, results)
+		safeResults := redactExecutionResults(results, extraEnv)
+		runner.recordReportBlocks(safeResults)
+		resultText := RenderExecutionResults(turn, safeResults)
 		runner.history.Append("user", resultText)
 		session.AddEvent(turn, "execution", fmt.Sprintf("%d block(s)", len(results)), time.Now().UTC())
 		if allNoOutput(results) {
@@ -320,6 +333,26 @@ func (runner *Runner) Run(ctx context.Context, session *sess.AgentSession) error
 	}
 	_ = session.Fail("max_turns", time.Now().UTC())
 	return nil
+}
+
+func (runner *Runner) sessionEnv() map[string]string {
+	if runner == nil || runner.sessionPool == nil {
+		return nil
+	}
+	return runner.sessionPool.ExportCookieEnv()
+}
+
+func redactExecutionResults(results []exec.ExecutionResult, extraEnv map[string]string) []exec.ExecutionResult {
+	if len(results) == 0 {
+		return nil
+	}
+	redacted := append([]exec.ExecutionResult(nil), results...)
+	for index := range redacted {
+		redacted[index].Stdout = exec.RedactSessionSecrets(redacted[index].Stdout, extraEnv)
+		redacted[index].Stderr = exec.RedactSessionSecrets(redacted[index].Stderr, extraEnv)
+		redacted[index].Error = exec.RedactSessionSecrets(redacted[index].Error, extraEnv)
+	}
+	return redacted
 }
 
 const findingConsolidationSystemPrompt = `You consolidate completed PentGo engagements into framework verification declarations. Only execution evidence may support a declaration. For each candidate vulnerability, output exactly one block in this format:
@@ -396,39 +429,39 @@ func (runner *Runner) persistVerificationEvidence(session *sess.AgentSession, in
 		return
 	}
 	evidence := verificationEvidence{
-		SchemaVersion:         "1",
-		VulnType:              result.VulnType,
-		Verdict:               result.Verdict,
-		Confidence:            result.Confidence,
-		Method:                record.Method,
-		PayloadURL:            record.PayloadURL,
-		BaselineURL:           record.BaselineURL,
-		RequestHeaders:        redactCookieHeaders(record.RequestHeaders),
-		RequestBody:           record.RequestBody,
-		BaselineRequestBody:   record.BaselineRequestBody,
-		PayloadStatus:         record.PayloadStatus,
-		PayloadResponseBody:   record.PayloadResponseBody,
-		PayloadLocation:       record.PayloadLocation,
-		BaselineStatus:        record.BaselineStatus,
-		BaselineResponseBody:  record.BaselineResponseBody,
-		Reproductions:         record.Reproductions,
-		ScopeRejected:         record.ScopeRejected,
-		LoginAttempted:        record.LoginAttempted,
-		LoginVerified:         record.LoginVerified,
-		LoginStatus:           record.LoginStatus,
-		LoginCookieNames:      append([]string(nil), record.LoginCookieNames...),
-		LoginMeaningfulCookie: record.LoginMeaningfulCookie,
-		LoginSnippet:          record.LoginSnippet,
-			LoginBAttempted:        record.LoginBAttempted,
-			LoginBVerified:         record.LoginBVerified,
-			LoginBStatus:           record.LoginBStatus,
-			LoginBCookieNames:      append([]string(nil), record.LoginBCookieNames...),
-			LoginBMeaningfulCookie: record.LoginBMeaningfulCookie,
-			LoginBSnippet:          record.LoginBSnippet,
-			IDORDiffReason:         result.IDORDiffReason,
-		ChecksPassed:          append([]string(nil), result.ChecksPassed...),
-		ChecksFailed:          append([]string(nil), result.ChecksFailed...),
-		Curl:                  result.Curl,
+		SchemaVersion:          "1",
+		VulnType:               result.VulnType,
+		Verdict:                result.Verdict,
+		Confidence:             result.Confidence,
+		Method:                 record.Method,
+		PayloadURL:             record.PayloadURL,
+		BaselineURL:            record.BaselineURL,
+		RequestHeaders:         redactCookieHeaders(record.RequestHeaders),
+		RequestBody:            record.RequestBody,
+		BaselineRequestBody:    record.BaselineRequestBody,
+		PayloadStatus:          record.PayloadStatus,
+		PayloadResponseBody:    record.PayloadResponseBody,
+		PayloadLocation:        record.PayloadLocation,
+		BaselineStatus:         record.BaselineStatus,
+		BaselineResponseBody:   record.BaselineResponseBody,
+		Reproductions:          record.Reproductions,
+		ScopeRejected:          record.ScopeRejected,
+		LoginAttempted:         record.LoginAttempted,
+		LoginVerified:          record.LoginVerified,
+		LoginStatus:            record.LoginStatus,
+		LoginCookieNames:       append([]string(nil), record.LoginCookieNames...),
+		LoginMeaningfulCookie:  record.LoginMeaningfulCookie,
+		LoginSnippet:           record.LoginSnippet,
+		LoginBAttempted:        record.LoginBAttempted,
+		LoginBVerified:         record.LoginBVerified,
+		LoginBStatus:           record.LoginBStatus,
+		LoginBCookieNames:      append([]string(nil), record.LoginBCookieNames...),
+		LoginBMeaningfulCookie: record.LoginBMeaningfulCookie,
+		LoginBSnippet:          record.LoginBSnippet,
+		IDORDiffReason:         result.IDORDiffReason,
+		ChecksPassed:           append([]string(nil), result.ChecksPassed...),
+		ChecksFailed:           append([]string(nil), result.ChecksFailed...),
+		Curl:                   result.Curl,
 	}
 	name := fmt.Sprintf("verification-%03d", index)
 	path, err := runner.config.EvidenceSink.WriteEvidence(name, evidence)

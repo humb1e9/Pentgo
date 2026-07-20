@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -49,6 +50,9 @@ type ExecutionInput struct {
 	Target    string
 	Turn      int
 	Blocks    []PreflightResult
+	// ExtraEnv is merged into the child process environment (e.g. session cookies).
+	// Values must not be written to evidence JSON by callers.
+	ExtraEnv map[string]string
 }
 
 // ExecutionResult 是单个代码块的完整执行摘要。
@@ -163,9 +167,9 @@ func (executor *Executor) persistEvidence(input ExecutionInput, preflight Prefli
 		Repairs:       preflight.Repairs,
 		Status:        result.Status,
 		ExitCode:      result.ExitCode,
-		Stdout:        result.Stdout,
-		Stderr:        result.Stderr,
-		Error:         result.Error,
+		Stdout:        redactSessionSecrets(result.Stdout, input.ExtraEnv),
+		Stderr:        redactSessionSecrets(result.Stderr, input.ExtraEnv),
+		Error:         redactSessionSecrets(result.Error, input.ExtraEnv),
 		Level:         result.Level,
 		TimedOut:      result.TimedOut,
 		Cancelled:     result.Cancelled,
@@ -186,6 +190,31 @@ func (executor *Executor) persistEvidence(input ExecutionInput, preflight Prefli
 		return
 	}
 	result.EvidencePath = path
+}
+
+// RedactSessionSecrets removes framework-injected Cookie values from text that
+// crosses the child-process boundary into evidence, history, or reports.
+func RedactSessionSecrets(value string, extraEnv map[string]string) string {
+	return redactSessionSecrets(value, extraEnv)
+}
+
+func redactSessionSecrets(value string, extraEnv map[string]string) string {
+	if value == "" || len(extraEnv) == 0 {
+		return value
+	}
+	secrets := make([]string, 0, len(extraEnv))
+	for key, secret := range extraEnv {
+		if strings.HasSuffix(key, "_COOKIE") && secret != "" {
+			secrets = append(secrets, secret)
+		}
+	}
+	sort.Slice(secrets, func(i, j int) bool {
+		return len(secrets[i]) > len(secrets[j])
+	})
+	for _, secret := range secrets {
+		value = strings.ReplaceAll(value, secret, "[redacted]")
+	}
+	return value
 }
 
 func (executor *Executor) executeBlock(ctx context.Context, input ExecutionInput, preflight PreflightResult) (result ExecutionResult) {
@@ -219,6 +248,12 @@ func (executor *Executor) executeBlock(ctx context.Context, input ExecutionInput
 		"PENTGO_ENGAGEMENT_ID="+input.SessionID,
 		"PENTGO_WORKDIR="+executor.config.WorkDir,
 	)
+	for key, value := range input.ExtraEnv {
+		if key == "" {
+			continue
+		}
+		command.Env = append(command.Env, key+"="+value)
+	}
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdout, err := command.StdoutPipe()
 	if err != nil {

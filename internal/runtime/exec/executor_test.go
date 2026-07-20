@@ -2,13 +2,13 @@ package exec
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
-
 
 func TestExecutorRunsPythonAndShellInSourceOrder(t *testing.T) {
 	workDir := t.TempDir()
@@ -84,6 +84,32 @@ func TestExecutorWritesPerBlockEvidence(t *testing.T) {
 	}
 	if sink.name != "agent-turn-002-block-003" || sink.value == nil {
 		t.Fatalf("sink = %+v", sink)
+	}
+}
+
+func TestExecutorInjectsExtraEnvAndRedactsItFromEvidence(t *testing.T) {
+	sink := &memoryEvidenceSink{}
+	executor := NewExecutor(ExecutorConfig{WorkDir: t.TempDir(), Timeout: time.Second, MaxParallel: 1, MaxOutputBytes: 1024, LineRepeatLimit: 10, ScanLineRepeatLimit: 10, Evidence: sink})
+	results := executor.Execute(context.Background(), ExecutionInput{
+		Turn:     1,
+		ExtraEnv: map[string]string{"PENTGO_SESSION_user_a_COOKIE": "sid=fixture-cookie"},
+		Blocks: []PreflightResult{
+			approvedBlock(1, LanguagePython, "import os\nprint(os.environ['PENTGO_SESSION_user_a_COOKIE'])\n"),
+		},
+	})
+	if len(results) != 1 || results[0].Stdout != "sid=fixture-cookie\n" {
+		t.Fatalf("result = %+v", results)
+	}
+	evidence, ok := sink.value.(executionEvidence)
+	if !ok {
+		t.Fatalf("evidence = %#v", sink.value)
+	}
+	encoded, err := json.Marshal(evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "fixture-cookie") {
+		t.Fatalf("evidence leaked session cookie: %s", encoded)
 	}
 }
 

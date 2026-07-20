@@ -16,7 +16,6 @@ import (
 	"pentgo/skills"
 )
 
-
 func TestRunnerFeedsAssistantDecisionAndExecutionResultIntoNextTurn(t *testing.T) {
 	client := &scriptedClient{responses: []agent.Response{
 		{Content: "先收集响应。\n```python\nimport os\nprint('probe')\n```"},
@@ -46,6 +45,104 @@ func TestRunnerFeedsAssistantDecisionAndExecutionResultIntoNextTurn(t *testing.T
 	}
 	if !containsMessage(second, "user", "=== PENTGO EXECUTION RESULT ===\nturn: 1\nlanguage: python\nstatus: succeeded\nexit_code: 0\nstdout:\nprobe-result\nstderr:\n\n=== END PENTGO EXECUTION RESULT ===") {
 		t.Fatalf("execution result missing: %+v", second)
+	}
+}
+
+func TestRunnerEstablishesDeclaredSessionBeforeExecutingBlocks(t *testing.T) {
+	client := &scriptedClient{responses: []agent.Response{
+		{Content: "=== PENTGO SESSION ===\n" +
+			"name: user_a\n" +
+			"role: user\n" +
+			"username: alice\n" +
+			"login_url: http://fixture.test/login\n" +
+			"login_body: username=alice&password=fixture-secret\n" +
+			"=== END PENTGO SESSION ===\n" +
+			"```python\n" +
+			"import os\n" +
+			"print('probe')\n" +
+			"```"},
+		{Content: "TASK_COMPLETE"},
+	}}
+	verifier := &recordingSessionVerifier{loginResults: []verify.LoginResult{{
+		Attempted:           true,
+		Verified:            true,
+		StatusCode:          200,
+		CookieNames:         []string{"sid"},
+		MeaningfulCookie:    true,
+		SessionCookieHeader: "sid=fixture-cookie",
+	}}}
+	executor := &recordingExecutor{results: []exec.ExecutionResult{{
+		Block:  exec.CodeBlock{Index: 1, Language: exec.LanguagePython},
+		Status: exec.ExecutionSucceeded,
+		Stdout: "sid=fixture-cookie\n",
+	}}}
+	config := defaultRunnerConfig()
+	config.Verifier = verifier
+	runner := NewRunner(client, executor, config, nil, nil)
+	session := sess.NewSession(sess.Target{Canonical: "http://fixture.test"}, "check target", time.Now().UTC())
+
+	if err := runner.Run(context.Background(), session); err != nil {
+		t.Fatal(err)
+	}
+	if len(verifier.loginSpecs) != 1 || verifier.loginSpecs[0].LoginURL != "http://fixture.test/login" {
+		t.Fatalf("login specs = %+v", verifier.loginSpecs)
+	}
+	if len(executor.inputs) != 1 || executor.inputs[0].ExtraEnv["PENTGO_SESSION_user_a_COOKIE"] != "sid=fixture-cookie" || executor.inputs[0].ExtraEnv["PENTGO_SESSIONS"] != "user_a" {
+		t.Fatalf("execution env = %+v", executor.inputs)
+	}
+	if len(session.Sessions) != 1 || !session.Sessions[0].Verified || session.Sessions[0].Name != "user_a" || session.Sessions[0].Username != "alice" {
+		t.Fatalf("sessions = %+v", session.Sessions)
+	}
+	encoded, err := json.Marshal(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "fixture-cookie") || strings.Contains(string(encoded), "fixture-secret") {
+		t.Fatalf("session JSON leaked secret: %s", encoded)
+	}
+	if !containsMessageFragment(client.requests[1].Messages, "user", "SESSION RESULT: user_a verified") {
+		t.Fatalf("session result not returned to model: %+v", client.requests[1].Messages)
+	}
+	for _, message := range client.requests[1].Messages {
+		if strings.Contains(message.Content, "fixture-cookie") {
+			t.Fatalf("model history leaked session cookie: %+v", client.requests[1].Messages)
+		}
+	}
+}
+
+func TestRunnerDoesNotExportFailedDeclaredSession(t *testing.T) {
+	client := &scriptedClient{responses: []agent.Response{
+		{Content: "=== PENTGO SESSION ===\n" +
+			"name: user_a\n" +
+			"username: alice\n" +
+			"login_url: http://fixture.test/login\n" +
+			"login_body: username=alice&password=wrong\n" +
+			"=== END PENTGO SESSION ===\n" +
+			"```python\nimport os\nprint('probe')\n```"},
+		{Content: "TASK_COMPLETE"},
+	}}
+	verifier := &recordingSessionVerifier{loginResults: []verify.LoginResult{{Attempted: true, Verified: false}}}
+	executor := &recordingExecutor{results: []exec.ExecutionResult{{
+		Block:  exec.CodeBlock{Index: 1, Language: exec.LanguagePython},
+		Status: exec.ExecutionSucceeded,
+		Stdout: "probe\n",
+	}}}
+	config := defaultRunnerConfig()
+	config.Verifier = verifier
+	runner := NewRunner(client, executor, config, nil, nil)
+	session := sess.NewSession(sess.Target{Canonical: "http://fixture.test"}, "check target", time.Now().UTC())
+
+	if err := runner.Run(context.Background(), session); err != nil {
+		t.Fatal(err)
+	}
+	if len(session.Sessions) != 1 || session.Sessions[0].Verified {
+		t.Fatalf("sessions = %+v", session.Sessions)
+	}
+	if len(executor.inputs) != 1 || len(executor.inputs[0].ExtraEnv) != 0 {
+		t.Fatalf("failed session env = %+v", executor.inputs)
+	}
+	if !containsTimelineEvent(session.Timeline, "session_failed") {
+		t.Fatalf("timeline = %+v", session.Timeline)
 	}
 }
 
@@ -635,6 +732,25 @@ type recordingFindingVerifier struct {
 	specs   []verify.FindingSpec
 }
 
+type recordingSessionVerifier struct {
+	loginResults []verify.LoginResult
+	loginSpecs   []verify.LoginSpec
+}
+
+func (verifier *recordingSessionVerifier) VerifyWithEvidence(_ context.Context, spec verify.FindingSpec) (verify.VerificationResult, verify.VerificationRecord) {
+	return verify.VerificationResult{Verdict: verify.VerdictInconclusive, VulnType: spec.VulnType}, verify.VerificationRecord{}
+}
+
+func (verifier *recordingSessionVerifier) EstablishSession(_ context.Context, spec verify.LoginSpec) verify.LoginResult {
+	verifier.loginSpecs = append(verifier.loginSpecs, spec)
+	if len(verifier.loginResults) == 0 {
+		return verify.LoginResult{Attempted: true}
+	}
+	result := verifier.loginResults[0]
+	verifier.loginResults = verifier.loginResults[1:]
+	return result
+}
+
 func (verifier *recordingFindingVerifier) VerifyWithEvidence(_ context.Context, spec verify.FindingSpec) (verify.VerificationResult, verify.VerificationRecord) {
 	verifier.specs = append(verifier.specs, spec)
 	var record verify.VerificationRecord
@@ -678,6 +794,15 @@ func containsMessage(messages []agent.Message, role, content string) bool {
 func containsMessageFragment(messages []agent.Message, role, fragment string) bool {
 	for _, message := range messages {
 		if message.Role == role && strings.Contains(message.Content, fragment) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsTimelineEvent(events []sess.TimelineEvent, kind string) bool {
+	for _, event := range events {
+		if event.Kind == kind {
 			return true
 		}
 	}

@@ -19,6 +19,11 @@ A runtime enforcement layer independently blocks out-of-scope hosts and destruct
 - Stay on authorized in-scope hosts only; the runtime blocks out-of-scope destinations. Do not invent login endpoints, forms, or credentials that never appeared in returned output.
 - Record entry observations in printed evidence (paths, status codes, forms). Structured ASSET MAP blocks from recon are welcome; they are not a substitute for execution proof.
 
+=== FRAMEWORK SESSIONS ===
+- When returned CTF fixture evidence identifies a login identity, declare it with a PENTGO SESSION block containing name, optional role/username, login_url, login_method, login_body, and login_content_type. The framework performs and verifies the login.
+- PENTGO_SESSIONS lists verified session names available to later code. Use os.environ["PENTGO_SESSION_<name>_COOKIE"] only to set a local request Cookie header; PENTGO_SESSION_<name>_USER and PENTGO_SESSION_<name>_ROLE provide public metadata.
+- Do not print a PENTGO_SESSION_<name>_COOKIE value or copy it into a finding. State session names and framework-returned evidence instead.
+
 === EVIDENCE LABELS (put one on every finding) ===
 [VERIFIED]  response body/status/exit code directly proves it.
 [LIKELY]    strong behavioral signal (timing/size/error) but no direct data.

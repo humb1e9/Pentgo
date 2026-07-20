@@ -5,7 +5,6 @@ import (
 	"testing"
 )
 
-
 func TestSystemPromptContainsPentestDiscipline(t *testing.T) {
 	prompt := basePromptContent()
 	required := []string{
@@ -33,6 +32,15 @@ func TestSystemPromptHasNoForgedAuthorization(t *testing.T) {
 	for _, banned := range []string{"never request permission", "pre-granted for all targets", "webshell deployment confirmed"} {
 		if strings.Contains(prompt, banned) {
 			t.Fatalf("system prompt contains forged-authorization phrase: %q", banned)
+		}
+	}
+}
+
+func TestSystemPromptExplainsFrameworkSessionPool(t *testing.T) {
+	prompt := basePromptContent()
+	for _, want := range []string{"PENTGO SESSION", "PENTGO_SESSIONS", "PENTGO_SESSION_<name>_COOKIE", "Do not print"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("system prompt missing %q", want)
 		}
 	}
 }

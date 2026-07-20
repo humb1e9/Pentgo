@@ -126,6 +126,71 @@ func TestServicePassesFrameworkVerifiedFindingToReport(t *testing.T) {
 	}
 }
 
+func TestServicePublishesSessionPoolPublicViewWithoutSecrets(t *testing.T) {
+	loginPosts := 0
+	target := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/login" {
+			t.Fatalf("path = %q", request.URL.Path)
+		}
+		if request.Method == http.MethodGet {
+			_, _ = writer.Write([]byte("login form"))
+			return
+		}
+		if request.Method != http.MethodPost {
+			t.Fatalf("method = %s", request.Method)
+		}
+		loginPosts++
+		http.SetCookie(writer, &http.Cookie{Name: "sid", Value: "fixture-cookie", Path: "/"})
+		_, _ = writer.Write([]byte("dashboard"))
+	}))
+	defer target.Close()
+
+	client := &scriptedClient{outcomes: []chatOutcome{
+		{response: agent.Response{Content: "=== PENTGO SESSION ===\n" +
+			"name: user_a\nusername: alice\nlogin_url: " + target.URL + "/login\n" +
+			"login_body: username=alice&password=fixture-secret\n=== END PENTGO SESSION ===\n" +
+			"```python\nimport os\nprint(os.environ['PENTGO_SESSIONS'])\n```"}},
+		{response: agent.Response{Content: "TASK_COMPLETE"}},
+		{response: agent.Response{Content: "NO_FINDINGS"}},
+		{response: agent.Response{Content: "## 执行摘要\n本地会话已建立。\n"}},
+	}}
+	service := newTestService(client)
+	result, err := service.Run(context.Background(), Request{
+		Target:     sess.Target{Raw: target.URL, Canonical: target.URL},
+		Intent:     "验证本地会话池",
+		OutputRoot: t.TempDir(),
+	}, nil)
+	if err != nil || result.RunError != nil || loginPosts != 1 {
+		t.Fatalf("result/err/login posts = %+v/%v/%d", result, err, loginPosts)
+	}
+
+	sessionJSON, err := os.ReadFile(result.Artifacts.SessionJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var published sess.AgentSession
+	if err := json.Unmarshal(sessionJSON, &published); err != nil {
+		t.Fatal(err)
+	}
+	if len(published.Sessions) != 1 || published.Sessions[0].Name != "user_a" || len(published.Sessions[0].CookieNames) != 1 || published.Sessions[0].CookieNames[0] != "sid" {
+		t.Fatalf("published sessions = %+v", published.Sessions)
+	}
+	for _, secret := range []string{"fixture-cookie", "fixture-secret"} {
+		if strings.Contains(string(sessionJSON), secret) {
+			t.Fatalf("session JSON leaked %q: %s", secret, sessionJSON)
+		}
+	}
+	reportBody, err := os.ReadFile(result.Artifacts.Markdown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"fixture-cookie", "fixture-secret"} {
+		if strings.Contains(string(reportBody), secret) {
+			t.Fatalf("report leaked %q: %s", secret, reportBody)
+		}
+	}
+}
+
 func TestServicePublishesAuthenticatedCredentialEvidenceFromLocalServer(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/login" {

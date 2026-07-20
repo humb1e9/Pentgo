@@ -114,6 +114,10 @@ func parseFindingSpec(block string) FindingSpec {
 			spec.LoginContentTypeB = value
 		case "username_b":
 			spec.UsernameB = value
+		case "session_name":
+			spec.SessionName = value
+		case "session_name_b":
+			spec.SessionNameB = value
 		case "header":
 			header, headerValue, valid := strings.Cut(value, ":")
 			if !valid || strings.TrimSpace(header) == "" {
@@ -158,6 +162,13 @@ func findingSpecKey(spec FindingSpec) string {
 		spec.LoginBody,
 		spec.LoginContentType,
 		spec.Username,
+		spec.LoginURLB,
+		spec.LoginMethodB,
+		spec.LoginBodyB,
+		spec.LoginContentTypeB,
+		spec.UsernameB,
+		spec.SessionName,
+		spec.SessionNameB,
 	}
 	for _, key := range keys {
 		parts = append(parts, key, spec.Headers[key])

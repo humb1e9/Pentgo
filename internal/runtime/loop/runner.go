@@ -39,6 +39,10 @@ type sessionEstablisher interface {
 	EstablishSession(context.Context, verify.LoginSpec) verify.LoginResult
 }
 
+type optionsFindingVerifier interface {
+	VerifyWithEvidenceOptions(context.Context, verify.FindingSpec, verify.VerifyOptions) (verify.VerificationResult, verify.VerificationRecord)
+}
+
 // RunnerConfig 约束模型循环和恢复策略。
 type RunnerConfig struct {
 	MaxTurns           int
@@ -405,7 +409,7 @@ func (runner *Runner) ConsolidateAndVerify(ctx context.Context, session *sess.Ag
 	}
 	runner.findingSpecs = append([]verify.FindingSpec(nil), specs...)
 	for index, spec := range specs {
-		result, record := runner.config.Verifier.VerifyWithEvidence(ctx, spec)
+		result, record := runner.verifyFinding(ctx, spec, session)
 		if result.VulnType == "" {
 			result.VulnType = spec.VulnType
 		}
@@ -422,6 +426,61 @@ func (runner *Runner) ConsolidateAndVerify(ctx context.Context, session *sess.Ag
 	session.Findings = append([]verify.VerificationResult(nil), runner.findings...)
 	session.AddEvent(session.Turn, "verification_consolidated", fmt.Sprintf("%d finding(s)", len(runner.findings)), time.Now().UTC())
 	return append([]verify.VerificationResult(nil), runner.findings...)
+}
+
+func (runner *Runner) verifyFinding(ctx context.Context, spec verify.FindingSpec, session *sess.AgentSession) (verify.VerificationResult, verify.VerificationRecord) {
+	if verifier, ok := runner.config.Verifier.(optionsFindingVerifier); ok {
+		return verifier.VerifyWithEvidenceOptions(ctx, spec, runner.verifyOptions(spec, session))
+	}
+	return runner.config.Verifier.VerifyWithEvidence(ctx, spec)
+}
+
+func (runner *Runner) verifyOptions(spec verify.FindingSpec, session *sess.AgentSession) verify.VerifyOptions {
+	options := verify.VerifyOptions{}
+	if runner == nil || runner.sessionPool == nil {
+		return options
+	}
+	nameA := sess.SessionNameFromIdentity(spec.SessionName, spec.Username, "default")
+	if cached, ok := runner.sessionPool.Get(nameA); ok {
+		options.CookieA = cached.CookieHeader
+		options.CookieNamesA = append([]string(nil), cached.CookieNames...)
+	} else if strings.TrimSpace(spec.LoginURL) != "" {
+		options.OnLoginA = func(result verify.LoginResult) {
+			runner.rememberVerifiedLogin(session, nameA, spec.Username, spec.LoginURL, result)
+		}
+	}
+
+	nameB := sess.SessionNameFromIdentity(spec.SessionNameB, spec.UsernameB, "default_b")
+	if cached, ok := runner.sessionPool.Get(nameB); ok {
+		options.CookieB = cached.CookieHeader
+		options.CookieNamesB = append([]string(nil), cached.CookieNames...)
+	} else if strings.TrimSpace(spec.LoginURLB) != "" {
+		options.OnLoginB = func(result verify.LoginResult) {
+			runner.rememberVerifiedLogin(session, nameB, spec.UsernameB, spec.LoginURLB, result)
+		}
+	}
+	return options
+}
+
+func (runner *Runner) rememberVerifiedLogin(session *sess.AgentSession, name, username, loginURL string, result verify.LoginResult) {
+	if runner == nil || runner.sessionPool == nil || name == "" {
+		return
+	}
+	runner.sessionPool.Put(&sess.AuthSession{
+		Name:             name,
+		Username:         username,
+		LoginURL:         loginURL,
+		CookieHeader:     result.SessionCookieHeader,
+		CookieNames:      append([]string(nil), result.CookieNames...),
+		MeaningfulCookie: result.MeaningfulCookie,
+		LoginStatus:      result.StatusCode,
+		Verified:         result.Verified,
+		CSRFToken:        result.CSRFToken,
+		EstablishedAt:    time.Now().UTC(),
+	})
+	if session != nil {
+		session.Sessions = runner.sessionPool.PublicView()
+	}
 }
 
 func (runner *Runner) persistVerificationEvidence(session *sess.AgentSession, index int, result *verify.VerificationResult, record verify.VerificationRecord) {

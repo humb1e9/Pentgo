@@ -77,6 +77,8 @@ type VerifyOptions struct {
 	CookieNamesA []string
 	CookieB      string
 	CookieNamesB []string
+	OnLoginA     func(LoginResult)
+	OnLoginB     func(LoginResult)
 }
 
 // HTTPVerifier independently collects target responses before scoring them.
@@ -107,31 +109,31 @@ type LoginResult struct {
 // VerificationRecord captures the framework-owned HTTP exchanges used to
 // reach a verification verdict.
 type VerificationRecord struct {
-	Method                string            `json:"method"`
-	PayloadURL            string            `json:"payload_url"`
-	BaselineURL           string            `json:"baseline_url,omitempty"`
-	RequestHeaders        map[string]string `json:"request_headers,omitempty"`
-	RequestBody           string            `json:"request_body,omitempty"`
-	BaselineRequestBody   string            `json:"baseline_request_body,omitempty"`
-	PayloadStatus         int               `json:"payload_status,omitempty"`
-	PayloadResponseBody   string            `json:"payload_response_body,omitempty"`
-	PayloadLocation       string            `json:"payload_location,omitempty"`
-	BaselineStatus        int               `json:"baseline_status,omitempty"`
-	BaselineResponseBody  string            `json:"baseline_response_body,omitempty"`
-	Reproductions         int               `json:"reproductions,omitempty"`
-	ScopeRejected         bool              `json:"scope_rejected,omitempty"`
-	LoginAttempted        bool              `json:"login_attempted,omitempty"`
-	LoginVerified         bool              `json:"login_verified,omitempty"`
-	LoginStatus           int               `json:"login_status,omitempty"`
-	LoginCookieNames      []string          `json:"login_cookie_names,omitempty"`
-	LoginMeaningfulCookie bool              `json:"login_meaningful_cookie,omitempty"`
-	LoginSnippet          string            `json:"login_snippet,omitempty"`
-	LoginBAttempted        bool     `json:"login_b_attempted,omitempty"`
-	LoginBVerified         bool     `json:"login_b_verified,omitempty"`
-	LoginBStatus           int      `json:"login_b_status,omitempty"`
-	LoginBCookieNames      []string `json:"login_b_cookie_names,omitempty"`
-	LoginBMeaningfulCookie bool     `json:"login_b_meaningful_cookie,omitempty"`
-	LoginBSnippet          string   `json:"login_b_snippet,omitempty"`
+	Method                 string            `json:"method"`
+	PayloadURL             string            `json:"payload_url"`
+	BaselineURL            string            `json:"baseline_url,omitempty"`
+	RequestHeaders         map[string]string `json:"request_headers,omitempty"`
+	RequestBody            string            `json:"request_body,omitempty"`
+	BaselineRequestBody    string            `json:"baseline_request_body,omitempty"`
+	PayloadStatus          int               `json:"payload_status,omitempty"`
+	PayloadResponseBody    string            `json:"payload_response_body,omitempty"`
+	PayloadLocation        string            `json:"payload_location,omitempty"`
+	BaselineStatus         int               `json:"baseline_status,omitempty"`
+	BaselineResponseBody   string            `json:"baseline_response_body,omitempty"`
+	Reproductions          int               `json:"reproductions,omitempty"`
+	ScopeRejected          bool              `json:"scope_rejected,omitempty"`
+	LoginAttempted         bool              `json:"login_attempted,omitempty"`
+	LoginVerified          bool              `json:"login_verified,omitempty"`
+	LoginStatus            int               `json:"login_status,omitempty"`
+	LoginCookieNames       []string          `json:"login_cookie_names,omitempty"`
+	LoginMeaningfulCookie  bool              `json:"login_meaningful_cookie,omitempty"`
+	LoginSnippet           string            `json:"login_snippet,omitempty"`
+	LoginBAttempted        bool              `json:"login_b_attempted,omitempty"`
+	LoginBVerified         bool              `json:"login_b_verified,omitempty"`
+	LoginBStatus           int               `json:"login_b_status,omitempty"`
+	LoginBCookieNames      []string          `json:"login_b_cookie_names,omitempty"`
+	LoginBMeaningfulCookie bool              `json:"login_b_meaningful_cookie,omitempty"`
+	LoginBSnippet          string            `json:"login_b_snippet,omitempty"`
 }
 
 // NewHTTPVerifier creates a verifier that does not follow redirects so redirect
@@ -203,6 +205,9 @@ func (verifier *HTTPVerifier) VerifyWithEvidenceOptions(ctx context.Context, spe
 		record.applyLoginOutcome(login)
 	} else if strings.TrimSpace(spec.LoginURL) != "" {
 		login = verifier.verifyLogin(ctx, spec)
+		if opts.OnLoginA != nil {
+			opts.OnLoginA(login)
+		}
 		record.applyLoginOutcome(login)
 	}
 	loginB := LoginResult{}
@@ -211,6 +216,9 @@ func (verifier *HTTPVerifier) VerifyWithEvidenceOptions(ctx context.Context, spe
 		record.applyLoginBOutcome(loginB)
 	} else if strings.TrimSpace(spec.LoginURLB) != "" {
 		loginB = verifier.verifyLoginB(ctx, spec)
+		if opts.OnLoginB != nil {
+			opts.OnLoginB(loginB)
+		}
 		record.applyLoginBOutcome(loginB)
 	}
 	payloadHeaders := cloneStringMap(spec.Headers)
@@ -328,6 +336,9 @@ func (verifier *HTTPVerifier) verifyCredential(ctx context.Context, spec Finding
 		login = reusedLogin(opts.CookieA, opts.CookieNamesA)
 	} else {
 		login = verifier.verifyLogin(ctx, spec)
+		if opts.OnLoginA != nil {
+			opts.OnLoginA(login)
+		}
 	}
 	record.applyLoginOutcome(login)
 	if login.Error == "" {
@@ -697,7 +708,6 @@ func cookieEvidence(cookies []*http.Cookie) ([]string, string) {
 	}
 	return names, strings.Join(values, "; ")
 }
-
 
 // verifyLoginB authenticates identity B (bingo headers_b) using login_*_b fields.
 func (verifier *HTTPVerifier) verifyLoginB(ctx context.Context, spec FindingSpec) LoginResult {

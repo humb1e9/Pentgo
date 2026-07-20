@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -143,6 +146,67 @@ func TestRunnerDoesNotExportFailedDeclaredSession(t *testing.T) {
 	}
 	if !containsTimelineEvent(session.Timeline, "session_failed") {
 		t.Fatalf("timeline = %+v", session.Timeline)
+	}
+}
+
+func TestRunnerReusesSessionPoolAcrossConsolidatedFindings(t *testing.T) {
+	loginPosts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/login":
+			if request.Method == http.MethodGet {
+				_, _ = io.WriteString(writer, "login form")
+				return
+			}
+			loginPosts++
+			http.SetCookie(writer, &http.Cookie{Name: "sid", Value: "pooled", Path: "/"})
+			_, _ = io.WriteString(writer, "dashboard")
+		case "/one", "/two":
+			if !strings.Contains(request.Header.Get("Cookie"), "sid=pooled") {
+				writer.Header().Set("Location", "/login")
+				writer.WriteHeader(http.StatusFound)
+				return
+			}
+			_, _ = io.WriteString(writer, "<div>"+request.URL.Query().Get("q")+"</div>")
+		default:
+			t.Fatalf("path %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := &scriptedClient{responses: []agent.Response{
+		{Content: "```python\nimport os\nprint('evidence')\n```"},
+		{Content: "TASK_COMPLETE"},
+		{Content: "=== PENTGO FINDING ===\n" +
+			"type: xss\nmethod: GET\nurl: " + server.URL + "/one?q=%3Cscript%3Ea%3C%2Fscript%3E\n" +
+			"payload: <script>a</script>\nlogin_url: " + server.URL + "/login\n" +
+			"login_body: username=alice&password=fixture\nusername: alice\nsession_name: user_a\n" +
+			"=== END PENTGO FINDING ===\n" +
+			"=== PENTGO FINDING ===\n" +
+			"type: xss\nmethod: GET\nurl: " + server.URL + "/two?q=%3Cscript%3Eb%3C%2Fscript%3E\n" +
+			"payload: <script>b</script>\nlogin_url: " + server.URL + "/login\n" +
+			"login_body: username=alice&password=fixture\nusername: alice\nsession_name: user_a\n" +
+			"=== END PENTGO FINDING ==="},
+	}}
+	executor := &recordingExecutor{results: []exec.ExecutionResult{{
+		Block:  exec.CodeBlock{Index: 1, Language: exec.LanguagePython},
+		Status: exec.ExecutionSucceeded,
+		Stdout: "evidence\n",
+	}}}
+	config := defaultRunnerConfig()
+	config.Verifier = verify.NewHTTPVerifier(server.Client(), authz.NewScope(hostOf(server.URL), nil, true), 3)
+	runner := NewRunner(client, executor, config, nil, nil)
+	session := sess.NewSession(sess.Target{Canonical: server.URL}, "check target", time.Now().UTC())
+
+	if err := runner.Run(context.Background(), session); err != nil {
+		t.Fatal(err)
+	}
+	findings := runner.ConsolidateAndVerify(context.Background(), session)
+	if len(findings) != 2 || loginPosts != 1 {
+		t.Fatalf("findings/login posts = %+v/%d", findings, loginPosts)
+	}
+	if len(session.Sessions) != 1 || !session.Sessions[0].Verified || session.Sessions[0].Name != "user_a" {
+		t.Fatalf("sessions = %+v", session.Sessions)
 	}
 }
 

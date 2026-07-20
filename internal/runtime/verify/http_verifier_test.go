@@ -686,3 +686,88 @@ func TestVerifyWithEvidenceOptionsReusesCookieWithoutLogin(t *testing.T) {
 		t.Fatalf("record = %+v", record)
 	}
 }
+
+func TestVerifyWithEvidenceOptionsReportsNewLoginToCallback(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/login":
+			if request.Method == http.MethodGet {
+				_, _ = io.WriteString(writer, "login form")
+				return
+			}
+			http.SetCookie(writer, &http.Cookie{Name: "sid", Value: "callback", Path: "/"})
+			_, _ = io.WriteString(writer, "dashboard")
+		case "/feature":
+			if strings.Contains(request.Header.Get("Cookie"), "sid=callback") {
+				_, _ = io.WriteString(writer, "Welcome Admin Dashboard")
+				return
+			}
+			writer.Header().Set("Location", "/login")
+			writer.WriteHeader(http.StatusFound)
+		default:
+			t.Fatalf("path %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	var remembered LoginResult
+	verifier := NewHTTPVerifier(server.Client(), authz.NewScope(hostOf(server.URL), nil, true), 3)
+	_, record := verifier.VerifyWithEvidenceOptions(context.Background(), FindingSpec{
+		VulnType:    VulnAuthBypass,
+		Method:      http.MethodGet,
+		URL:         server.URL + "/feature",
+		BaselineURL: server.URL + "/feature",
+		LoginURL:    server.URL + "/login",
+		LoginBody:   "username=a&password=b",
+	}, VerifyOptions{OnLoginA: func(result LoginResult) { remembered = result }})
+	if !record.LoginVerified || !remembered.Verified || !strings.Contains(remembered.SessionCookieHeader, "sid=callback") {
+		t.Fatalf("record/remembered = %+v/%+v", record, remembered)
+	}
+}
+
+func TestVerifyWithEvidenceOptionsReusesDualSessionIDORCookies(t *testing.T) {
+	loginPosts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/login":
+			if request.Method == http.MethodPost {
+				loginPosts++
+			}
+			writer.WriteHeader(http.StatusInternalServerError)
+		case "/user/2":
+			if strings.Contains(request.Header.Get("Cookie"), "sid=user-a") {
+				_, _ = io.WriteString(writer, `{"id":2,"secret":"victim-data"}`)
+				return
+			}
+			if strings.Contains(request.Header.Get("Cookie"), "sid=user-b") {
+				_, _ = io.WriteString(writer, `{"id":2,"secret":"owner-data"}`)
+				return
+			}
+			writer.WriteHeader(http.StatusForbidden)
+		default:
+			t.Fatalf("path %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	verifier := NewHTTPVerifier(server.Client(), authz.NewScope(hostOf(server.URL), nil, true), 3)
+	result, record := verifier.VerifyWithEvidenceOptions(context.Background(), FindingSpec{
+		VulnType:  VulnIDOR,
+		Method:    http.MethodGet,
+		URL:       server.URL + "/user/2",
+		LoginURL:  server.URL + "/login",
+		LoginURLB: server.URL + "/login",
+		Payload:   "user=2",
+	}, VerifyOptions{
+		CookieA:      "sid=user-a",
+		CookieNamesA: []string{"sid"},
+		CookieB:      "sid=user-b",
+		CookieNamesB: []string{"sid"},
+	})
+	if loginPosts != 0 || !record.LoginVerified || !record.LoginBVerified {
+		t.Fatalf("login posts/record = %d/%+v", loginPosts, record)
+	}
+	if result.Verdict != VerdictVerified && result.Verdict != VerdictLikely {
+		t.Fatalf("result = %+v", result)
+	}
+}

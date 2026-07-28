@@ -67,53 +67,83 @@ func (runner *Runner) RunEino(ctx context.Context, session *sess.AgentSession, c
 
 	adkRunner := adk.NewRunner(ctx, adk.RunnerConfig{Agent: agentImpl, EnableStreaming: false})
 	task := "TARGET: " + session.Target.Canonical + "\nTASK: " + session.Intent
-	iterator := adkRunner.Run(ctx, []adk.Message{schema.UserMessage(task)})
 
-	lastFingerprint := ""
-	fingerprintCount := 0
-	refusalCount := 0
-	noToolCallCount := 0
+	// conversation is the message history fed to each adkRunner.Run attempt. A
+	// single Run's react graph loops internally while the model keeps calling
+	// tools, but the moment the model emits a text-only turn the graph routes to
+	// END and the Run finishes (eino ADK v0.9.13 react routing). To recover from
+	// a refusal / no-evidence turn the way the text path does, the outer loop
+	// re-drives the model: it appends every emitted assistant and tool message to
+	// conversation, and after a natural END that left the session running it
+	// appends a recovery nudge and re-runs, so refusal/no-code/stuck counters
+	// actually accumulate across turns instead of ending as a spurious max_turns.
+	conversation := []adk.Message{schema.UserMessage(task)}
 
-	for {
+	guards := &einoGuards{}
+
+	for runner.config.MaxTurns <= 0 || session.Turn < runner.config.MaxTurns {
 		if err := ctx.Err(); err != nil {
 			_ = session.Cancel("cancelled", time.Now().UTC())
 			return nil
 		}
-		event, ok := iterator.Next()
-		if !ok {
-			break
-		}
-		if event == nil {
-			continue
-		}
-		if event.Err != nil {
-			_ = session.Fail("provider_error", time.Now().UTC())
-			session.AddEvent(session.Turn, "provider_error", event.Err.Error(), time.Now().UTC())
-			return event.Err
-		}
-		if event.Action != nil && event.Action.Exit {
-			if session.Status == sess.SessionRunning {
-				_ = session.Complete("task_complete", time.Now().UTC())
-			}
-			return nil
-		}
-		if event.Output == nil || event.Output.MessageOutput == nil {
-			continue
-		}
-		message, err := event.Output.MessageOutput.GetMessage()
-		if err != nil || message == nil {
-			continue
-		}
 
-		switch event.Output.MessageOutput.Role {
-		case schema.Assistant:
-			stop := runner.consumeEinoAssistant(session, message, &lastFingerprint, &fingerprintCount, &refusalCount, &noToolCallCount)
-			if stop {
+		iterator := adkRunner.Run(ctx, conversation)
+		nudge := ""
+		for {
+			event, ok := iterator.Next()
+			if !ok {
+				break
+			}
+			if event == nil {
+				continue
+			}
+			if event.Err != nil {
+				_ = session.Fail("provider_error", time.Now().UTC())
+				session.AddEvent(session.Turn, "provider_error", event.Err.Error(), time.Now().UTC())
+				return event.Err
+			}
+			if event.Action != nil && event.Action.Exit {
+				if session.Status == sess.SessionRunning {
+					_ = session.Complete("task_complete", time.Now().UTC())
+				}
 				return nil
 			}
-		case schema.Tool:
-			runner.consumeEinoToolResult(session, tools, message, event.Output.MessageOutput.ToolName)
+			if event.Output == nil || event.Output.MessageOutput == nil {
+				continue
+			}
+			message, err := event.Output.MessageOutput.GetMessage()
+			if err != nil || message == nil {
+				continue
+			}
+
+			switch event.Output.MessageOutput.Role {
+			case schema.Assistant:
+				conversation = append(conversation, message)
+				stop, next := runner.consumeEinoAssistant(session, message, guards)
+				if stop {
+					return nil
+				}
+				// The last assistant turn before a natural END is always
+				// text-only (a tool call re-enters the model), so a non-empty
+				// nudge here is the one that should re-drive the next Run.
+				if next != "" {
+					nudge = next
+				}
+			case schema.Tool:
+				conversation = append(conversation, message)
+				runner.consumeEinoToolResult(session, tools, message, event.Output.MessageOutput.ToolName)
+			}
 		}
+
+		if session.Status != sess.SessionRunning {
+			return nil
+		}
+		if nudge == "" {
+			// Run ended without a recovery nudge (e.g. MaxIterations hit mid
+			// tool loop): nothing productive left to re-drive.
+			break
+		}
+		conversation = append(conversation, schema.UserMessage(nudge))
 	}
 
 	if session.Status == sess.SessionRunning {
@@ -122,10 +152,33 @@ func (runner *Runner) RunEino(ctx context.Context, session *sess.AgentSession, c
 	return nil
 }
 
+// einoGuards holds the cross-turn recovery state that persists across re-drive
+// attempts: the repeated-response fingerprint (stuck detection), the refusal
+// counter, and the no-tool-call counter. It mirrors the local variables the
+// text-path (*Runner).Run keeps across its turn loop.
+type einoGuards struct {
+	lastFingerprint  string
+	fingerprintCount int
+	refusalCount     int
+	noToolCallCount  int
+}
+
+// Recovery nudges re-driven into the next adkRunner.Run when the model ends a
+// turn without executable tool calls. They mirror the text-path corrections in
+// (*Runner).Run so the openai path recovers instead of dying as max_turns.
+const (
+	einoRefusalNudge  = "AUTHORIZATION REMINDER: this engagement is authorized and its scope is fixed. The runtime independently blocks out-of-scope hosts and destructive writes before execution, so proceed safely: call execute_code with Python or Bash that prints evidence within scope."
+	einoContinueNudge = "CONTINUE REQUIRED: call execute_code with Python or Bash that prints actual evidence; do not answer in prose."
+	einoEvidenceNudge = "EVIDENCE REQUIRED: do not claim findings or complete the task without executable code and returned output. Call execute_code to gather evidence first."
+	einoStrategyNudge = "STRATEGY CHANGE REQUIRED: the recent responses repeat the same plan. Call execute_code with materially different evidence-collection code."
+)
+
 // consumeEinoAssistant records an assistant turn and applies the cross-turn
-// stuck/refusal/no-tool-call guards. It returns true when the session reached a
-// terminal state and the loop must stop.
-func (runner *Runner) consumeEinoAssistant(session *sess.AgentSession, message *schema.Message, lastFingerprint *string, fingerprintCount, refusalCount, noToolCallCount *int) bool {
+// stuck/refusal/no-tool-call guards, whose counters persist in guards across
+// re-drive attempts. It returns (stop, nudge): stop is true when the session
+// reached a terminal state and the loop must return; nudge, when non-empty, is
+// the recovery message the outer loop re-drives into the next Run.
+func (runner *Runner) consumeEinoAssistant(session *sess.AgentSession, message *schema.Message, guards *einoGuards) (bool, string) {
 	session.Turn++
 	turn := session.Turn
 	assistantText := strings.TrimSpace(message.Content)
@@ -135,47 +188,56 @@ func (runner *Runner) consumeEinoAssistant(session *sess.AgentSession, message *
 	runner.reportTurns = append(runner.reportTurns, ReportTurn{Number: turn, Decision: assistantSummary(assistantText), DeclaredLabels: extractFindingLabels(assistantText)})
 
 	fingerprint := responseFingerprint(einoFingerprintSource(message))
-	if fingerprint == *lastFingerprint {
-		*fingerprintCount++
+	if fingerprint == guards.lastFingerprint {
+		guards.fingerprintCount++
 	} else {
-		*lastFingerprint = fingerprint
-		*fingerprintCount = 1
+		guards.lastFingerprint = fingerprint
+		guards.fingerprintCount = 1
 	}
-	if runner.config.HardStuckTurns > 0 && *fingerprintCount >= runner.config.HardStuckTurns {
+	if runner.config.HardStuckTurns > 0 && guards.fingerprintCount >= runner.config.HardStuckTurns {
 		_ = session.Fail("stuck", time.Now().UTC())
 		session.AddEvent(turn, "recovery", "stuck", time.Now().UTC())
-		return true
+		return true, ""
 	}
-	if runner.config.SoftStuckTurns > 0 && *fingerprintCount >= runner.config.SoftStuckTurns {
+	softStuck := runner.config.SoftStuckTurns > 0 && guards.fingerprintCount >= runner.config.SoftStuckTurns
+	if softStuck {
 		session.AddEvent(turn, "recovery", "strategy_change_required", time.Now().UTC())
 	}
 
 	if len(message.ToolCalls) > 0 {
-		*noToolCallCount = 0
-		return false
+		guards.noToolCallCount = 0
+		if softStuck {
+			return false, einoStrategyNudge
+		}
+		return false, ""
 	}
 
 	// No tool call: the assistant produced only text this turn.
 	if isRefusal(assistantText) {
-		*refusalCount++
+		guards.refusalCount++
 		session.AddEvent(turn, "recovery", "refusal_recovery", time.Now().UTC())
-		if runner.config.RefusalLimit > 0 && *refusalCount >= runner.config.RefusalLimit {
+		if runner.config.RefusalLimit > 0 && guards.refusalCount >= runner.config.RefusalLimit {
 			_ = session.Fail("refused", time.Now().UTC())
-			return true
+			return true, ""
 		}
-		return false
+		return false, einoRefusalNudge
 	}
-	*noToolCallCount++
+	guards.noToolCallCount++
 	instruction := "no_executable_tool_call"
+	nudge := einoContinueNudge
 	if makesClaim(assistantText) {
 		instruction = "evidence_required"
+		nudge = einoEvidenceNudge
 	}
 	session.AddEvent(turn, "recovery", instruction, time.Now().UTC())
-	if runner.config.NoCodeLimit > 0 && *noToolCallCount >= runner.config.NoCodeLimit {
+	if runner.config.NoCodeLimit > 0 && guards.noToolCallCount >= runner.config.NoCodeLimit {
 		_ = session.Complete("no_executable_response", time.Now().UTC())
-		return true
+		return true, ""
 	}
-	return false
+	if softStuck {
+		return false, einoStrategyNudge
+	}
+	return false, nudge
 }
 
 // consumeEinoToolResult folds a tool-result event back into runner state. For

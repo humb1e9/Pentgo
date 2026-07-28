@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/cloudwego/eino/components/model"
 	einoopenai "github.com/cloudwego/eino-ext/components/model/openai"
+	"github.com/cloudwego/eino/components/model"
 )
 
 // NewEinoOpenAIModel 从 PentGo 的 ProviderConfig 构造一个满足 Eino

@@ -45,8 +45,17 @@ type einoToolSet struct {
 	mu             sync.Mutex
 	turn           int
 	hasEvidence    bool
-	resultStash    [][]exec.ExecutionResult // FIFO of per-call redacted results
-	sessionResults []string                 // FIFO of declare_session render text
+	resultStash    []einoExecOutcome // FIFO of per-call redacted results
+	sessionResults []string          // FIFO of declare_session render text
+}
+
+// einoExecOutcome is one execute_code call's redacted results plus whether the
+// authorizer blocked an otherwise-approved block. The event loop pops these in
+// source order and emits the authorization_blocked recovery event the text-path
+// runner emits (runner.go), keeping the timeline contract identical.
+type einoExecOutcome struct {
+	results      []exec.ExecutionResult
+	authzBlocked bool
 }
 
 // executeCodeArgs is the single tool argument surface: the model "writes code"
@@ -83,11 +92,11 @@ const (
 
 // popResults returns and clears the oldest stashed execution-result batch.
 // The event loop calls this on each tool-result event to preserve source order.
-func (ts *einoToolSet) popResults() ([]exec.ExecutionResult, bool) {
+func (ts *einoToolSet) popResults() (einoExecOutcome, bool) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	if len(ts.resultStash) == 0 {
-		return nil, false
+		return einoExecOutcome{}, false
 	}
 	batch := ts.resultStash[0]
 	ts.resultStash = ts.resultStash[1:]
@@ -157,10 +166,12 @@ func (ts *einoToolSet) executeCode(ctx context.Context, args executeCodeArgs) (s
 
 	block := exec.CodeBlock{Index: 1, Language: language, Code: args.Code}
 	preflight := exec.Preflight(block)
+	authzBlocked := false
 	if preflight.Approved {
 		if decision := ts.authorizer.Authorize(preflight.Block, ts.scope); !decision.Allowed {
 			preflight.Approved = false
 			preflight.Rejection = decision.Reason
+			authzBlocked = true
 		}
 	}
 	approved := preflight.Approved
@@ -186,7 +197,7 @@ func (ts *einoToolSet) executeCode(ctx context.Context, args executeCodeArgs) (s
 	}
 
 	ts.mu.Lock()
-	ts.resultStash = append(ts.resultStash, safeResults)
+	ts.resultStash = append(ts.resultStash, einoExecOutcome{results: safeResults, authzBlocked: authzBlocked})
 	if approved {
 		ts.hasEvidence = true
 	}

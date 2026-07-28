@@ -48,8 +48,8 @@ type Dependencies struct {
 	Clock           func() time.Time
 	NewEngagementID func(time.Time) (string, error)
 	NewAgentClient  func(config.AgentConfig) (agent.Client, error)
-	// NewEinoModel 构造 openai 路径的原生 tool-call 模型，驱动 ADK 引擎循环。
-	// 仅在 provider == "openai" 时使用；测试可注入 fake ToolCallingChatModel。
+	// NewEinoModel 构造原生 tool-call 模型，驱动 ADK 引擎循环。openai 与 anthropic
+	// 两个 provider 现在都走此路径；测试可注入 fake ToolCallingChatModel。
 	NewEinoModel func(context.Context, config.AgentConfig) (model.ToolCallingChatModel, error)
 }
 
@@ -142,7 +142,12 @@ func (service *Service) Run(ctx context.Context, request Request, progress func(
 		),
 	}, nil, nil)
 	progress(Event{Message: "Agent engagement started: " + engagementID})
-	if strings.TrimSpace(service.cfg.Agent.Provider) == "openai" {
+	// Both providers now drive the Eino ADK native tool-call loop: openai via the
+	// eino-ext openai model, anthropic via the eino-ext claude model. The
+	// hand-rolled (*Runner).Run text loop is retained only as a fallback for any
+	// provider without a native tool-call eino model.
+	provider := strings.TrimSpace(service.cfg.Agent.Provider)
+	if provider == "openai" || provider == "anthropic" {
 		chatModel, modelErr := service.newEinoModel(ctx)
 		if modelErr != nil {
 			return result, modelErr
@@ -229,20 +234,30 @@ func (service *Service) newAgentClient() (agent.Client, error) {
 	}
 }
 
-// newEinoModel constructs the openai-path native tool-call model for the ADK
-// engagement loop. Tests inject a fake via deps.NewEinoModel; production builds
-// an eino-ext OpenAI ChatModel from the same ProviderConfig newAgentClient uses.
+// newEinoModel constructs the native tool-call model for the ADK engagement
+// loop, branching by provider: openai -> eino-ext OpenAI ChatModel, anthropic ->
+// eino-ext Claude ChatModel. Tests inject a fake via deps.NewEinoModel; production
+// builds from the same ProviderConfig newAgentClient uses.
 func (service *Service) newEinoModel(ctx context.Context) (model.ToolCallingChatModel, error) {
 	if service.deps.NewEinoModel != nil {
 		return service.deps.NewEinoModel(ctx, service.cfg.Agent)
 	}
 	configuration := service.cfg.Agent
-	provider := configuration.OpenAI
+	providerName := strings.TrimSpace(configuration.Provider)
+	var provider config.ModelProviderConfig
+	switch providerName {
+	case "openai":
+		provider = configuration.OpenAI
+	case "anthropic":
+		provider = configuration.Anthropic
+	default:
+		return nil, fmt.Errorf("unsupported agent provider: %s", providerName)
+	}
 	if strings.TrimSpace(provider.Model) == "" {
-		return nil, fmt.Errorf("agent openai model is empty")
+		return nil, fmt.Errorf("agent %s model is empty", providerName)
 	}
 	if strings.TrimSpace(provider.BaseURL) == "" {
-		return nil, fmt.Errorf("agent openai base URL is empty")
+		return nil, fmt.Errorf("agent %s base URL is empty", providerName)
 	}
 	timeout := time.Duration(configuration.RequestTimeoutSeconds) * time.Second
 	if timeout <= 0 {
@@ -256,6 +271,9 @@ func (service *Service) newEinoModel(ctx context.Context) (model.ToolCallingChat
 		ThinkingMode: provider.ThinkingMode,
 	}
 	httpClient := &http.Client{Timeout: timeout}
+	if providerName == "anthropic" {
+		return agent.NewEinoAnthropicModel(ctx, providerConfig, httpClient, nil)
+	}
 	return agent.NewEinoOpenAIModel(ctx, providerConfig, httpClient, nil)
 }
 

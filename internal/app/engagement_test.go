@@ -16,12 +16,15 @@ import (
 	"pentgo/internal/agent"
 	"pentgo/internal/config"
 	sess "pentgo/internal/runtime/session"
+
+	"github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/schema"
 )
 
 func TestServiceUsesFifthModelRequestForFinalReportAfterEmptyConsolidationRetry(t *testing.T) {
+	// Engagement runs on the eino ADK loop; the text client now serves only the
+	// two consolidation attempts (both empty) and the final report.
 	client := &scriptedClient{outcomes: []chatOutcome{
-		{response: agent.Response{Content: "```python\nimport os\nprint('evidence')\n```"}},
-		{response: agent.Response{Content: "TASK_COMPLETE"}},
 		{response: agent.Response{Content: "NO_FINDINGS"}},
 		{response: agent.Response{Content: "NO_FINDINGS"}},
 		{response: agent.Response{Content: "## 执行摘要\n已完成检查。\n"}},
@@ -36,14 +39,14 @@ func TestServiceUsesFifthModelRequestForFinalReportAfterEmptyConsolidationRetry(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(client.requests) != 5 || !strings.Contains(string(body), "# PentGo Agent Report") || !strings.Contains(string(body), "## 已验证发现") || !strings.Contains(string(body), "## 执行摘要") {
+	if len(client.requests) != 3 || !strings.Contains(string(body), "# PentGo Agent Report") || !strings.Contains(string(body), "## 已验证发现") || !strings.Contains(string(body), "## 执行摘要") {
 		t.Fatalf("requests/report = %d/%q", len(client.requests), body)
 	}
-	if !strings.Contains(client.requests[2].SystemPrompt, "PENTGO FINDING") {
-		t.Fatalf("consolidation request = %+v", client.requests[2])
+	if !strings.Contains(client.requests[0].SystemPrompt, "PENTGO FINDING") {
+		t.Fatalf("consolidation request = %+v", client.requests[0])
 	}
-	if !strings.Contains(client.requests[4].Messages[0].Content, "反幻觉审计") {
-		t.Fatalf("report request missing audit: %q", client.requests[4].Messages[0].Content)
+	if !strings.Contains(client.requests[2].Messages[0].Content, "反幻觉审计") {
+		t.Fatalf("report request missing audit: %q", client.requests[2].Messages[0].Content)
 	}
 	if !containsEvent(events, "Generating final report.") || !containsEvent(events, "Final report generated.") {
 		t.Fatalf("events = %q", events)
@@ -51,9 +54,9 @@ func TestServiceUsesFifthModelRequestForFinalReportAfterEmptyConsolidationRetry(
 }
 
 func TestServicePublishesTimelineWhenReportCallFails(t *testing.T) {
+	// Engagement runs on the eino loop; text client serves the two empty
+	// consolidation attempts and the failing report call.
 	client := &scriptedClient{outcomes: []chatOutcome{
-		{response: agent.Response{Content: "```python\nimport os\nprint('evidence')\n```"}},
-		{response: agent.Response{Content: "TASK_COMPLETE"}},
 		{response: agent.Response{Content: "NO_FINDINGS"}},
 		{response: agent.Response{Content: "NO_FINDINGS"}},
 		{err: errors.New("report provider unavailable")},
@@ -68,7 +71,7 @@ func TestServicePublishesTimelineWhenReportCallFails(t *testing.T) {
 	if readErr != nil || !strings.Contains(string(body), "## Execution Timeline") || result.RunError != nil {
 		t.Fatalf("body/readErr/runError = %q/%v/%v", body, readErr, result.RunError)
 	}
-	if len(client.requests) != 5 || !containsEvent(events, "Final report fell back to execution timeline.") {
+	if len(client.requests) != 3 || !containsEvent(events, "Final report fell back to execution timeline.") {
 		t.Fatalf("requests/events = %d/%q", len(client.requests), events)
 	}
 }
@@ -81,9 +84,9 @@ func TestServicePassesFrameworkVerifiedFindingToReport(t *testing.T) {
 	defer target.Close()
 	payloadURL := target.URL + "/?q=%3Cscript%3Ealert(1)%3C%2Fscript%3E"
 	baselineURL := target.URL + "/?q=benign"
+	// Engagement runs on the eino loop; text client serves one consolidation
+	// call (the finding parses, so no retry) and the final report.
 	client := &scriptedClient{outcomes: []chatOutcome{
-		{response: agent.Response{Content: "```python\nimport os\nprint('evidence')\n```"}},
-		{response: agent.Response{Content: "TASK_COMPLETE"}},
 		{response: agent.Response{Content: "=== PENTGO FINDING ===\ntype: xss\nmethod: GET\nurl: " + payloadURL + "\nbaseline_url: " + baselineURL + "\npayload: <script>alert(1)</script>\n=== END PENTGO FINDING ==="}},
 		{response: agent.Response{Content: "## 执行摘要\n已完成检查。\n"}},
 	}}
@@ -96,10 +99,10 @@ func TestServicePassesFrameworkVerifiedFindingToReport(t *testing.T) {
 	if err != nil || result.RunError != nil {
 		t.Fatalf("result/err = %+v/%v", result, err)
 	}
-	if len(client.requests) != 4 {
+	if len(client.requests) != 2 {
 		t.Fatalf("request count = %d", len(client.requests))
 	}
-	reportContext := client.requests[3].Messages[0].Content
+	reportContext := client.requests[1].Messages[0].Content
 	for _, want := range []string{"框架已验证", "VERDICT: VERIFIED", "curl -i -X GET"} {
 		if !strings.Contains(reportContext, want) {
 			t.Fatalf("report context missing %q: %q", want, reportContext)
@@ -148,19 +151,19 @@ func TestServicePublishesSessionPoolPublicViewWithoutSecrets(t *testing.T) {
 	}))
 	defer target.Close()
 
+	// Engagement declares a session then prints the injected cookie env via the
+	// eino ADK loop; text client serves the two empty consolidations and report.
+	eino := &fakeEinoModel{turns: []*schema.Message{
+		einoDeclareSession("user_a", "alice", target.URL+"/login", "username=alice&password=fixture-secret"),
+		einoExec("import os\nprint(os.environ['PENTGO_SESSIONS'])"),
+		einoComplete("session established"),
+	}}
 	client := &scriptedClient{outcomes: []chatOutcome{
-		{response: agent.Response{Content: "=== PENTGO SESSION ===\n" +
-			"name: user_a\nusername: alice\nlogin_url: " + target.URL + "/login\n" +
-			"login_method: POST\n" +
-			"login_body: username=alice&password=fixture-secret\n" +
-			"login_content_type: application/x-www-form-urlencoded\n=== END PENTGO SESSION ===\n" +
-			"```python\nimport os\nprint(os.environ['PENTGO_SESSIONS'])\n```"}},
-		{response: agent.Response{Content: "TASK_COMPLETE"}},
 		{response: agent.Response{Content: "NO_FINDINGS"}},
 		{response: agent.Response{Content: "NO_FINDINGS"}},
 		{response: agent.Response{Content: "## 执行摘要\n本地会话已建立。\n"}},
 	}}
-	service := newTestService(client)
+	service := newTestServiceWithEino(client, eino)
 	result, err := service.Run(context.Background(), Request{
 		Target:     sess.Target{Raw: target.URL, Canonical: target.URL},
 		Intent:     "验证本地会话池",
@@ -214,9 +217,9 @@ func TestServicePublishesAuthenticatedCredentialEvidenceFromLocalServer(t *testi
 	}))
 	defer target.Close()
 
+	// Engagement runs on the eino loop; text client serves one consolidation
+	// (credential finding parses) and the report.
 	client := &scriptedClient{outcomes: []chatOutcome{
-		{response: agent.Response{Content: "```python\nimport os\nprint('evidence')\n```"}},
-		{response: agent.Response{Content: "TASK_COMPLETE"}},
 		{response: agent.Response{Content: "=== PENTGO FINDING ===\ntype: credential\nlogin_url: " + target.URL + "/login\nlogin_body: username=fixture&password=fixture-secret\nusername: fixture\npayload: username=fixture\n=== END PENTGO FINDING ==="}},
 		{response: agent.Response{Content: "## 执行摘要\n本地认证会话已验证。\n"}},
 	}}
@@ -293,9 +296,9 @@ func TestServicePublishesVerifiedPrivilegeEscalationFromLocalServer(t *testing.T
 		"login_url: " + target.URL + "/login\nlogin_body: username=lowpriv&password=low-secret\nusername: lowpriv\n" +
 		"login_url_b: " + target.URL + "/login\nlogin_body_b: username=adminuser&password=admin-secret\nusername_b: adminuser\n" +
 		"payload: path=/admin/panel\n=== END PENTGO FINDING ==="
+	// Engagement runs on the eino loop; text client serves one consolidation
+	// (privesc finding parses) and the report.
 	client := &scriptedClient{outcomes: []chatOutcome{
-		{response: agent.Response{Content: "```python\nimport os\nprint('evidence')\n```"}},
-		{response: agent.Response{Content: "TASK_COMPLETE"}},
 		{response: agent.Response{Content: finding}},
 		{response: agent.Response{Content: "## 执行摘要\n本地垂直越权已验证。\n"}},
 	}}
@@ -345,21 +348,21 @@ func TestServicePublishesVerifiedPrivilegeEscalationFromLocalServer(t *testing.T
 func TestServiceSkipsReportCallForCancelledContext(t *testing.T) {
 	context, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	client := &scriptedClient{outcomes: []chatOutcome{
-		{response: agent.Response{Content: "```python\nimport os\nprint('evidence')\n```"}},
-		{response: agent.Response{Content: "TASK_COMPLETE"}},
-	}, onCall: func(call int) {
-		if call == 2 {
+	// Cancel mid-engagement (during the eino loop). Both consolidation and the
+	// report are guarded on ctx.Err() == nil, so the text client is never called.
+	eino := &fakeEinoModel{turns: einoProbeThenComplete(), onGenerate: func(call int) {
+		if call == 1 {
 			cancel()
 		}
 	}}
-	service := newTestService(client)
+	client := &scriptedClient{outcomes: []chatOutcome{}}
+	service := newTestServiceWithEino(client, eino)
 	var events []string
 	result, err := service.Run(context, validRequest(t), func(event Event) { events = append(events, event.Message) })
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(client.requests) != 2 || result.Artifacts.Markdown == "" || !containsEvent(events, "Final report fell back to execution timeline.") {
+	if len(client.requests) != 0 || result.Artifacts.Markdown == "" || !containsEvent(events, "Final report fell back to execution timeline.") {
 		t.Fatalf("requests/artifacts/events = %d/%+v/%q", len(client.requests), result.Artifacts, events)
 	}
 }
@@ -378,18 +381,22 @@ func TestServiceWiresAuthorizationFromConfig(t *testing.T) {
 	}
 	cfg.Agent.ExecutionTimeoutSeconds = 1
 	cfg.Agent.Provider = "anthropic"
-	responses := []agent.Response{
-		{Content: "```python\nimport requests\nrequests.get('https://evil.example.net/x')\n```"},
-		{Content: "```python\nimport os\nprint('ok')\n```"},
-		{Content: "TASK_COMPLETE"},
-		{Content: "NO_FINDINGS"},
-		{Content: "NO_FINDINGS"},
-		{Content: "## 执行摘要\n已完成检查。\n"},
-	}
+	// The engagement runs on the eino ADK loop: an out-of-scope execute_code that
+	// the authorizer blocks (emitting authorization_blocked, matching the text
+	// path), then an in-scope one, then completion. The executor never runs the
+	// blocked block, so no external request is made.
+	eino := &fakeEinoModel{turns: []*schema.Message{
+		einoExec("import requests\nrequests.get('https://evil.example.net/x')"),
+		einoExec("print('ok')"),
+		einoComplete("engagement complete"),
+	}}
 	dir := t.TempDir()
 	service := NewService(cfg, Dependencies{
 		NewAgentClient: func(config.AgentConfig) (agent.Client, error) {
-			return &sequenceClient{responses: responses}, nil
+			return &sequenceClient{}, nil
+		},
+		NewEinoModel: func(context.Context, config.AgentConfig) (model.ToolCallingChatModel, error) {
+			return eino, nil
 		},
 	})
 	result, err := service.Run(context.Background(), Request{
@@ -415,15 +422,24 @@ func TestServiceWiresAuthorizationFromConfig(t *testing.T) {
 }
 
 func newTestService(client agent.Client) *Service {
-	// These tests drive the text protocol (fenced code + TASK_COMPLETE) through
-	// an injected text client; that is the anthropic path. The openai path now
-	// runs the Eino ADK loop and is exercised by loop package tests.
+	return newTestServiceWithEino(client, &fakeEinoModel{turns: einoProbeThenComplete()})
+}
+
+// newTestServiceWithEino wires a Service whose engagement runs on the injected
+// fake eino model (both provider paths now use the ADK loop) while the text
+// client backs only ConsolidateAndVerify and the final report. Provider is
+// "anthropic" purely so newEinoModel/newAgentClient select a valid branch; the
+// injected deps bypass real model construction.
+func newTestServiceWithEino(client agent.Client, eino *fakeEinoModel) *Service {
 	cfg := config.Default()
 	cfg.Agent.Provider = "anthropic"
 	return NewService(cfg, Dependencies{
 		Clock:           func() time.Time { return time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC) },
 		NewEngagementID: func(time.Time) (string, error) { return "eng-test", nil },
 		NewAgentClient:  func(config.AgentConfig) (agent.Client, error) { return client, nil },
+		NewEinoModel: func(context.Context, config.AgentConfig) (model.ToolCallingChatModel, error) {
+			return eino, nil
+		},
 	})
 }
 
@@ -443,6 +459,78 @@ func containsEvent(events []string, fragment string) bool {
 		}
 	}
 	return false
+}
+
+// fakeEinoModel is a model.ToolCallingChatModel that replays a fixed sequence of
+// assistant messages, one per Generate call, driving the ADK engagement loop
+// without a network model. Both provider paths now run this loop; the injected
+// text scriptedClient below backs only ConsolidateAndVerify and the final report.
+// onGenerate fires before each turn is returned, letting a test cancel mid-run.
+type fakeEinoModel struct {
+	turns      []*schema.Message
+	generated  int
+	onGenerate func(call int)
+}
+
+func (m *fakeEinoModel) Generate(_ context.Context, _ []*schema.Message, _ ...model.Option) (*schema.Message, error) {
+	m.generated++
+	if m.onGenerate != nil {
+		m.onGenerate(m.generated)
+	}
+	if m.generated > len(m.turns) {
+		// Exhausted script: a bare assistant turn routes the react graph to END.
+		return schema.AssistantMessage("(no further action)", nil), nil
+	}
+	return m.turns[m.generated-1], nil
+}
+
+func (m *fakeEinoModel) Stream(_ context.Context, _ []*schema.Message, _ ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+	return nil, errors.New("streaming unsupported in test model")
+}
+
+func (m *fakeEinoModel) WithTools(_ []*schema.ToolInfo) (model.ToolCallingChatModel, error) {
+	return m, nil
+}
+
+// einoToolCall builds an assistant message carrying a single tool call.
+func einoToolCall(toolName, argsJSON string) *schema.Message {
+	return schema.AssistantMessage("", []schema.ToolCall{
+		{ID: toolName + "-call", Function: schema.FunctionCall{Name: toolName, Arguments: argsJSON}},
+	})
+}
+
+// einoExec builds an execute_code tool call running the given python source.
+func einoExec(pythonCode string) *schema.Message {
+	args, _ := json.Marshal(map[string]string{"language": "python", "code": pythonCode})
+	return einoToolCall("execute_code", string(args))
+}
+
+// einoComplete builds the complete_task exit tool call.
+func einoComplete(finalResult string) *schema.Message {
+	args, _ := json.Marshal(map[string]string{"final_result": finalResult})
+	return einoToolCall("complete_task", string(args))
+}
+
+// einoProbeThenComplete is the common engagement: gather one piece of approved
+// evidence, then complete. It satisfies the evidence gate before completion.
+func einoProbeThenComplete() []*schema.Message {
+	return []*schema.Message{
+		einoExec("print('evidence')"),
+		einoComplete("probe complete"),
+	}
+}
+
+// einoDeclareSession builds a declare_session tool call from the given fields.
+func einoDeclareSession(name, username, loginURL, loginBody string) *schema.Message {
+	args, _ := json.Marshal(map[string]string{
+		"name":               name,
+		"username":           username,
+		"login_url":          loginURL,
+		"login_method":       "POST",
+		"login_body":         loginBody,
+		"login_content_type": "application/x-www-form-urlencoded",
+	})
+	return einoToolCall("declare_session", string(args))
 }
 
 type chatOutcome struct {

@@ -247,9 +247,15 @@ func (runner *Runner) consumeEinoAssistant(session *sess.AgentSession, message *
 func (runner *Runner) consumeEinoToolResult(session *sess.AgentSession, tools *einoToolSet, message *schema.Message, toolName string) {
 	switch toolName {
 	case "execute_code":
-		if results, ok := tools.popResults(); ok {
-			runner.recordReportBlocks(results)
-			session.AddEvent(session.Turn, "execution", fmt.Sprintf("%d block(s)", len(results)), time.Now().UTC())
+		if outcome, ok := tools.popResults(); ok {
+			// Emit authorization_blocked before recording results so the timeline
+			// matches the text-path runner (runner.go), which emits it the moment
+			// the authorizer denies an otherwise-approved block.
+			if outcome.authzBlocked {
+				session.AddEvent(session.Turn, "recovery", "authorization_blocked", time.Now().UTC())
+			}
+			runner.recordReportBlocks(outcome.results)
+			session.AddEvent(session.Turn, "execution", fmt.Sprintf("%d block(s)", len(outcome.results)), time.Now().UTC())
 		}
 		runner.history.Append("user", strings.TrimSpace(message.Content))
 	case "declare_session":

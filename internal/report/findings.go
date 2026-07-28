@@ -59,7 +59,7 @@ func renderFindingGroup(builder *strings.Builder, heading string, findings []ver
 		if len(finding.ChecksFailed) > 0 {
 			fmt.Fprintf(builder, "- Checks failed: %s\n", inline(strings.Join(finding.ChecksFailed, "; ")))
 		}
-		if finding.VulnType == verify.VulnCredential || finding.VulnType == verify.VulnIDOR {
+		if finding.VulnType == verify.VulnCredential || finding.VulnType == verify.VulnIDOR || finding.VulnType == verify.VulnPrivEsc {
 			fmt.Fprintf(builder, "- Login verified: %t\n", finding.LoginVerified)
 			if len(finding.LoginCookieNames) > 0 {
 				fmt.Fprintf(builder, "- Session cookies: %s\n", inline(strings.Join(finding.LoginCookieNames, ", ")))
@@ -68,7 +68,7 @@ func renderFindingGroup(builder *strings.Builder, heading string, findings []ver
 				fmt.Fprintf(builder, "- Username: %s\n", inline(finding.Username))
 			}
 		}
-		if finding.VulnType == verify.VulnIDOR {
+		if finding.VulnType == verify.VulnIDOR || finding.VulnType == verify.VulnPrivEsc {
 			fmt.Fprintf(builder, "- Login B verified: %t\n", finding.LoginBVerified)
 			if len(finding.LoginBCookieNames) > 0 {
 				fmt.Fprintf(builder, "- Session B cookies: %s\n", inline(strings.Join(finding.LoginBCookieNames, ", ")))
@@ -77,7 +77,11 @@ func renderFindingGroup(builder *strings.Builder, heading string, findings []ver
 				fmt.Fprintf(builder, "- Username B: %s\n", inline(finding.UsernameB))
 			}
 			if finding.IDORDiffReason != "" {
-				fmt.Fprintf(builder, "- IDOR diff: %s\n", inline(finding.IDORDiffReason))
+				label := "IDOR diff"
+				if finding.VulnType == verify.VulnPrivEsc {
+					label = "Privilege escalation"
+				}
+				fmt.Fprintf(builder, "- %s: %s\n", label, inline(finding.IDORDiffReason))
 			}
 		}
 		builder.WriteString("\n")

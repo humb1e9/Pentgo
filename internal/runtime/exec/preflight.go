@@ -10,8 +10,9 @@ import (
 )
 
 var (
-	placeholderPattern = regexp.MustCompile(`\b(TARGET|HOST|TOKEN|OFFSET|PATCH_BYTE|PAYLOAD|SERIAL)\b`)
-	printOnlyPattern   = regexp.MustCompile(`^print\s*\(`)
+	placeholderPattern  = regexp.MustCompile(`\b(TARGET|HOST|TOKEN|OFFSET|PATCH_BYTE|PAYLOAD|SERIAL)\b`)
+	printOnlyPattern    = regexp.MustCompile(`^print\s*\(`)
+	requestsCallPattern = regexp.MustCompile(`requests\.(?:get|post|put|delete|patch|head|options|request)\s*\(`)
 )
 
 // PreflightResult 是代码执行前的可审计检查与修复结果。
@@ -138,21 +139,68 @@ func addRequestsTimeout(code string) (string, bool) {
 	lines := strings.SplitAfter(code, "\n")
 	changed := false
 	for index, line := range lines {
-		if !strings.Contains(line, "requests.") || !strings.Contains(line, "(") || strings.Contains(line, "timeout=") {
+		if !strings.Contains(line, "requests.") || strings.Contains(line, "timeout=") {
 			continue
 		}
-		closing := strings.LastIndex(line, ")")
-		if closing < 0 {
-			continue
+		matches := requestsCallPattern.FindAllStringIndex(line, -1)
+		for matchIndex := len(matches) - 1; matchIndex >= 0; matchIndex-- {
+			opening := matches[matchIndex][1] - 1
+			closing := matchingCallParen(line, opening)
+			if closing < 0 {
+				continue
+			}
+			separator := ", "
+			if strings.TrimSpace(line[opening+1:closing]) == "" {
+				separator = ""
+			}
+			line = line[:closing] + separator + "timeout=15" + line[closing:]
+			changed = true
 		}
-		separator := ", "
-		if strings.TrimSpace(line[strings.Index(line, "(")+1:closing]) == "" {
-			separator = ""
-		}
-		lines[index] = line[:closing] + separator + "timeout=15" + line[closing:]
-		changed = true
+		lines[index] = line
 	}
 	return strings.Join(lines, ""), changed
+}
+
+// matchingCallParen returns the closing parenthesis belonging to opening. It
+// deliberately scans one physical line only: multi-line calls are left intact.
+func matchingCallParen(line string, opening int) int {
+	if opening < 0 || opening >= len(line) || line[opening] != '(' {
+		return -1
+	}
+	depth := 0
+	var quote byte
+	escaped := false
+	for index := opening; index < len(line); index++ {
+		character := line[index]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if character == '\\' {
+				escaped = true
+				continue
+			}
+			if character == quote {
+				quote = 0
+			}
+			continue
+		}
+		if character == '\'' || character == '"' {
+			quote = character
+			continue
+		}
+		switch character {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return index
+			}
+		}
+	}
+	return -1
 }
 
 func compilePython(code string) error {

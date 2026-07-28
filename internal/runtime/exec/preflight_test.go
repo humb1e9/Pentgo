@@ -5,7 +5,6 @@ import (
 	"testing"
 )
 
-
 func TestPreflightRejectsNonExecutablePython(t *testing.T) {
 	tests := []struct {
 		name string
@@ -40,6 +39,56 @@ func TestPreflightRepairsMissingImportsAndHTTPTimeout(t *testing.T) {
 	}
 	if len(result.Repairs) != 3 || result.OriginalCode != code {
 		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestPreflightAddsTimeoutWithoutBreakingRequestsShapes(t *testing.T) {
+	tests := []struct {
+		name        string
+		code        string
+		contains    string
+		notContains string
+		repaired    bool
+	}{
+		{
+			name:        "session constructor is unchanged",
+			code:        "session = requests.Session()\nresponse = session.get(url)\nprint(response.status_code)\n",
+			notContains: "timeout=15",
+		},
+		{
+			name:     "chained json call",
+			code:     "data = requests.get(url).json()\nprint(data)\n",
+			contains: "requests.get(url, timeout=15).json()",
+			repaired: true,
+		},
+		{
+			name:        "multiline call is unchanged",
+			code:        "response = requests.get(\n    url\n)\nprint(response.status_code)\n",
+			notContains: "timeout=15",
+		},
+		{
+			name:     "post with existing arguments",
+			code:     "response = requests.post(url, data=payload)\nprint(response.status_code)\n",
+			contains: "requests.post(url, data=payload, timeout=15)",
+			repaired: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := Preflight(CodeBlock{Index: 1, Language: LanguagePython, Code: test.code})
+			if !result.Approved {
+				t.Fatalf("result = %+v", result)
+			}
+			if test.contains != "" && !strings.Contains(result.Code, test.contains) {
+				t.Fatalf("repaired code missing %q: %s", test.contains, result.Code)
+			}
+			if test.notContains != "" && strings.Contains(result.Code, test.notContains) {
+				t.Fatalf("repaired code unexpectedly contains %q: %s", test.notContains, result.Code)
+			}
+			if got := strings.Contains(strings.Join(result.Repairs, "\n"), "requests timeout"); got != test.repaired {
+				t.Fatalf("repairs = %+v, timeout repair = %v", result.Repairs, got)
+			}
+		})
 	}
 }
 

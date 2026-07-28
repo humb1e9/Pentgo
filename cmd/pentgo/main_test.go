@@ -92,6 +92,7 @@ func newModelServer(t *testing.T) *httptest.Server {
 		"{\"choices\":[{\"message\":{\"content\":\"```python\\nimport os\\nprint(os.environ['PENTGO_TARGET'])\\n```\"}}]}",
 		`{"choices":[{"message":{"content":"TASK_COMPLETE"}}]}`,
 		`{"choices":[{"message":{"content":"NO_FINDINGS"}}]}`,
+		`{"choices":[{"message":{"content":"NO_FINDINGS"}}]}`,
 		`{"choices":[{"message":{"content":"## 执行摘要\n已完成检查。"}}]}`,
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

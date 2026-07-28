@@ -38,7 +38,11 @@ func TestSystemPromptHasNoForgedAuthorization(t *testing.T) {
 
 func TestSystemPromptExplainsFrameworkSessionPool(t *testing.T) {
 	prompt := basePromptContent()
-	for _, want := range []string{"PENTGO SESSION", "PENTGO_SESSIONS", "PENTGO_SESSION_<name>_COOKIE", "Do not print"} {
+	for _, want := range []string{
+		"PENTGO SESSION", "PENTGO_SESSIONS", "PENTGO_SESSION_<name>_COOKIE", "Do not print",
+		"top-level", "outside", "name", "login_url", "login_method", "login_body", "login_content_type",
+		"POST", "GET", "SESSION RESULT", "NOT proof", "user_a", "user_b",
+	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("system prompt missing %q", want)
 		}

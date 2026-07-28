@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,10 +18,11 @@ import (
 	sess "pentgo/internal/runtime/session"
 )
 
-func TestServiceUsesFourthModelRequestForFinalReport(t *testing.T) {
+func TestServiceUsesFifthModelRequestForFinalReportAfterEmptyConsolidationRetry(t *testing.T) {
 	client := &scriptedClient{outcomes: []chatOutcome{
 		{response: agent.Response{Content: "```python\nimport os\nprint('evidence')\n```"}},
 		{response: agent.Response{Content: "TASK_COMPLETE"}},
+		{response: agent.Response{Content: "NO_FINDINGS"}},
 		{response: agent.Response{Content: "NO_FINDINGS"}},
 		{response: agent.Response{Content: "## 执行摘要\n已完成检查。\n"}},
 	}}
@@ -34,14 +36,14 @@ func TestServiceUsesFourthModelRequestForFinalReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(client.requests) != 4 || !strings.Contains(string(body), "# PentGo Agent Report") || !strings.Contains(string(body), "## 已验证发现") || !strings.Contains(string(body), "## 执行摘要") {
+	if len(client.requests) != 5 || !strings.Contains(string(body), "# PentGo Agent Report") || !strings.Contains(string(body), "## 已验证发现") || !strings.Contains(string(body), "## 执行摘要") {
 		t.Fatalf("requests/report = %d/%q", len(client.requests), body)
 	}
 	if !strings.Contains(client.requests[2].SystemPrompt, "PENTGO FINDING") {
 		t.Fatalf("consolidation request = %+v", client.requests[2])
 	}
-	if !strings.Contains(client.requests[3].Messages[0].Content, "反幻觉审计") {
-		t.Fatalf("report request missing audit: %q", client.requests[3].Messages[0].Content)
+	if !strings.Contains(client.requests[4].Messages[0].Content, "反幻觉审计") {
+		t.Fatalf("report request missing audit: %q", client.requests[4].Messages[0].Content)
 	}
 	if !containsEvent(events, "Generating final report.") || !containsEvent(events, "Final report generated.") {
 		t.Fatalf("events = %q", events)
@@ -52,6 +54,7 @@ func TestServicePublishesTimelineWhenReportCallFails(t *testing.T) {
 	client := &scriptedClient{outcomes: []chatOutcome{
 		{response: agent.Response{Content: "```python\nimport os\nprint('evidence')\n```"}},
 		{response: agent.Response{Content: "TASK_COMPLETE"}},
+		{response: agent.Response{Content: "NO_FINDINGS"}},
 		{response: agent.Response{Content: "NO_FINDINGS"}},
 		{err: errors.New("report provider unavailable")},
 	}}
@@ -65,7 +68,7 @@ func TestServicePublishesTimelineWhenReportCallFails(t *testing.T) {
 	if readErr != nil || !strings.Contains(string(body), "## Execution Timeline") || result.RunError != nil {
 		t.Fatalf("body/readErr/runError = %q/%v/%v", body, readErr, result.RunError)
 	}
-	if len(client.requests) != 4 || !containsEvent(events, "Final report fell back to execution timeline.") {
+	if len(client.requests) != 5 || !containsEvent(events, "Final report fell back to execution timeline.") {
 		t.Fatalf("requests/events = %d/%q", len(client.requests), events)
 	}
 }
@@ -148,9 +151,12 @@ func TestServicePublishesSessionPoolPublicViewWithoutSecrets(t *testing.T) {
 	client := &scriptedClient{outcomes: []chatOutcome{
 		{response: agent.Response{Content: "=== PENTGO SESSION ===\n" +
 			"name: user_a\nusername: alice\nlogin_url: " + target.URL + "/login\n" +
-			"login_body: username=alice&password=fixture-secret\n=== END PENTGO SESSION ===\n" +
+			"login_method: POST\n" +
+			"login_body: username=alice&password=fixture-secret\n" +
+			"login_content_type: application/x-www-form-urlencoded\n=== END PENTGO SESSION ===\n" +
 			"```python\nimport os\nprint(os.environ['PENTGO_SESSIONS'])\n```"}},
 		{response: agent.Response{Content: "TASK_COMPLETE"}},
+		{response: agent.Response{Content: "NO_FINDINGS"}},
 		{response: agent.Response{Content: "NO_FINDINGS"}},
 		{response: agent.Response{Content: "## 执行摘要\n本地会话已建立。\n"}},
 	}}
@@ -256,6 +262,86 @@ func TestServicePublishesAuthenticatedCredentialEvidenceFromLocalServer(t *testi
 	}
 }
 
+func TestServicePublishesVerifiedPrivilegeEscalationFromLocalServer(t *testing.T) {
+	adminBody := `{"id":1,"role":"admin","panel":"secret admin dashboard: all user accounts listed"}`
+	target := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/login":
+			if request.Method == http.MethodGet {
+				_, _ = writer.Write([]byte("login form"))
+				return
+			}
+			body, _ := io.ReadAll(request.Body)
+			if strings.Contains(string(body), "username=lowpriv") {
+				http.SetCookie(writer, &http.Cookie{Name: "sid", Value: "cookie-low", Path: "/"})
+			} else {
+				http.SetCookie(writer, &http.Cookie{Name: "sid", Value: "cookie-high", Path: "/"})
+			}
+			_, _ = writer.Write([]byte("dashboard logout"))
+		case "/admin/panel":
+			// vulnerable: leaks the same admin content to both identities
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(adminBody))
+		default:
+			t.Fatalf("unexpected path %q", request.URL.Path)
+		}
+	}))
+	defer target.Close()
+
+	finding := "=== PENTGO FINDING ===\ntype: privilege_escalation\nmethod: GET\n" +
+		"url: " + target.URL + "/admin/panel\n" +
+		"login_url: " + target.URL + "/login\nlogin_body: username=lowpriv&password=low-secret\nusername: lowpriv\n" +
+		"login_url_b: " + target.URL + "/login\nlogin_body_b: username=adminuser&password=admin-secret\nusername_b: adminuser\n" +
+		"payload: path=/admin/panel\n=== END PENTGO FINDING ==="
+	client := &scriptedClient{outcomes: []chatOutcome{
+		{response: agent.Response{Content: "```python\nimport os\nprint('evidence')\n```"}},
+		{response: agent.Response{Content: "TASK_COMPLETE"}},
+		{response: agent.Response{Content: finding}},
+		{response: agent.Response{Content: "## 执行摘要\n本地垂直越权已验证。\n"}},
+	}}
+	service := newTestService(client)
+	result, err := service.Run(context.Background(), Request{
+		Target:     sess.Target{Raw: target.URL, Canonical: target.URL},
+		Intent:     "验证本地垂直越权",
+		OutputRoot: t.TempDir(),
+	}, nil)
+	if err != nil || result.RunError != nil || len(result.Session.Findings) != 1 {
+		t.Fatalf("result/err = %+v/%v", result, err)
+	}
+	finding0 := result.Session.Findings[0]
+	if finding0.VulnType != "privilege_escalation" || (finding0.Verdict != "VERIFIED" && finding0.Verdict != "LIKELY") {
+		t.Fatalf("privesc finding = %+v", finding0)
+	}
+	if !finding0.LoginVerified || !finding0.LoginBVerified {
+		t.Fatalf("both logins must verify: %+v", finding0)
+	}
+
+	evidence, err := os.ReadFile(filepath.Join(result.Artifacts.Directory, "evidence", "verification-001.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"low-secret", "admin-secret", "cookie-low", "cookie-high"} {
+		if strings.Contains(string(evidence), secret) {
+			t.Fatalf("evidence leaked %q: %s", secret, evidence)
+		}
+	}
+
+	reportBody, err := os.ReadFile(result.Artifacts.Markdown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"PRIVILEGE_ESCALATION", "Login verified: true", "Login B verified: true"} {
+		if !strings.Contains(string(reportBody), want) {
+			t.Fatalf("report missing %q: %s", want, reportBody)
+		}
+	}
+	for _, secret := range []string{"low-secret", "admin-secret", "cookie-low", "cookie-high"} {
+		if strings.Contains(string(reportBody), secret) {
+			t.Fatalf("report leaked %q: %s", secret, reportBody)
+		}
+	}
+}
+
 func TestServiceSkipsReportCallForCancelledContext(t *testing.T) {
 	context, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -295,6 +381,7 @@ func TestServiceWiresAuthorizationFromConfig(t *testing.T) {
 		{Content: "```python\nimport requests\nrequests.get('https://evil.example.net/x')\n```"},
 		{Content: "```python\nimport os\nprint('ok')\n```"},
 		{Content: "TASK_COMPLETE"},
+		{Content: "NO_FINDINGS"},
 		{Content: "NO_FINDINGS"},
 		{Content: "## 执行摘要\n已完成检查。\n"},
 	}

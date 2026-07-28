@@ -23,6 +23,14 @@ func ParseFindingSpecs(text string) []FindingSpec {
 		if !knownVulnType(spec.VulnType) {
 			continue
 		}
+		if spec.VulnType == VulnPrivEsc {
+			// Vertical privesc compares two distinct identities. Reject a spec
+			// declaring the same username on both sides so an identical-account
+			// A/B pair can never trivially "leak" its own page to itself.
+			if u := strings.TrimSpace(spec.Username); u != "" && u == strings.TrimSpace(spec.UsernameB) {
+				continue
+			}
+		}
 		if spec.VulnType == VulnCredential {
 			if strings.TrimSpace(spec.LoginURL) == "" {
 				continue
@@ -134,7 +142,7 @@ func parseFindingSpec(block string) FindingSpec {
 
 func knownVulnType(vulnType VulnType) bool {
 	switch vulnType {
-	case VulnSQLI, VulnXSS, VulnLFI, VulnRCE, VulnAuthBypass, VulnCredential, VulnIDOR, VulnUpload, VulnOpenRedirect:
+	case VulnSQLI, VulnXSS, VulnLFI, VulnRCE, VulnAuthBypass, VulnCredential, VulnIDOR, VulnUpload, VulnOpenRedirect, VulnPrivEsc:
 		return true
 	default:
 		return false

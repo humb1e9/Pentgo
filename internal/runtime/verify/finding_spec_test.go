@@ -5,7 +5,6 @@ import (
 	"testing"
 )
 
-
 func TestParseFindingSpecsParsesGETSpec(t *testing.T) {
 	specs := ParseFindingSpecs(`
 === PENTGO FINDING ===
@@ -176,5 +175,46 @@ payload: user=2
 	spec := specs[0]
 	if spec.VulnType != VulnIDOR || spec.URL != "https://target.example/user/2" || spec.LoginURL == "" || spec.LoginURLB == "" || spec.UsernameB != "userB" || spec.LoginMethodB != http.MethodPost {
 		t.Fatalf("spec = %+v", spec)
+	}
+}
+
+func TestParseFindingSpecsParsesPrivEscDualLoginFields(t *testing.T) {
+	specs := ParseFindingSpecs(`
+=== PENTGO FINDING ===
+type: privilege_escalation
+method: GET
+url: https://target.example/admin/users
+login_url: https://target.example/login
+login_body: username=lowpriv&password=a
+username: lowpriv
+login_url_b: https://target.example/login
+login_body_b: username=adminuser&password=b
+username_b: adminuser
+payload: path=/admin/users
+=== END PENTGO FINDING ===`)
+	if len(specs) != 1 {
+		t.Fatalf("spec count = %d, specs = %+v", len(specs), specs)
+	}
+	spec := specs[0]
+	if spec.VulnType != VulnPrivEsc || spec.URL != "https://target.example/admin/users" || spec.LoginURL == "" || spec.LoginURLB == "" || spec.Username != "lowpriv" || spec.UsernameB != "adminuser" {
+		t.Fatalf("spec = %+v", spec)
+	}
+}
+
+func TestParseFindingSpecsRejectsPrivEscWithSameUsername(t *testing.T) {
+	specs := ParseFindingSpecs(`
+=== PENTGO FINDING ===
+type: privilege_escalation
+method: GET
+url: https://target.example/admin/users
+login_url: https://target.example/login
+login_body: username=same&password=a
+username: same
+login_url_b: https://target.example/login
+login_body_b: username=same&password=b
+username_b: same
+=== END PENTGO FINDING ===`)
+	if len(specs) != 0 {
+		t.Fatalf("same-username privesc must be dropped: %+v", specs)
 	}
 }

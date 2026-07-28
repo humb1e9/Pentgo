@@ -33,6 +33,7 @@ const (
 	VulnIDOR         VulnType = "idor"
 	VulnUpload       VulnType = "upload"
 	VulnOpenRedirect VulnType = "open_redirect"
+	VulnPrivEsc      VulnType = "privilege_escalation"
 )
 
 var (
@@ -41,48 +42,55 @@ var (
 	lfiSignature    = regexp.MustCompile(`(?i)root:x:0:0:|\[drivers\]|<\?php|define\s*\(`)
 	rceSignature    = regexp.MustCompile(`(?i)uid=\d+\(|volume serial number|nt authority\\system`)
 	adminSignature  = regexp.MustCompile(`(?i)\badmin\b|administrator|dashboard`)
+	// privilegedContentSignature is stricter than adminSignature: the vertical
+	// privesc gate must not treat a bare UI word ("dashboard") — which every
+	// logged-in user legitimately has — as proof a resource is privileged.
+	// It requires an administrative context (admin + area word, user-account
+	// management, roles/permissions, superuser), so a benign shared page never
+	// clears the "baseline is privileged" gate and false-positives as a leak.
+	privilegedContentSignature = regexp.MustCompile(`(?i)admin(?:istrator|istration)?\s+(?:panel|dashboard|console|area|settings|users?|accounts?)|\ball user accounts?\b|manage users|user management|\brole["'\s:=]|\bpermissions?\b|superuser`)
 	uploadSignature = regexp.MustCompile(`(?i)"success"\s*:\s*true|file.*uploaded|\.(?:php|jsp|asp|aspx)(?:[?/'"]|$)`)
 )
 
 // Evidence is the response data captured by a framework-owned verifier.
 type Evidence struct {
-	VulnType           VulnType
-	Payload            string
-	ResponseBody       string
-	BaselineBody       string
-	LocationHeader     string
-	TargetHost         string
-	StatusCode         int
-	BaselineStatus     int
-	ReproductionCount  int
-	LoginVerified      bool
-	DualLoginVerified  bool // bingo two-user mode: both A and B sessions established
-	IDORDiffReason     string
+	VulnType          VulnType
+	Payload           string
+	ResponseBody      string
+	BaselineBody      string
+	LocationHeader    string
+	TargetHost        string
+	StatusCode        int
+	BaselineStatus    int
+	ReproductionCount int
+	LoginVerified     bool
+	DualLoginVerified bool // bingo two-user mode: both A and B sessions established
+	IDORDiffReason    string
 }
 
 // VerificationResult is the deterministic result sent to the report pipeline.
 type VerificationResult struct {
-	Verdict                 Verdict  `json:"verdict"`
-	VulnType                VulnType `json:"vuln_type"`
-	Confidence              float64  `json:"confidence"`
-	ChecksPassed            []string `json:"checks_passed,omitempty"`
-	ChecksFailed            []string `json:"checks_failed,omitempty"`
-	Summary                 string   `json:"summary"`
-	Curl                    string   `json:"curl,omitempty"`
-	EvidencePath            string   `json:"evidence_path,omitempty"`
-	LoginAttempted          bool     `json:"login_attempted,omitempty"`
-	LoginVerified           bool     `json:"login_verified,omitempty"`
-	LoginStatus             int      `json:"login_status,omitempty"`
-	LoginCookieNames        []string `json:"login_cookie_names,omitempty"`
-	LoginMeaningfulCookie   bool     `json:"login_meaningful_cookie,omitempty"`
-	Username                string   `json:"username,omitempty"`
-	LoginBAttempted         bool     `json:"login_b_attempted,omitempty"`
-	LoginBVerified          bool     `json:"login_b_verified,omitempty"`
-	LoginBStatus            int      `json:"login_b_status,omitempty"`
-	LoginBCookieNames       []string `json:"login_b_cookie_names,omitempty"`
-	LoginBMeaningfulCookie  bool     `json:"login_b_meaningful_cookie,omitempty"`
-	UsernameB               string   `json:"username_b,omitempty"`
-	IDORDiffReason          string   `json:"idor_diff_reason,omitempty"`
+	Verdict                Verdict  `json:"verdict"`
+	VulnType               VulnType `json:"vuln_type"`
+	Confidence             float64  `json:"confidence"`
+	ChecksPassed           []string `json:"checks_passed,omitempty"`
+	ChecksFailed           []string `json:"checks_failed,omitempty"`
+	Summary                string   `json:"summary"`
+	Curl                   string   `json:"curl,omitempty"`
+	EvidencePath           string   `json:"evidence_path,omitempty"`
+	LoginAttempted         bool     `json:"login_attempted,omitempty"`
+	LoginVerified          bool     `json:"login_verified,omitempty"`
+	LoginStatus            int      `json:"login_status,omitempty"`
+	LoginCookieNames       []string `json:"login_cookie_names,omitempty"`
+	LoginMeaningfulCookie  bool     `json:"login_meaningful_cookie,omitempty"`
+	Username               string   `json:"username,omitempty"`
+	LoginBAttempted        bool     `json:"login_b_attempted,omitempty"`
+	LoginBVerified         bool     `json:"login_b_verified,omitempty"`
+	LoginBStatus           int      `json:"login_b_status,omitempty"`
+	LoginBCookieNames      []string `json:"login_b_cookie_names,omitempty"`
+	LoginBMeaningfulCookie bool     `json:"login_b_meaningful_cookie,omitempty"`
+	UsernameB              string   `json:"username_b,omitempty"`
+	IDORDiffReason         string   `json:"idor_diff_reason,omitempty"`
 }
 
 // Score applies bingo-style deterministic, reproducibility, causal, narrow-
@@ -94,7 +102,7 @@ func Score(evidence Evidence) VerificationResult {
 	if matched, detail := deterministicCheck(evidence); matched {
 		confidence += 0.4
 		result.ChecksPassed = append(result.ChecksPassed, "P5 deterministic: "+detail)
-		if evidence.VulnType == VulnIDOR {
+		if evidence.VulnType == VulnIDOR || evidence.VulnType == VulnPrivEsc {
 			result.IDORDiffReason = detail
 		}
 	} else {
@@ -108,7 +116,9 @@ func Score(evidence Evidence) VerificationResult {
 		result.ChecksFailed = append(result.ChecksFailed, "P1 reproduction count below 3")
 	}
 
-	if evidence.BaselineBody == "" {
+	if evidence.VulnType == VulnPrivEsc {
+		confidence += scorePrivEscSimilarity(evidence, &result)
+	} else if evidence.BaselineBody == "" {
 		result.ChecksFailed = append(result.ChecksFailed, "P2 no baseline")
 	} else if evidence.ResponseBody == "" {
 		result.ChecksFailed = append(result.ChecksFailed, "P2 no response body")
@@ -199,21 +209,29 @@ func deterministicCheck(evidence Evidence) (bool, string) {
 		}
 		return false, "login not verified"
 	case VulnIDOR:
-		// bingo tools/idor_scanner.py: dual identity + meaningful response diff
 		if evidence.StatusCode != 200 && evidence.StatusCode != 201 && evidence.StatusCode != 206 {
 			return false, "idor payload status not accessible"
 		}
-		differs, reason := ResponseDiffers(evidence.BaselineBody, evidence.ResponseBody)
-		if !differs {
-			return false, "idor no meaningful response diff: " + reason
-		}
 		if evidence.DualLoginVerified {
-			return true, "dual-session idor diff: " + reason
+			shared, reason := SharedIdentityFields(evidence.ResponseBody, evidence.BaselineBody)
+			if shared {
+				return true, "dual-session idor identity leak: " + reason
+			}
+			return false, "dual-session no shared identity: " + reason
 		}
-		if evidence.LoginVerified {
-			return true, "authenticated idor diff: " + reason
+		return false, "idor single-session not deterministic (needs dual-session identity overlap)"
+	case VulnPrivEsc:
+		// Vertical privilege escalation: a low-privilege session reaching the
+		// same privileged content a high-privilege session sees. Requires both
+		// identities verified so a single-session declaration can never pass P5.
+		if !evidence.DualLoginVerified {
+			return false, "privesc requires both low-priv and high-priv sessions verified"
 		}
-		return true, "idor response diff: " + reason
+		leaked, reason := PrivilegedContentLeaked(evidence.StatusCode, evidence.ResponseBody, evidence.BaselineBody)
+		if !leaked {
+			return false, "no privileged content leaked to low-priv session: " + reason
+		}
+		return true, "vertical privesc: " + reason
 	case VulnUpload:
 		if newMatch(uploadSignature) {
 			return true, "upload success signature"
@@ -313,4 +331,123 @@ func tryJSONMap(body string) (map[string]any, bool) {
 		return nil, false
 	}
 	return m, true
+}
+
+// SharedIdentityFields confirms that two JSON views describe the same object.
+// Horizontal IDOR needs this similarity signal: different user records alone
+// are expected behavior and therefore not deterministic vulnerability proof.
+func SharedIdentityFields(bodyA, bodyB string) (bool, string) {
+	first, firstOK := tryJSONMap(bodyA)
+	second, secondOK := tryJSONMap(bodyB)
+	if !firstOK || !secondOK {
+		return false, "non_json_bodies"
+	}
+	for _, key := range []string{"id", "user_id", "email", "username", "name", "uid", "userId"} {
+		firstValue, firstPresent := first[key]
+		secondValue, secondPresent := second[key]
+		if firstPresent && secondPresent && fmt.Sprint(firstValue) == fmt.Sprint(secondValue) {
+			return true, "shared_identity_" + key + ": " + fmt.Sprint(firstValue)
+		}
+	}
+	return false, "no_shared_identity_fields"
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// PrivilegedContentLeaked is the mirror image of ResponseDiffers for vertical
+// privilege escalation: the vuln signal is SIMILARITY (a low-privilege session
+// reaching the same privileged content a high-privilege session sees), gated on
+// the high-privilege baseline first proving the resource is actually privileged
+// so a public/shared page never scores. bodyLow is the low-priv (attacker)
+// response; bodyHigh is the verified high-priv (admin) baseline.
+func PrivilegedContentLeaked(statusLow int, bodyLow, bodyHigh string) (bool, string) {
+	if statusLow != 200 && statusLow != 201 && statusLow != 206 {
+		return false, "low_priv_blocked"
+	}
+	if len(bodyHigh) < 50 || len(bodyLow) < 50 {
+		return false, "insufficient_body"
+	}
+	if !privilegedContentSignature.MatchString(bodyHigh) && !privilegedJSONSignature(bodyHigh) {
+		return false, "baseline_not_privileged"
+	}
+	if ja, okA := tryJSONMap(bodyHigh); okA {
+		if jb, okB := tryJSONMap(bodyLow); okB {
+			for _, key := range []string{"id", "user_id", "role", "email", "username", "name", "uid", "userId"} {
+				va, hasA := ja[key]
+				vb, hasB := jb[key]
+				if hasA && hasB && fmt.Sprint(va) == fmt.Sprint(vb) {
+					return true, "shared_privileged_field_" + key + ": " + fmt.Sprint(vb)
+				}
+			}
+			return false, "no_shared_privileged_field"
+		}
+	}
+	ratio := float64(len(bodyLow)) / float64(maxInt(len(bodyHigh), 1))
+	if ratio < 0.5 || ratio > 2.0 {
+		return false, "length_mismatch"
+	}
+	if sharedPrivilegedToken(bodyLow, bodyHigh) {
+		return true, "shared_privileged_content"
+	}
+	return false, "no_shared_privileged_content"
+}
+
+// privilegedJSONSignature reports whether a JSON body carries an administrative
+// role/flag, used to confirm the high-priv baseline is genuinely privileged.
+func privilegedJSONSignature(body string) bool {
+	m, ok := tryJSONMap(body)
+	if !ok {
+		return false
+	}
+	for _, key := range []string{"role", "isAdmin", "is_admin", "admin"} {
+		if v, present := m[key]; present {
+			switch strings.ToLower(fmt.Sprint(v)) {
+			case "true", "admin", "administrator", "root", "superuser":
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// sharedPrivilegedToken finds a window around the high-priv baseline's
+// privileged-content signature and checks it also appears in the low-priv body,
+// proving both render the same privileged view rather than two independent
+// pages that each merely mention an administrative word.
+func sharedPrivilegedToken(bodyLow, bodyHigh string) bool {
+	const window = 40
+	loc := privilegedContentSignature.FindStringIndex(bodyHigh)
+	if loc == nil {
+		return false
+	}
+	start := maxInt(loc[0]-window/2, 0)
+	end := minInt(start+window, len(bodyHigh))
+	snippet := bodyHigh[start:end]
+	if strings.TrimSpace(snippet) == "" {
+		return false
+	}
+	return strings.Contains(bodyLow, snippet)
+}
+
+// scorePrivEscSimilarity is the P2 analogue for vertical privilege escalation:
+// the causal signal is a low-priv response that MATCHES the high-priv baseline's
+// privileged content, gated on both sessions being verified. It mirrors P2's
+// 0.2 weight with the opposite polarity from every other vulnerability type.
+func scorePrivEscSimilarity(evidence Evidence, result *VerificationResult) float64 {
+	if !evidence.DualLoginVerified {
+		result.ChecksFailed = append(result.ChecksFailed, "P2 privesc requires dual-session verification")
+		return 0
+	}
+	leaked, reason := PrivilegedContentLeaked(evidence.StatusCode, evidence.ResponseBody, evidence.BaselineBody)
+	if !leaked {
+		result.ChecksFailed = append(result.ChecksFailed, "P2 no privileged-content overlap: "+reason)
+		return 0
+	}
+	result.ChecksPassed = append(result.ChecksPassed, "P2 privileged-content overlap: "+reason)
+	return 0.2
 }

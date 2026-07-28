@@ -216,8 +216,15 @@ func (runner *Runner) Run(ctx context.Context, session *sess.AgentSession) error
 			session.AddEvent(turn, "recovery", "strategy_change_required", time.Now().UTC())
 		}
 
+		declarations := ParseSessionDeclarations(assistantText)
+		if declarations.HasViolations() {
+			session.AddEvent(turn, "session_protocol_rejected", "invalid_session_declaration", time.Now().UTC())
+			runner.history.Append("user", RenderSessionProtocolCorrection(declarations))
+			continue
+		}
+
 		skillHandled := runner.loadSkills(assistantText, loadedSkills, runner.history, session, turn)
-		sessionHandled := runner.establishDeclaredSessions(ctx, assistantText, session, turn)
+		sessionHandled := runner.establishDeclaredSessions(ctx, declarations.Specs, session, turn)
 		blocks := exec.ExtractCodeBlocks(assistantText)
 		if len(blocks) == 0 {
 			if isRefusal(assistantText) {
@@ -368,7 +375,7 @@ baseline_url: https://target.example/path?payload=benign
 payload: payload=value
 description: concise evidence-backed claim
 === END PENTGO FINDING ===
-Use only supported types: sqli, xss, lfi, rce, auth_bypass, credential, idor, upload, open_redirect.
+Use only supported types: sqli, xss, lfi, rce, auth_bypass, credential, idor, upload, open_redirect, privilege_escalation.
 For a credential finding, declare the observed login flow in the block:
 type: credential
 login_url: https://target.example/login
@@ -387,7 +394,21 @@ username: userA
 login_url_b: https://target.example/login
 login_body_b: username=userB&password=observed
 username_b: userB
-The framework logs in as A for the payload request and as B for the baseline (same URL when baseline_url is omitted), then scores a meaningful response diff. Declare login endpoints and credentials only when they appear in returned execution evidence; never infer or invent them. Output no block when no evidence-backed candidate exists. Do not output code or prose outside the blocks.`
+The framework logs in as A for the payload request and as B for the baseline (same URL when baseline_url is omitted), then scores a meaningful response diff.
+For vertical privilege_escalation (two-user mode), declare the low-privilege attacker as the primary session and the high-privilege identity as session B, targeting the same protected URL:
+type: privilege_escalation
+method: GET
+url: https://target.example/admin/users
+login_url: https://target.example/login
+login_body: username=lowpriv&password=observed
+username: lowpriv
+login_url_b: https://target.example/login
+login_body_b: username=adminuser&password=observed
+username_b: adminuser
+The framework logs in as the low-privilege user for the payload request and as the high-privilege user for the baseline (same URL when baseline_url is omitted), then verifies only if the low-privilege session actually reached the resource and its response shares privileged content with the high-privilege baseline. Use distinct usernames for the two identities.
+Declare login endpoints and credentials only when they appear in returned execution evidence; never infer or invent them. Output no block when no evidence-backed candidate exists. Do not output code or prose outside the blocks.`
+
+const consolidationCorrection = "CONSOLIDATION CORRECTION: no === PENTGO FINDING === block was detected. Output only structured finding blocks; prose is ignored. If no evidence-backed candidate exists, output no block."
 
 // ConsolidateAndVerify asks for structured declarations once an engagement is
 // done, then delegates each final verdict to the framework verifier.
@@ -404,6 +425,19 @@ func (runner *Runner) ConsolidateAndVerify(ctx context.Context, session *sess.Ag
 		return nil
 	}
 	specs := verify.ParseFindingSpecs(response.Content)
+	if len(specs) == 0 {
+		runner.history.Append("user", consolidationCorrection)
+		response, err = runner.chat(ctx, agent.Request{SystemPrompt: findingConsolidationSystemPrompt, Messages: runner.history.Messages()})
+		if err != nil {
+			session.AddEvent(session.Turn, "verification_consolidation_error", err.Error(), time.Now().UTC())
+			return nil
+		}
+		specs = verify.ParseFindingSpecs(response.Content)
+		if len(specs) == 0 {
+			session.AddEvent(session.Turn, "verification_consolidation_empty", "model produced no parseable finding blocks after retry", time.Now().UTC())
+			return nil
+		}
+	}
 	if len(specs) > runner.config.MaxFindings {
 		specs = specs[:runner.config.MaxFindings]
 	}

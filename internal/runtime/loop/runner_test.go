@@ -58,7 +58,9 @@ func TestRunnerEstablishesDeclaredSessionBeforeExecutingBlocks(t *testing.T) {
 			"role: user\n" +
 			"username: alice\n" +
 			"login_url: http://fixture.test/login\n" +
+			"login_method: POST\n" +
 			"login_body: username=alice&password=fixture-secret\n" +
+			"login_content_type: application/x-www-form-urlencoded\n" +
 			"=== END PENTGO SESSION ===\n" +
 			"```python\n" +
 			"import os\n" +
@@ -113,13 +115,63 @@ func TestRunnerEstablishesDeclaredSessionBeforeExecutingBlocks(t *testing.T) {
 	}
 }
 
+func TestRunnerRejectsInvalidSessionDeclarationBeforeExecution(t *testing.T) {
+	client := &scriptedClient{responses: []agent.Response{
+		{Content: "=== PENTGO SESSION ===\n" +
+			"username: alice\n" +
+			"login_url: http://fixture.test/login\n" +
+			"login_method: POST\n" +
+			"login_body: username=alice&password=fixture-secret\n" +
+			"login_content_type: application/x-www-form-urlencoded\n" +
+			"=== END PENTGO SESSION ===\n```python\nprint('must not run')\n```"},
+		{Content: "```python\nprint('corrected')\n```"},
+		{Content: "TASK_COMPLETE"},
+		{Content: "TASK_COMPLETE"},
+		{Content: "TASK_COMPLETE"},
+		{Content: "TASK_COMPLETE"},
+		{Content: "TASK_COMPLETE"},
+		{Content: "TASK_COMPLETE"},
+	}}
+	verifier := &recordingSessionVerifier{}
+	executor := &recordingExecutor{results: []exec.ExecutionResult{{
+		Block:  exec.CodeBlock{Index: 1, Language: exec.LanguagePython},
+		Status: exec.ExecutionSucceeded,
+		Stdout: "corrected\n",
+	}}}
+	config := defaultRunnerConfig()
+	config.MaxTurns = 3
+	config.Verifier = verifier
+	runner := NewRunner(client, executor, config, nil, nil)
+	session := sess.NewSession(sess.Target{Canonical: "http://fixture.test"}, "check target", time.Now().UTC())
+
+	if err := runner.Run(context.Background(), session); err != nil {
+		t.Fatal(err)
+	}
+	if len(verifier.loginSpecs) != 0 || len(executor.inputs) != 1 {
+		t.Fatalf("login specs/execution inputs = %+v/%+v", verifier.loginSpecs, executor.inputs)
+	}
+	if !containsTimelineEvent(session.Timeline, "session_protocol_rejected") {
+		t.Fatalf("timeline = %+v", session.Timeline)
+	}
+	if !containsMessageFragment(client.requests[1].Messages, "user", "missing_session_field: name") {
+		t.Fatalf("correction missing: %+v", client.requests[1].Messages)
+	}
+	for _, message := range client.requests[1].Messages {
+		if message.Role == "user" && strings.Contains(message.Content, "PENTGO SESSION PROTOCOL ERROR") && strings.Contains(message.Content, "fixture-secret") {
+			t.Fatalf("correction leaked secret: %+v", client.requests[1].Messages)
+		}
+	}
+}
+
 func TestRunnerDoesNotExportFailedDeclaredSession(t *testing.T) {
 	client := &scriptedClient{responses: []agent.Response{
 		{Content: "=== PENTGO SESSION ===\n" +
 			"name: user_a\n" +
 			"username: alice\n" +
 			"login_url: http://fixture.test/login\n" +
+			"login_method: POST\n" +
 			"login_body: username=alice&password=wrong\n" +
+			"login_content_type: application/x-www-form-urlencoded\n" +
 			"=== END PENTGO SESSION ===\n" +
 			"```python\nimport os\nprint('probe')\n```"},
 		{Content: "TASK_COMPLETE"},
@@ -532,6 +584,52 @@ payload: id=1%27
 	}
 }
 
+func TestRunnerRetriesConsolidationAfterProseResponse(t *testing.T) {
+	client := &scriptedClient{responses: []agent.Response{
+		{Content: "The returned evidence confirms reflected XSS."},
+		{Content: `
+=== PENTGO FINDING ===
+type: xss
+method: GET
+url: https://example.com/?q=payload
+payload: payload
+=== END PENTGO FINDING ===`},
+	}}
+	verifier := &recordingFindingVerifier{results: []verify.VerificationResult{{Verdict: verify.VerdictVerified, VulnType: verify.VulnXSS}}}
+	config := defaultRunnerConfig()
+	config.Verifier = verifier
+	runner := NewRunner(client, &recordingExecutor{}, config, nil, nil)
+	runner.history = NewHistory("https://example.com", "check target")
+	session := sess.NewSession(sess.Target{Canonical: "https://example.com"}, "check target", time.Now().UTC())
+	session.Status = sess.SessionDone
+
+	findings := runner.ConsolidateAndVerify(context.Background(), session)
+	if len(findings) != 1 || len(verifier.specs) != 1 || len(client.requests) != 2 {
+		t.Fatalf("findings/specs/requests = %+v/%d/%d", findings, len(verifier.specs), len(client.requests))
+	}
+	if !containsMessageFragment(client.requests[1].Messages, "user", "CONSOLIDATION CORRECTION") {
+		t.Fatalf("retry request missing correction: %+v", client.requests[1].Messages)
+	}
+}
+
+func TestRunnerRecordsEmptyConsolidationAfterSecondProseResponse(t *testing.T) {
+	client := &scriptedClient{responses: []agent.Response{
+		{Content: "The evidence is sufficient but I will summarize it in prose."},
+		{Content: "The candidate remains likely vulnerable."},
+	}}
+	config := defaultRunnerConfig()
+	config.Verifier = &recordingFindingVerifier{}
+	runner := NewRunner(client, &recordingExecutor{}, config, nil, nil)
+	runner.history = NewHistory("https://example.com", "check target")
+	session := sess.NewSession(sess.Target{Canonical: "https://example.com"}, "check target", time.Now().UTC())
+	session.Status = sess.SessionDone
+
+	findings := runner.ConsolidateAndVerify(context.Background(), session)
+	if len(findings) != 0 || len(client.requests) != 2 || !containsTimelineEvent(session.Timeline, "verification_consolidation_empty") {
+		t.Fatalf("findings/requests/timeline = %+v/%d/%+v", findings, len(client.requests), session.Timeline)
+	}
+}
+
 func TestRunnerPersistsConsolidatedFindingsInSession(t *testing.T) {
 	client := &scriptedClient{responses: []agent.Response{{Content: `
 === PENTGO FINDING ===
@@ -625,6 +723,7 @@ func TestFindingConsolidationPromptDeclaresAuthenticatedFindingFields(t *testing
 		"username_b",
 		"only execution evidence",
 		"two-user",
+		"privilege_escalation",
 	} {
 		if !strings.Contains(strings.ToLower(findingConsolidationSystemPrompt), strings.ToLower(want)) {
 			t.Fatalf("consolidation prompt missing %q: %s", want, findingConsolidationSystemPrompt)

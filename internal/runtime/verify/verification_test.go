@@ -5,7 +5,6 @@ import (
 	"testing"
 )
 
-
 func TestScoreSQLiErrorAgainstBaselineVerified(t *testing.T) {
 	evidence := Evidence{
 		VulnType:          VulnSQLI,
@@ -192,9 +191,9 @@ func TestResponseDiffersBingoStyle(t *testing.T) {
 	}
 }
 
-func TestScoreIDORDualSessionDiff(t *testing.T) {
-	owner := `{"id":1,"username":"alice","email":"alice@example.test","note":"private owner profile content"}`
-	other := `{"id":2,"username":"bob","email":"bob@example.test","note":"private victim profile content"}`
+func TestScoreIDORDualSessionSharedIdentityLeak(t *testing.T) {
+	owner := `{"id":2,"username":"bob","email":"bob@example.test","note":"owner profile content"}`
+	other := `{"id":2,"username":"bob","email":"bob@example.test","note":"attacker read victim profile content"}`
 	result := Score(Evidence{
 		VulnType:          VulnIDOR,
 		Payload:           "user=2",
@@ -207,10 +206,45 @@ func TestScoreIDORDualSessionDiff(t *testing.T) {
 		DualLoginVerified: true,
 	})
 	if result.Verdict != VerdictVerified {
-		t.Fatalf("dual-session idor should verify: %+v", result)
+		t.Fatalf("dual-session identity leak should verify: %+v", result)
 	}
 	if result.IDORDiffReason == "" {
 		t.Fatalf("expected idor diff reason: %+v", result)
+	}
+}
+
+func TestScoreIDORDualSessionNoSharedIdentityIsNotVerified(t *testing.T) {
+	owner := `{"id":1,"username":"alice","email":"alice@example.test","note":"owner profile content"}`
+	other := `{"id":2,"username":"bob","email":"bob@example.test","note":"other user profile content"}`
+	result := Score(Evidence{
+		VulnType:          VulnIDOR,
+		Payload:           "user=2",
+		ResponseBody:      other,
+		BaselineBody:      owner,
+		StatusCode:        200,
+		BaselineStatus:    200,
+		ReproductionCount: 3,
+		LoginVerified:     true,
+		DualLoginVerified: true,
+	})
+	if result.Verdict == VerdictVerified {
+		t.Fatalf("different owners must not verify IDOR: %+v", result)
+	}
+}
+
+func TestScoreIDORSingleSessionCannotVerify(t *testing.T) {
+	result := Score(Evidence{
+		VulnType:          VulnIDOR,
+		Payload:           "user=2",
+		ResponseBody:      `{"id":2,"username":"bob","email":"bob@example.test","note":"attacker response"}`,
+		BaselineBody:      `{"id":1,"username":"alice","email":"alice@example.test","note":"anonymous response"}`,
+		StatusCode:        200,
+		BaselineStatus:    200,
+		ReproductionCount: 3,
+		LoginVerified:     true,
+	})
+	if result.Verdict == VerdictVerified || result.Confidence >= 0.75 {
+		t.Fatalf("single-session IDOR must be capped below verified: %+v", result)
 	}
 }
 

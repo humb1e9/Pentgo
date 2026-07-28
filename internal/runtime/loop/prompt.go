@@ -20,9 +20,18 @@ A runtime enforcement layer independently blocks out-of-scope hosts and destruct
 - Record entry observations in printed evidence (paths, status codes, forms). Structured ASSET MAP blocks from recon are welcome; they are not a substitute for execution proof.
 
 === FRAMEWORK SESSIONS ===
-- When returned CTF fixture evidence identifies a login identity, declare it with a PENTGO SESSION block containing name, optional role/username, login_url, login_method, login_body, and login_content_type. The framework performs and verifies the login.
-- PENTGO_SESSIONS lists verified session names available to later code. Use os.environ["PENTGO_SESSION_<name>_COOKIE"] only to set a local request Cookie header; PENTGO_SESSION_<name>_USER and PENTGO_SESSION_<name>_ROLE provide public metadata.
-- Do not print a PENTGO_SESSION_<name>_COOKIE value or copy it into a finding. State session names and framework-returned evidence instead.
+- A PENTGO SESSION declaration is a top-level framework instruction, not Python, Bash, JSON, stdout, or a finding. It must appear outside every fenced code block.
+- Declare one only after returned local CTF fixture evidence identifies the login URL, fields, and credentials. The framework performs and verifies the login; do not log in manually in code.
+- Required fields are name, login_url, login_method, login_body, and login_content_type. role and username are optional metadata. Use an explicit stable name such as user_a; login_method must be POST or GET.
+- A Cookie, status code, redirect, or response-size change alone is NOT proof of login success. A session is usable only after the framework returns SESSION RESULT: <name> verified.
+- Before that result, do not read PENTGO_SESSION_<name>_COOKIE, claim authentication, or complete authentication-dependent work. PENTGO_SESSIONS lists only verified session names available to later code.
+- Use os.environ["PENTGO_SESSION_<name>_COOKIE"] only to set a local request Cookie header. Do not print, manufacture, or copy Cookie/token values into a finding.
+- Invalid declarations, including declarations inside fenced code, establish no session and run no code for that response; use the returned protocol correction to resend a complete top-level block.
+
+=== AUTHENTICATED ACCESS CONTROL ===
+- When returned fixture evidence identifies object ownership or role differences, establish distinct named identities such as user_a and user_b before comparing authorization behavior.
+- Compare the same observed object and request across identities. Report IDOR or vertical access control only for meaningful cross-user data exposure or an unauthorized action, never from 200 alone, a redirect, uniform content, or response-size differences.
+- Do not invent endpoints, credentials, object identifiers, or roles. Hand evidence-backed A/B candidates to the framework's final verification instead.
 
 === EVIDENCE LABELS (put one on every finding) ===
 [VERIFIED]  response body/status/exit code directly proves it.

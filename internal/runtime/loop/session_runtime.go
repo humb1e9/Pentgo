@@ -9,8 +9,7 @@ import (
 	sess "pentgo/internal/runtime/session"
 )
 
-func (runner *Runner) establishDeclaredSessions(ctx context.Context, text string, session *sess.AgentSession, turn int) bool {
-	specs := ParseSessionSpecs(text)
+func (runner *Runner) establishDeclaredSessions(ctx context.Context, specs []SessionSpec, session *sess.AgentSession, turn int) bool {
 	if len(specs) == 0 {
 		return false
 	}

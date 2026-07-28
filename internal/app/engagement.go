@@ -20,6 +20,8 @@ import (
 	"pentgo/internal/runtime/loop"
 	sess "pentgo/internal/runtime/session"
 	"pentgo/internal/runtime/verify"
+
+	"github.com/cloudwego/eino/components/model"
 )
 
 // Event 表示 engagement 执行期间可向交互层发送的进度消息。
@@ -46,6 +48,9 @@ type Dependencies struct {
 	Clock           func() time.Time
 	NewEngagementID func(time.Time) (string, error)
 	NewAgentClient  func(config.AgentConfig) (agent.Client, error)
+	// NewEinoModel 构造 openai 路径的原生 tool-call 模型，驱动 ADK 引擎循环。
+	// 仅在 provider == "openai" 时使用；测试可注入 fake ToolCallingChatModel。
+	NewEinoModel func(context.Context, config.AgentConfig) (model.ToolCallingChatModel, error)
 }
 
 // Service 组装并运行单一终端 Agent 流程。
@@ -137,7 +142,15 @@ func (service *Service) Run(ctx context.Context, request Request, progress func(
 		),
 	}, nil, nil)
 	progress(Event{Message: "Agent engagement started: " + engagementID})
-	result.RunError = runner.Run(ctx, session)
+	if strings.TrimSpace(service.cfg.Agent.Provider) == "openai" {
+		chatModel, modelErr := service.newEinoModel(ctx)
+		if modelErr != nil {
+			return result, modelErr
+		}
+		result.RunError = runner.RunEino(ctx, session, chatModel)
+	} else {
+		result.RunError = runner.Run(ctx, session)
+	}
 	if result.RunError == nil && ctx.Err() == nil && session.Status == sess.SessionDone {
 		runner.ConsolidateAndVerify(ctx, session)
 	}
@@ -214,6 +227,36 @@ func (service *Service) newAgentClient() (agent.Client, error) {
 	default:
 		return nil, fmt.Errorf("unsupported agent provider: %s", providerName)
 	}
+}
+
+// newEinoModel constructs the openai-path native tool-call model for the ADK
+// engagement loop. Tests inject a fake via deps.NewEinoModel; production builds
+// an eino-ext OpenAI ChatModel from the same ProviderConfig newAgentClient uses.
+func (service *Service) newEinoModel(ctx context.Context) (model.ToolCallingChatModel, error) {
+	if service.deps.NewEinoModel != nil {
+		return service.deps.NewEinoModel(ctx, service.cfg.Agent)
+	}
+	configuration := service.cfg.Agent
+	provider := configuration.OpenAI
+	if strings.TrimSpace(provider.Model) == "" {
+		return nil, fmt.Errorf("agent openai model is empty")
+	}
+	if strings.TrimSpace(provider.BaseURL) == "" {
+		return nil, fmt.Errorf("agent openai base URL is empty")
+	}
+	timeout := time.Duration(configuration.RequestTimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = time.Minute
+	}
+	providerConfig := agent.ProviderConfig{
+		BaseURL:      provider.BaseURL,
+		Model:        provider.Model,
+		APIKey:       provider.APIKey,
+		APIKeyEnv:    provider.APIKeyEnv,
+		ThinkingMode: provider.ThinkingMode,
+	}
+	httpClient := &http.Client{Timeout: timeout}
+	return agent.NewEinoOpenAIModel(ctx, providerConfig, httpClient, nil)
 }
 
 func (service *Service) now() time.Time {

@@ -377,6 +377,7 @@ func TestServiceWiresAuthorizationFromConfig(t *testing.T) {
 		t.Fatal("precondition: authorization enabled by default")
 	}
 	cfg.Agent.ExecutionTimeoutSeconds = 1
+	cfg.Agent.Provider = "anthropic"
 	responses := []agent.Response{
 		{Content: "```python\nimport requests\nrequests.get('https://evil.example.net/x')\n```"},
 		{Content: "```python\nimport os\nprint('ok')\n```"},
@@ -414,7 +415,12 @@ func TestServiceWiresAuthorizationFromConfig(t *testing.T) {
 }
 
 func newTestService(client agent.Client) *Service {
-	return NewService(config.Default(), Dependencies{
+	// These tests drive the text protocol (fenced code + TASK_COMPLETE) through
+	// an injected text client; that is the anthropic path. The openai path now
+	// runs the Eino ADK loop and is exercised by loop package tests.
+	cfg := config.Default()
+	cfg.Agent.Provider = "anthropic"
+	return NewService(cfg, Dependencies{
 		Clock:           func() time.Time { return time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC) },
 		NewEngagementID: func(time.Time) (string, error) { return "eng-test", nil },
 		NewAgentClient:  func(config.AgentConfig) (agent.Client, error) { return client, nil },

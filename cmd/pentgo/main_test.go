@@ -88,9 +88,14 @@ func writeREPLConfig(t *testing.T, baseURL string) {
 
 func newModelServer(t *testing.T) *httptest.Server {
 	t.Helper()
+	// The openai provider now drives the Eino ADK native tool-call path, so the
+	// first two turns are tool calls (execute_code then complete_task) rather than
+	// the old fenced-code / TASK_COMPLETE text convention. Consolidation and the
+	// final report still run through the text client, so their responses are plain.
+	execCode := "import os\\nprint(os.environ['PENTGO_TARGET'])"
 	responses := []string{
-		"{\"choices\":[{\"message\":{\"content\":\"```python\\nimport os\\nprint(os.environ['PENTGO_TARGET'])\\n```\"}}]}",
-		`{"choices":[{"message":{"content":"TASK_COMPLETE"}}]}`,
+		`{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":"","tool_calls":[{"id":"call_exec_1","type":"function","function":{"name":"execute_code","arguments":"{\"language\":\"python\",\"code\":\"` + execCode + `\"}"}}]}}]}`,
+		`{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":"","tool_calls":[{"id":"call_done_1","type":"function","function":{"name":"complete_task","arguments":"{\"final_result\":\"target probed\"}"}}]}}]}`,
 		`{"choices":[{"message":{"content":"NO_FINDINGS"}}]}`,
 		`{"choices":[{"message":{"content":"NO_FINDINGS"}}]}`,
 		`{"choices":[{"message":{"content":"## 执行摘要\n已完成检查。"}}]}`,
@@ -102,6 +107,7 @@ func newModelServer(t *testing.T) *httptest.Server {
 		if len(responses) == 0 {
 			t.Fatal("unexpected model request")
 		}
+		writer.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(writer, responses[0])
 		responses = responses[1:]
 	}))

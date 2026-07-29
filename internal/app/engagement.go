@@ -17,6 +17,7 @@ import (
 	"pentgo/internal/runtime/evidence"
 	"pentgo/internal/runtime/exec"
 	"pentgo/internal/runtime/loop"
+	runtimeMCP "pentgo/internal/runtime/mcp"
 	sess "pentgo/internal/runtime/session"
 
 	"github.com/cloudwego/eino/components/model"
@@ -76,16 +77,28 @@ func (service *Service) Run(ctx context.Context, request Request, progress func(
 		return result, fmt.Errorf("create engagement writer: %w", err)
 	}
 	defer writer.Abort()
-	journal, err := evidence.NewJournal(writer.EvidencePath())
+	agentConfig := service.cfg.Agent
+	journal, err := evidence.NewJournal(writer.EvidencePath(), mcpSecrets(agentConfig.MCP)...)
 	if err != nil {
 		return result, fmt.Errorf("create evidence journal: %w", err)
 	}
-	executor := exec.NewExecutor(exec.ExecutorConfig{WorkDir: writer.WorkDir(), Timeout: time.Duration(service.cfg.Agent.ExecutionTimeoutSeconds) * time.Second, MaxOutputBytes: service.cfg.Agent.MaxOutputBytes, LineRepeatLimit: service.cfg.Agent.LineRepeatLimit, ScanLineRepeatLimit: service.cfg.Agent.ScanLineRepeatLimit})
+	executor := exec.NewExecutor(exec.ExecutorConfig{WorkDir: writer.WorkDir(), Timeout: time.Duration(agentConfig.ExecutionTimeoutSeconds) * time.Second, MaxOutputBytes: agentConfig.MaxOutputBytes, LineRepeatLimit: agentConfig.LineRepeatLimit, ScanLineRepeatLimit: agentConfig.ScanLineRepeatLimit})
 	if err := session.Start(startedAt); err != nil {
 		_ = journal.Close()
 		return result, err
 	}
-	runner := loop.NewRunner(executor, journal, loop.RunnerConfig{MaxTurns: service.cfg.Agent.MaxTurns, NetworkBackoff: time.Duration(service.cfg.Agent.NetworkBackoffSeconds) * time.Second, OnEvent: func(event loop.RunnerEvent) {
+	var mcpClient *runtimeMCP.Client
+	if agentConfig.MCP != nil {
+		connectCtx, cancel := context.WithTimeout(ctx, time.Duration(agentConfig.RequestTimeoutSeconds)*time.Second)
+		mcpClient, err = runtimeMCP.ConnectStdio(connectCtx, *agentConfig.MCP, journal, agentConfig.MaxOutputBytes)
+		cancel()
+		if err != nil {
+			result.RunError = err
+			_ = session.Fail("mcp_init_error", service.now())
+			return service.finishEngagement(result, writer, journal, executor, nil, progress)
+		}
+	}
+	runnerConfig := loop.RunnerConfig{MaxTurns: agentConfig.MaxTurns, NetworkBackoff: time.Duration(agentConfig.NetworkBackoffSeconds) * time.Second, OnEvent: func(event loop.RunnerEvent) {
 		switch event.Kind {
 		case "assistant":
 			progress(Event{Message: fmt.Sprintf("Assistant turn %d: %s", event.Turn, event.Detail)})
@@ -94,7 +107,11 @@ func (service *Service) Run(ctx context.Context, request Request, progress func(
 		case "block_finished":
 			progress(Event{Message: fmt.Sprintf("Block turn %d #%d finished: %s", event.Turn, event.BlockIndex, event.Detail)})
 		}
-	}, Authorizer: authorizerFromConfig(service.cfg.Agent.Authorization), AllowedHosts: service.cfg.Agent.Authorization.AllowedHosts, AllowPrivateHosts: service.cfg.Agent.Authorization.PrivateAllowed()}, nil, nil)
+	}, Authorizer: authorizerFromConfig(agentConfig.Authorization), AllowedHosts: agentConfig.Authorization.AllowedHosts, AllowPrivateHosts: agentConfig.Authorization.PrivateAllowed()}
+	if mcpClient != nil {
+		runnerConfig.MCPTools = mcpClient.Tools()
+	}
+	runner := loop.NewRunner(executor, journal, runnerConfig, nil, nil)
 	progress(Event{Message: "Agent engagement started: " + engagementID})
 	chatModel, modelErr := service.newEinoModel(ctx)
 	if modelErr != nil {
@@ -103,10 +120,18 @@ func (service *Service) Run(ctx context.Context, request Request, progress func(
 	} else {
 		result.RunError = runner.RunEino(ctx, session, chatModel)
 	}
-	return service.finishEngagement(result, writer, journal, executor, progress)
+	return service.finishEngagement(result, writer, journal, executor, mcpClient, progress)
 }
 
-func (service *Service) finishEngagement(result Result, writer *report.EngagementWriter, journal *evidence.Journal, executor *exec.Executor, progress func(Event)) (Result, error) {
+func (service *Service) finishEngagement(result Result, writer *report.EngagementWriter, journal *evidence.Journal, executor *exec.Executor, mcpClient *runtimeMCP.Client, progress func(Event)) (Result, error) {
+	if mcpClient != nil {
+		if err := mcpClient.Close(); err != nil && result.RunError == nil {
+			result.RunError = fmt.Errorf("close MCP client: %w", err)
+			if result.Session.Status == sess.SessionRunning {
+				_ = result.Session.Fail("mcp_close_error", service.now())
+			}
+		}
+	}
 	if err := journal.Close(); err != nil && result.RunError == nil {
 		result.RunError = err
 		if result.Session.Status == sess.SessionRunning {
@@ -123,6 +148,19 @@ func (service *Service) finishEngagement(result Result, writer *report.Engagemen
 	result.Artifacts = artifacts
 	progress(Event{Message: "Agent engagement finished: " + string(result.Session.Status)})
 	return result, nil
+}
+
+func mcpSecrets(configuration *config.MCPConfig) []string {
+	if configuration == nil {
+		return nil
+	}
+	secrets := make([]string, 0, len(configuration.Env))
+	for _, value := range configuration.Env {
+		if value != "" {
+			secrets = append(secrets, value)
+		}
+	}
+	return secrets
 }
 
 func (service *Service) newEinoModel(ctx context.Context) (model.ToolCallingChatModel, error) {

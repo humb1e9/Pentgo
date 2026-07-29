@@ -13,6 +13,38 @@ func TestDefaultContainsMinimalRuntimeConfiguration(t *testing.T) {
 		t.Fatalf("agent = %+v", agent)
 	}
 }
+
+func TestDefaultLeavesMCPDisabled(t *testing.T) {
+	if Default().Agent.MCP != nil {
+		t.Fatalf("default MCP = %+v", Default().Agent.MCP)
+	}
+}
+
+func TestLoadPreservesSingleStdioMCPConfig(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("linux only")
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	path, err := ConfigFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	data := []byte(`{"agent":{"mcp":{"command":"/bin/fixture","args":["--stdio"],"env":{"FIXTURE_TOKEN":"TOKEN"}}}}`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.MCP == nil || cfg.Agent.MCP.Command != "/bin/fixture" || len(cfg.Agent.MCP.Args) != 1 || cfg.Agent.MCP.Args[0] != "--stdio" || cfg.Agent.MCP.Env["FIXTURE_TOKEN"] != "TOKEN" {
+		t.Fatalf("MCP = %+v", cfg.Agent.MCP)
+	}
+}
+
 func TestLoadMergesLiveAgentConfiguration(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("linux only")

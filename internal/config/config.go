@@ -28,6 +28,14 @@ type AgentConfig struct {
 	OpenAI                  ModelProviderConfig `json:"openai"`
 	Anthropic               ModelProviderConfig `json:"anthropic"`
 	Authorization           AuthorizationConfig `json:"authorization"`
+	MCP                     *MCPConfig          `json:"mcp,omitempty"`
+}
+
+// MCPConfig configures the engagement's optional single local stdio server.
+type MCPConfig struct {
+	Command string            `json:"command"`
+	Args    []string          `json:"args,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
 }
 
 // ModelProviderConfig 描述一个模型提供商的连接信息。

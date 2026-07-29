@@ -3,6 +3,7 @@ package exec
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -168,4 +169,47 @@ func (sink *memoryEvidenceSink) WriteEvidence(name string, value any) (string, e
 	sink.name = name
 	sink.value = value
 	return "evidence/" + name + ".json", nil
+}
+
+func TestCleanupGeneratedScriptsRemovesRuntimeFilesAndPreservesAgentFiles(t *testing.T) {
+	workDir := t.TempDir()
+	executor := NewExecutor(ExecutorConfig{WorkDir: workDir})
+	results := executor.Execute(context.Background(), ExecutionInput{
+		SessionID: "eng-ID",
+		Target:    "TARGET",
+		Turn:      1,
+		Blocks: []PreflightResult{{
+			Block:    CodeBlock{Index: 1, Language: LanguagePython, Code: "open('artifact.txt', 'w').write('keep')"},
+			Code:     "open('artifact.txt', 'w').write('keep')",
+			Approved: true,
+		}},
+	})
+	if len(results) != 1 || results[0].Status != ExecutionSucceeded {
+		t.Fatalf("results = %+v", results)
+	}
+	if err := executor.CleanupGeneratedScripts(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(results[0].ScriptPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("runtime script stat error = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(workDir, "artifact.txt"))
+	if err != nil || string(data) != "keep" {
+		t.Fatalf("agent artifact = %q, %v", data, err)
+	}
+}
+
+func TestCleanupGeneratedScriptsUsesRegisteredPathsInsteadOfGlob(t *testing.T) {
+	workDir := t.TempDir()
+	keep := filepath.Join(workDir, "turn-999-block-999.py")
+	if err := os.WriteFile(keep, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	executor := NewExecutor(ExecutorConfig{WorkDir: workDir})
+	if err := executor.CleanupGeneratedScripts(); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(keep); err != nil || string(data) != "keep" {
+		t.Fatalf("unregistered file = %q, %v", data, err)
+	}
 }

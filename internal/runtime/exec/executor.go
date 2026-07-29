@@ -3,6 +3,7 @@ package exec
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -78,7 +79,9 @@ type ExecutionResult struct {
 
 // Executor 在一个 engagement 专属工作目录中运行模型代码。
 type Executor struct {
-	config ExecutorConfig
+	config           ExecutorConfig
+	generatedMu      sync.Mutex
+	generatedScripts []string
 }
 
 // NewExecutor 创建一个带默认限制的执行器。
@@ -348,8 +351,30 @@ func (executor *Executor) writeScript(turn int, preflight PreflightResult) (stri
 	if err := os.WriteFile(path, []byte(preflight.Code), 0o600); err != nil {
 		return "", "", nil, fmt.Errorf("write script: %w", err)
 	}
+	executor.registerGeneratedScript(path)
 	arguments = append(arguments, path)
 	return path, interpreter, arguments, nil
+}
+
+func (executor *Executor) registerGeneratedScript(path string) {
+	executor.generatedMu.Lock()
+	defer executor.generatedMu.Unlock()
+	executor.generatedScripts = append(executor.generatedScripts, path)
+}
+
+func (executor *Executor) CleanupGeneratedScripts() error {
+	if executor == nil {
+		return nil
+	}
+	executor.generatedMu.Lock()
+	defer executor.generatedMu.Unlock()
+	for _, path := range executor.generatedScripts {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove Runtime script %s: %w", path, err)
+		}
+	}
+	executor.generatedScripts = nil
+	return nil
 }
 
 func killProcessGroup(process *os.Process) {

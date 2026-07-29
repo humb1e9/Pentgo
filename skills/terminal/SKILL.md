@@ -4,4 +4,4 @@
 
 可使用 `SKILL_LOAD: skill-name` 读取注册的本地知识。Skill 仅提供上下文，不代表预定义命令或执行权限。
 
-不要把自然语言推断当作证据。只有已经执行并回灌的 stdout、stderr、退出码或 evidence 路径可用于判断任务状态。完成时输出 `TASK_COMPLETE` 或 `MISSION_COMPLETE`，且不要同时附带新的代码块。
+不要把自然语言推断当作证据。只有已执行动作的 stdout、stderr、退出码与 `[evidence_ref: N]` 可用于判断任务状态。完成时以不带工具调用的普通助手文本给出简短结论。

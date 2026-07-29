@@ -41,13 +41,13 @@ func TestRunREPLNaturalLanguageTaskCreatesRuntimeEngagement(t *testing.T) {
 	if len(entries) != 1 || !entries[0].IsDir() {
 		t.Fatalf("engagement directories = %v", entries)
 	}
-	for _, name := range []string{"session.json", "report.md", "evidence/agent-turn-001-block-001.json", "work/turn-001-block-001.py"} {
+	for _, name := range []string{"session.json", "report.md", "evidence.jsonl", "work"} {
 		if _, err := os.Stat(filepath.Join(output, entries[0].Name(), name)); err != nil {
 			t.Fatalf("missing %s: %v", name, err)
 		}
 	}
 	reportBody, err := os.ReadFile(filepath.Join(output, entries[0].Name(), "report.md"))
-	if err != nil || !strings.HasPrefix(string(reportBody), "# PentGo Agent Report") || !strings.Contains(string(reportBody), "## 已验证发现") {
+	if err != nil || !strings.HasPrefix(string(reportBody), "# PentGo Report") || !strings.Contains(string(reportBody), "## Agent Summary") {
 		t.Fatalf("report/err = %q/%v", reportBody, err)
 	}
 }
@@ -88,17 +88,8 @@ func writeREPLConfig(t *testing.T, baseURL string) {
 
 func newModelServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	// The openai provider now drives the Eino ADK native tool-call path, so the
-	// first two turns are tool calls (execute_code then complete_task) rather than
-	// the old fenced-code / TASK_COMPLETE text convention. Consolidation and the
-	// final report still run through the text client, so their responses are plain.
-	execCode := "import os\\nprint(os.environ['PENTGO_TARGET'])"
 	responses := []string{
-		`{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":"","tool_calls":[{"id":"call_exec_1","type":"function","function":{"name":"execute_code","arguments":"{\"language\":\"python\",\"code\":\"` + execCode + `\"}"}}]}}]}`,
-		`{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":"","tool_calls":[{"id":"call_done_1","type":"function","function":{"name":"complete_task","arguments":"{\"final_result\":\"target probed\"}"}}]}}]}`,
-		`{"choices":[{"message":{"content":"NO_FINDINGS"}}]}`,
-		`{"choices":[{"message":{"content":"NO_FINDINGS"}}]}`,
-		`{"choices":[{"message":{"content":"## 执行摘要\n已完成检查。"}}]}`,
+		`{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"No findings."}}]}`,
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/chat/completions" {

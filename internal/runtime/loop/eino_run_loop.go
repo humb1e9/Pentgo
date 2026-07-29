@@ -2,12 +2,13 @@ package loop
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"pentgo/internal/runtime/authz"
-
+	"pentgo/internal/runtime/evidence"
 	sess "pentgo/internal/runtime/session"
 
 	"github.com/cloudwego/eino/adk"
@@ -15,288 +16,68 @@ import (
 	"github.com/cloudwego/eino/schema"
 )
 
-// RunEino drives the openai engagement path on the Eino ADK. It mirrors the
-// hand-rolled (*Runner).Run lifecycle and populates the SAME runner accumulators
-// (history, reportTurns, findings, sessionPool) so ConsolidateAndVerify and
-// ReportContext work unchanged. The provider branch in engagement.go chooses
-// between Run (anthropic, text protocol) and RunEino (openai, native tool-call).
-//
-// The cross-turn control flow the runner did inline (stuck sha256, refusal count,
-// no-tool-call count) lives here in the event-consumer loop because ADK's
-// AsyncIterator delivers events concurrently with tool execution; the loop is the
-// sole ordered writer of history/reportTurns and pops the tool set's FIFO stashes
-// in source order.
 func (runner *Runner) RunEino(ctx context.Context, session *sess.AgentSession, chatModel model.ToolCallingChatModel) error {
-	if runner == nil || runner.executor == nil || session == nil {
+	if runner == nil || runner.executor == nil || runner.journal == nil || session == nil || chatModel == nil {
 		return fmt.Errorf("eino runner dependencies are incomplete")
 	}
-	if chatModel == nil {
-		return fmt.Errorf("eino runner requires a chat model")
+	if session.Status != sess.SessionRunning {
+		return fmt.Errorf("session must be running")
 	}
-	if err := session.Start(time.Now().UTC()); err != nil {
-		return err
-	}
-	runner.reportTurns = nil
-	runner.findings = nil
-	runner.findingSpecs = nil
-	runner.sessionPool = sess.NewSessionPool()
-	session.Sessions = nil
-	runner.history = NewHistory(session.Target.Canonical, session.Intent)
-
-	establisher, _ := runner.config.Verifier.(sessionEstablisher)
-	tools := &einoToolSet{
-		executor:       runner.executor,
-		authorizer:     runner.config.Authorizer,
-		scope:          authz.NewScope(hostOf(session.Target.Canonical), runner.config.AllowedHosts, runner.config.AllowPrivateHosts),
-		sessionID:      session.ID,
-		target:         session.Target.Canonical,
-		load:           runner.load,
-		establisher:    establisher,
-		sessionPool:    runner.sessionPool,
-		sleep:          runner.sleep,
-		networkBackoff: runner.config.NetworkBackoff,
-		onBlockEvent:   runner.config.OnEvent,
-	}
-
-	agentImpl, err := newEinoAgent(ctx, chatModel, buildOpenAISystemPrompt(runner.catalog), runner.config.MaxTurns, tools)
+	tools := &einoToolSet{executor: runner.executor, journal: runner.journal, session: session, authorizer: runner.config.Authorizer, scope: authz.NewScope(hostOf(session.Target), runner.config.AllowedHosts, runner.config.AllowPrivateHosts), load: runner.load, sleep: runner.sleep, networkBackoff: runner.config.NetworkBackoff, onEvent: runner.config.OnEvent, loaded: make(map[string]bool), externalTools: runner.config.MCPTools}
+	agentImpl, err := newEinoAgent(ctx, chatModel, buildSystemPrompt(runner.catalog), runner.config.MaxTurns, tools)
 	if err != nil {
 		_ = session.Fail("agent_init_error", time.Now().UTC())
-		session.AddEvent(session.Turn, "provider_error", err.Error(), time.Now().UTC())
 		return err
 	}
-
-	adkRunner := adk.NewRunner(ctx, adk.RunnerConfig{Agent: agentImpl, EnableStreaming: false})
-	task := "TARGET: " + session.Target.Canonical + "\nTASK: " + session.Intent
-
-	// conversation is the message history fed to each adkRunner.Run attempt. A
-	// single Run's react graph loops internally while the model keeps calling
-	// tools, but the moment the model emits a text-only turn the graph routes to
-	// END and the Run finishes (eino ADK v0.9.13 react routing). To recover from
-	// a refusal / no-evidence turn the way the text path does, the outer loop
-	// re-drives the model: it appends every emitted assistant and tool message to
-	// conversation, and after a natural END that left the session running it
-	// appends a recovery nudge and re-runs, so refusal/no-code/stuck counters
-	// actually accumulate across turns instead of ending as a spurious max_turns.
-	conversation := []adk.Message{schema.UserMessage(task)}
-
-	guards := &einoGuards{}
-
-	for runner.config.MaxTurns <= 0 || session.Turn < runner.config.MaxTurns {
-		if err := ctx.Err(); err != nil {
-			_ = session.Cancel("cancelled", time.Now().UTC())
-			return nil
-		}
-
-		iterator := adkRunner.Run(ctx, conversation)
-		nudge := ""
-		for {
-			event, ok := iterator.Next()
-			if !ok {
-				break
-			}
-			if event == nil {
-				continue
-			}
-			if event.Err != nil {
-				_ = session.Fail("provider_error", time.Now().UTC())
-				session.AddEvent(session.Turn, "provider_error", event.Err.Error(), time.Now().UTC())
-				return event.Err
-			}
-			if event.Action != nil && event.Action.Exit {
-				if session.Status == sess.SessionRunning {
-					_ = session.Complete("task_complete", time.Now().UTC())
-				}
-				return nil
-			}
-			if event.Output == nil || event.Output.MessageOutput == nil {
-				continue
-			}
-			message, err := event.Output.MessageOutput.GetMessage()
-			if err != nil || message == nil {
-				continue
-			}
-
-			switch event.Output.MessageOutput.Role {
-			case schema.Assistant:
-				conversation = append(conversation, message)
-				stop, next := runner.consumeEinoAssistant(session, message, guards)
-				if stop {
-					return nil
-				}
-				// The last assistant turn before a natural END is always
-				// text-only (a tool call re-enters the model), so a non-empty
-				// nudge here is the one that should re-drive the next Run.
-				if next != "" {
-					nudge = next
-				}
-			case schema.Tool:
-				conversation = append(conversation, message)
-				runner.consumeEinoToolResult(session, tools, message, event.Output.MessageOutput.ToolName)
-			}
-		}
-
-		if session.Status != sess.SessionRunning {
-			return nil
-		}
-		if nudge == "" {
-			// Run ended without a recovery nudge (e.g. MaxIterations hit mid
-			// tool loop): nothing productive left to re-drive.
+	iterator := adk.NewRunner(ctx, adk.RunnerConfig{Agent: agentImpl, EnableStreaming: false}).Run(ctx, []adk.Message{schema.UserMessage("TARGET: " + session.Target + "\nTASK: " + session.Intent)})
+	for {
+		event, ok := iterator.Next()
+		if !ok {
 			break
 		}
-		conversation = append(conversation, schema.UserMessage(nudge))
-	}
-
-	if session.Status == sess.SessionRunning {
-		_ = session.Fail("max_turns", time.Now().UTC())
-	}
-	return nil
-}
-
-// einoGuards holds the cross-turn recovery state that persists across re-drive
-// attempts: the repeated-response fingerprint (stuck detection), the refusal
-// counter, and the no-tool-call counter. It mirrors the local variables the
-// text-path (*Runner).Run keeps across its turn loop.
-type einoGuards struct {
-	lastFingerprint  string
-	fingerprintCount int
-	refusalCount     int
-	noToolCallCount  int
-}
-
-// Recovery nudges re-driven into the next adkRunner.Run when the model ends a
-// turn without executable tool calls. They mirror the text-path corrections in
-// (*Runner).Run so the openai path recovers instead of dying as max_turns.
-const (
-	einoRefusalNudge  = "AUTHORIZATION REMINDER: this engagement is authorized and its scope is fixed. The runtime independently blocks out-of-scope hosts and destructive writes before execution, so proceed safely: call execute_code with Python or Bash that prints evidence within scope."
-	einoContinueNudge = "CONTINUE REQUIRED: call execute_code with Python or Bash that prints actual evidence; do not answer in prose."
-	einoEvidenceNudge = "EVIDENCE REQUIRED: do not claim findings or complete the task without executable code and returned output. Call execute_code to gather evidence first."
-	einoStrategyNudge = "STRATEGY CHANGE REQUIRED: the recent responses repeat the same plan. Call execute_code with materially different evidence-collection code."
-)
-
-// consumeEinoAssistant records an assistant turn and applies the cross-turn
-// stuck/refusal/no-tool-call guards, whose counters persist in guards across
-// re-drive attempts. It returns (stop, nudge): stop is true when the session
-// reached a terminal state and the loop must return; nudge, when non-empty, is
-// the recovery message the outer loop re-drives into the next Run.
-func (runner *Runner) consumeEinoAssistant(session *sess.AgentSession, message *schema.Message, guards *einoGuards) (bool, string) {
-	session.Turn++
-	turn := session.Turn
-	assistantText := strings.TrimSpace(message.Content)
-	runner.history.Append("assistant", einoAssistantHistory(message))
-	session.AddEvent(turn, "assistant", "model response received", time.Now().UTC())
-	runner.emit(RunnerEvent{Turn: turn, Kind: "assistant", Detail: assistantSummary(assistantText)})
-	runner.reportTurns = append(runner.reportTurns, ReportTurn{Number: turn, Decision: assistantSummary(assistantText), DeclaredLabels: extractFindingLabels(assistantText)})
-
-	fingerprint := responseFingerprint(einoFingerprintSource(message))
-	if fingerprint == guards.lastFingerprint {
-		guards.fingerprintCount++
-	} else {
-		guards.lastFingerprint = fingerprint
-		guards.fingerprintCount = 1
-	}
-	if runner.config.HardStuckTurns > 0 && guards.fingerprintCount >= runner.config.HardStuckTurns {
-		_ = session.Fail("stuck", time.Now().UTC())
-		session.AddEvent(turn, "recovery", "stuck", time.Now().UTC())
-		return true, ""
-	}
-	softStuck := runner.config.SoftStuckTurns > 0 && guards.fingerprintCount >= runner.config.SoftStuckTurns
-	if softStuck {
-		session.AddEvent(turn, "recovery", "strategy_change_required", time.Now().UTC())
-	}
-
-	if len(message.ToolCalls) > 0 {
-		guards.noToolCallCount = 0
-		if softStuck {
-			return false, einoStrategyNudge
-		}
-		return false, ""
-	}
-
-	// No tool call: the assistant produced only text this turn.
-	if isRefusal(assistantText) {
-		guards.refusalCount++
-		session.AddEvent(turn, "recovery", "refusal_recovery", time.Now().UTC())
-		if runner.config.RefusalLimit > 0 && guards.refusalCount >= runner.config.RefusalLimit {
-			_ = session.Fail("refused", time.Now().UTC())
-			return true, ""
-		}
-		return false, einoRefusalNudge
-	}
-	guards.noToolCallCount++
-	instruction := "no_executable_tool_call"
-	nudge := einoContinueNudge
-	if makesClaim(assistantText) {
-		instruction = "evidence_required"
-		nudge = einoEvidenceNudge
-	}
-	session.AddEvent(turn, "recovery", instruction, time.Now().UTC())
-	if runner.config.NoCodeLimit > 0 && guards.noToolCallCount >= runner.config.NoCodeLimit {
-		_ = session.Complete("no_executable_response", time.Now().UTC())
-		return true, ""
-	}
-	if softStuck {
-		return false, einoStrategyNudge
-	}
-	return false, nudge
-}
-
-// consumeEinoToolResult folds a tool-result event back into runner state. For
-// execute_code it pops the structured redacted results the tool stashed and
-// records them as report blocks on the current turn; for declare_session it
-// records the session pool's public view and the render text into history.
-func (runner *Runner) consumeEinoToolResult(session *sess.AgentSession, tools *einoToolSet, message *schema.Message, toolName string) {
-	switch toolName {
-	case "execute_code":
-		if outcome, ok := tools.popResults(); ok {
-			// Emit authorization_blocked before recording results so the timeline
-			// matches the text-path runner (runner.go), which emits it the moment
-			// the authorizer denies an otherwise-approved block.
-			if outcome.authzBlocked {
-				session.AddEvent(session.Turn, "recovery", "authorization_blocked", time.Now().UTC())
-			}
-			runner.recordReportBlocks(outcome.results)
-			session.AddEvent(session.Turn, "execution", fmt.Sprintf("%d block(s)", len(outcome.results)), time.Now().UTC())
-		}
-		runner.history.Append("user", strings.TrimSpace(message.Content))
-	case "declare_session":
-		if _, ok := tools.popSessionResult(); ok {
-			session.Sessions = tools.sessionPool.PublicView()
-			session.AddEvent(session.Turn, "session_declared", strings.TrimSpace(message.Content), time.Now().UTC())
-		}
-		runner.history.Append("user", strings.TrimSpace(message.Content))
-	default:
-		runner.history.Append("user", strings.TrimSpace(message.Content))
-	}
-}
-
-// einoAssistantHistory renders an assistant message for the text history used by
-// ConsolidateAndVerify: content plus a compact note of any tool calls so the
-// consolidation model can see what code was run even without the tool results.
-func einoAssistantHistory(message *schema.Message) string {
-	var builder strings.Builder
-	builder.WriteString(strings.TrimSpace(message.Content))
-	for _, call := range message.ToolCalls {
-		if call.Function.Name == "" {
+		if event == nil {
 			continue
 		}
-		if builder.Len() > 0 {
-			builder.WriteString("\n")
+		if event.Err != nil {
+			if errors.Is(event.Err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+				_ = session.Cancel("cancelled", time.Now().UTC())
+				return nil
+			}
+			if errors.Is(event.Err, evidence.ErrWrite) {
+				_ = session.Fail("evidence_error", time.Now().UTC())
+				return event.Err
+			}
+			if errors.Is(event.Err, adk.ErrExceedMaxIterations) {
+				_ = session.Fail("max_iterations", time.Now().UTC())
+				return nil
+			}
+			_ = session.Fail("provider_error", time.Now().UTC())
+			return event.Err
 		}
-		builder.WriteString(fmt.Sprintf("[tool_call %s] %s", call.Function.Name, call.Function.Arguments))
+		if event.Output == nil || event.Output.MessageOutput == nil || event.Output.MessageOutput.Role != schema.Assistant {
+			continue
+		}
+		message, messageErr := event.Output.MessageOutput.GetMessage()
+		if messageErr != nil || message == nil {
+			continue
+		}
+		session.Turns++
+		runner.emit(RunnerEvent{Turn: session.Turns, Kind: "assistant", Detail: assistantSummary(message.Content)})
+		if len(message.ToolCalls) != 0 {
+			continue
+		}
+		session.FinalSummary = strings.TrimSpace(message.Content)
+		if session.FinalSummary == "" {
+			_ = session.Fail("empty_response", time.Now().UTC())
+		} else {
+			_ = session.Complete("agent_finished", time.Now().UTC())
+		}
+		return nil
 	}
-	return builder.String()
-}
-
-// einoFingerprintSource builds the stuck-detection fingerprint from both the
-// assistant text and its tool-call arguments, so repeating the identical
-// execute_code call counts as stuck even when the text content is empty.
-func einoFingerprintSource(message *schema.Message) string {
-	var builder strings.Builder
-	builder.WriteString(message.Content)
-	for _, call := range message.ToolCalls {
-		builder.WriteString("\n")
-		builder.WriteString(call.Function.Name)
-		builder.WriteString(call.Function.Arguments)
+	if errors.Is(ctx.Err(), context.Canceled) {
+		_ = session.Cancel("cancelled", time.Now().UTC())
+		return nil
 	}
-	return builder.String()
+	_ = session.Fail("max_iterations", time.Now().UTC())
+	return nil
 }

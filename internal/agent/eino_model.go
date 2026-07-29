@@ -17,8 +17,8 @@ import (
 const einoAnthropicMaxTokens = 4096
 
 // NewEinoOpenAIModel 从 PentGo 的 ProviderConfig 构造一个满足 Eino
-// model.ToolCallingChatModel 的 OpenAI 原生 tool-call 模型。用于 openai 路径的
-// ADK 单代理循环；anthropic 路径仍走文本协议 Client（见 anthropic.go）。
+// model.ToolCallingChatModel 的 OpenAI 原生 tool-call 模型。它是 openai provider
+// 唯一的 engagement runtime 路径。
 //
 // 不预绑定工具：ADK ChatModelAgent 内部会调 WithTools 注入工具 schema。
 func NewEinoOpenAIModel(ctx context.Context, config ProviderConfig, client *http.Client, lookupEnv func(string) (string, bool)) (model.ToolCallingChatModel, error) {
@@ -43,9 +43,8 @@ func NewEinoOpenAIModel(ctx context.Context, config ProviderConfig, client *http
 }
 
 // NewEinoAnthropicModel 从 PentGo 的 ProviderConfig 构造一个满足 Eino
-// model.ToolCallingChatModel 的 Claude 原生 tool-call 模型。用于 anthropic 路径的
-// ADK 单代理循环，与 openai 对称——两个 provider 现在都走 ADK。文本 AnthropicClient
-// （anthropic.go）保留，仍供 ConsolidateAndVerify 巩固与报告生成使用。
+// model.ToolCallingChatModel 的 Claude 原生 tool-call 模型。它是 anthropic provider
+// 唯一的 engagement runtime 路径。
 //
 // 不预绑定工具：ADK ChatModelAgent 内部会调 WithTools 注入工具 schema。
 func NewEinoAnthropicModel(ctx context.Context, config ProviderConfig, client *http.Client, lookupEnv func(string) (string, bool)) (model.ToolCallingChatModel, error) {

@@ -9,17 +9,17 @@
 PentGo/
 ├── cmd/pentgo/              # 唯一可执行入口（REPL main）
 ├── internal/                # 业务源码（不对外 import）
-│   ├── agent/               # 模型客户端（OpenAI 兼容 / Anthropic）
+│   ├── agent/               # Eino 模型构造（OpenAI / Anthropic）
 │   ├── app/                 # 组装一次 engagement
 │   ├── config/              # 用户配置加载
 │   ├── report/              # 报告生成 + engagement 落盘
 │   ├── terminal/            # REPL 交互
 │   └── runtime/             # ★ 运行时（已拆为 5 个子包）
-│       ├── exec/            # 代码块解析 / 预检 / 执行 / 证据等级
+│       ├── evidence/        # engagement-local JSONL journal
+│       ├── exec/            # 本地预检 / 执行
 │       ├── authz/           # Scope + Authorizer（依赖 exec.CodeBlock）
-│       ├── verify/          # FINDING 解析 + HTTP 验证 + 确定性 Score
-│       ├── session/         # Target + AgentSession（依赖 verify.VerificationResult）
-│       └── loop/            # Runner 模型循环 / History / Prompt / 报告上下文
+│       ├── session/         # Target + AgentSession
+│       └── loop/            # Eino Runner / Tools / Prompt
 ├── skills/                  # 可加载 Skill（SKILL.md + registry.go）
 ├── docs/                    # ARCHITECTURE.md（跟踪）+ superpowers/（本地计划）
 ├── bingo/                   # 参考 Python 树（gitignore）
@@ -31,19 +31,18 @@ PentGo/
 ## runtime 子包依赖（禁止环）
 
 ```
-exec  →  authz  →  verify  →  session  →  loop
-  ↑         ↑          ↑           ↑          │
-  └─────────┴──────────┴───────────┴──────────┘
-            （loop 可依赖全部叶子包）
+exec  →  authz
+  ↑        ↑
+  └── loop ┴── evidence / session
 ```
 
 | 包 | 职责 | 关键类型 |
 |----|------|----------|
-| `exec` | 块提取、预检、进程执行、EvidenceSink | `CodeBlock`, `Executor`, `EvidenceLevel` |
+| `exec` | 预检与本地进程执行 | `CodeBlock`, `Executor` |
 | `authz` | 主机范围 + 破坏性操作门 | `Scope`, `Authorizer` |
-| `verify` | 框架自发 HTTP、单/双会话登录 jar、Score（含 bingo 式 IDOR 差分） | `HTTPVerifier`, `FindingSpec`, `VulnIDOR`, `ResponseDiffers` |
+| `evidence` | engagement-local JSONL journal 与引用查询 | `Journal`, `Record` |
 | `session` | 目标解析与会话状态 | `Target`, `AgentSession` |
-| `loop` | 模型循环、consolidation、报告上下文 | `Runner`, `History`, `ReportContext` |
+| `loop` | 单一 Eino Agent、工具与自然终止 | `Runner`, `RunEino` |
 
 ## 运行时数据流
 
@@ -51,20 +50,19 @@ exec  →  authz  →  verify  →  session  →  loop
 用户 REPL 输入（含 URL）
   → terminal.ParseTask → sess.Target + Intent
   → app.Service.Run
-       eng writer / agent client
+       eng writer / evidence journal / Eino model
        exec.NewExecutor
-       loop.NewRunner（Authorizer, Scope hosts, verify.HTTPVerifier, EvidenceSink）
-       runner.Run → SessionDone?
-       runner.ConsolidateAndVerify  # 解析 FINDING → 框架验证
-       loop.ValidateReportContext
-       report.GenerateTerminalMarkdown + PublishWithReport
+       loop.NewRunner（Authorizer, Scope hosts, Journal）
+       runner.RunEino → 自然终止
+       Journal.Close + Runtime 脚本清理
+       report.Publish → session.json + report.md
 ```
 
 ## 测试布局（已跟包走）
 
 ```
-internal/runtime/verify/http_verifier.go
-internal/runtime/verify/http_verifier_test.go   ← 同目录，package verify
+internal/runtime/evidence/journal.go
+internal/runtime/evidence/journal_test.go   ← 同目录，package evidence
 ```
 
 - **不再使用** `tests/_packages` 与符号链接
@@ -91,13 +89,12 @@ internal/runtime/verify/http_verifier_test.go   ← 同目录，package verify
 |--------|-----|
 | REPL / 任务解析 | `internal/terminal` |
 | engagement 接线 | `internal/app/engagement.go` |
-| 模型循环 / consolidation | `internal/runtime/loop` |
-| 漏洞评分 / 类型 | `internal/runtime/verify` |
-| 框架 HTTP / 登录 | `internal/runtime/verify/http_verifier.go` |
+| 模型循环 / 工具 | `internal/runtime/loop` |
+| 证据 journal / 引用 | `internal/runtime/evidence` |
 | 执行 / 预检 | `internal/runtime/exec` |
 | 授权范围 | `internal/runtime/authz` |
 | session 字段 | `internal/runtime/session` |
-| report 发现段 | `internal/report/findings.go` |
+| report 渲染 | `internal/report/markdown.go` |
 | 加 skill | `skills/<name>/` + `registry.go` |
 
 ## 刻意没做的

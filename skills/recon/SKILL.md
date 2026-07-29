@@ -4,7 +4,7 @@
 
 优先使用环境变量 `PENTGO_TARGET`、`PENTGO_WORKDIR` 与工作目录中已有文件。不要假设固定工具链或固定扫描阶段；根据当前证据选择下一步。
 
-只有 stdout、stderr、退出码和 evidence 路径构成运行时证据。任务意图已被证据覆盖时，在**不含新代码块**的回复中输出 `TASK_COMPLETE` 或 `MISSION_COMPLETE` 并给出简短结论。
+只有 stdout、stderr、退出码和 `[evidence_ref: N]` 构成运行时证据。任务意图已被证据覆盖时，在不带工具调用的普通助手回复中给出简短结论。
 
 ---
 
@@ -118,4 +118,4 @@ notes: homepage link /login; no password form on /
 3. 有或无登录面均已在 ASSET MAP 或等价输出中写明；  
 4. 未越权、未爆破、未破坏性写。
 
-然后可继续深测或在证据足够时 `TASK_COMPLETE`。
+然后可继续深测或在证据足够时给出普通助手结论。

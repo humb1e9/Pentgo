@@ -15,27 +15,19 @@ type Config struct {
 	Agent AgentConfig `json:"agent"`
 }
 
-// AgentConfig 描述文本模型、执行限制和恢复策略。
+// AgentConfig 描述 Eino 工具调用模型与本地执行限制。
 type AgentConfig struct {
-	Provider                  string              `json:"provider"`
-	MaxTurns                  int                 `json:"max_turns"`
-	MaxFindings               int                 `json:"max_findings"`
-	VerificationReproductions int                 `json:"verification_reproductions"`
-	RequestTimeoutSeconds     int                 `json:"request_timeout_seconds"`
-	ExecutionTimeoutSeconds   int                 `json:"execution_timeout_seconds"`
-	MaxOutputBytes            int                 `json:"max_output_bytes"`
-	MaxParallelBlocks         int                 `json:"max_parallel_blocks"`
-	MaxBlocksPerTurn          int                 `json:"max_blocks_per_turn"`
-	NoCodeLimit               int                 `json:"no_code_limit"`
-	ProviderRetryDelaySeconds int                 `json:"provider_retry_delay_seconds"`
-	NetworkBackoffSeconds     int                 `json:"network_backoff_seconds"`
-	SoftStuckTurns            int                 `json:"soft_stuck_turns"`
-	HardStuckTurns            int                 `json:"hard_stuck_turns"`
-	LineRepeatLimit           int                 `json:"line_repeat_limit"`
-	ScanLineRepeatLimit       int                 `json:"scan_line_repeat_limit"`
-	OpenAI                    ModelProviderConfig `json:"openai"`
-	Anthropic                 ModelProviderConfig `json:"anthropic"`
-	Authorization             AuthorizationConfig `json:"authorization"`
+	Provider                string              `json:"provider"`
+	MaxTurns                int                 `json:"max_turns"`
+	RequestTimeoutSeconds   int                 `json:"request_timeout_seconds"`
+	ExecutionTimeoutSeconds int                 `json:"execution_timeout_seconds"`
+	MaxOutputBytes          int                 `json:"max_output_bytes"`
+	NetworkBackoffSeconds   int                 `json:"network_backoff_seconds"`
+	LineRepeatLimit         int                 `json:"line_repeat_limit"`
+	ScanLineRepeatLimit     int                 `json:"scan_line_repeat_limit"`
+	OpenAI                  ModelProviderConfig `json:"openai"`
+	Anthropic               ModelProviderConfig `json:"anthropic"`
+	Authorization           AuthorizationConfig `json:"authorization"`
 }
 
 // ModelProviderConfig 描述一个模型提供商的连接信息。
@@ -73,22 +65,14 @@ func Default() Config {
 
 func defaultAgentConfig() AgentConfig {
 	return AgentConfig{
-		Provider:                  "openai",
-		MaxTurns:                  0,
-		MaxFindings:               10,
-		VerificationReproductions: 3,
-		RequestTimeoutSeconds:     60,
-		ExecutionTimeoutSeconds:   1800,
-		MaxOutputBytes:            65536,
-		MaxParallelBlocks:         4,
-		MaxBlocksPerTurn:          8,
-		NoCodeLimit:               3,
-		ProviderRetryDelaySeconds: 3,
-		NetworkBackoffSeconds:     15,
-		SoftStuckTurns:            3,
-		HardStuckTurns:            5,
-		LineRepeatLimit:           100,
-		ScanLineRepeatLimit:       500,
+		Provider:                "openai",
+		MaxTurns:                0,
+		RequestTimeoutSeconds:   60,
+		ExecutionTimeoutSeconds: 1800,
+		MaxOutputBytes:          65536,
+		NetworkBackoffSeconds:   15,
+		LineRepeatLimit:         100,
+		ScanLineRepeatLimit:     500,
 		OpenAI: ModelProviderConfig{
 			BaseURL:   "https://api.openai.com/v1",
 			APIKeyEnv: "OPENAI_API_KEY",
@@ -108,38 +92,14 @@ func normalizeAgentConfig(agent *AgentConfig) {
 	if agent.RequestTimeoutSeconds <= 0 {
 		agent.RequestTimeoutSeconds = defaults.RequestTimeoutSeconds
 	}
-	if agent.MaxFindings <= 0 {
-		agent.MaxFindings = defaults.MaxFindings
-	}
-	if agent.VerificationReproductions <= 0 {
-		agent.VerificationReproductions = defaults.VerificationReproductions
-	}
 	if agent.ExecutionTimeoutSeconds <= 0 {
 		agent.ExecutionTimeoutSeconds = defaults.ExecutionTimeoutSeconds
 	}
 	if agent.MaxOutputBytes <= 0 {
 		agent.MaxOutputBytes = defaults.MaxOutputBytes
 	}
-	if agent.MaxParallelBlocks <= 0 {
-		agent.MaxParallelBlocks = defaults.MaxParallelBlocks
-	}
-	if agent.MaxBlocksPerTurn <= 0 {
-		agent.MaxBlocksPerTurn = defaults.MaxBlocksPerTurn
-	}
-	if agent.NoCodeLimit <= 0 {
-		agent.NoCodeLimit = defaults.NoCodeLimit
-	}
-	if agent.ProviderRetryDelaySeconds <= 0 {
-		agent.ProviderRetryDelaySeconds = defaults.ProviderRetryDelaySeconds
-	}
 	if agent.NetworkBackoffSeconds <= 0 {
 		agent.NetworkBackoffSeconds = defaults.NetworkBackoffSeconds
-	}
-	if agent.SoftStuckTurns <= 0 {
-		agent.SoftStuckTurns = defaults.SoftStuckTurns
-	}
-	if agent.HardStuckTurns <= 0 {
-		agent.HardStuckTurns = defaults.HardStuckTurns
 	}
 	if agent.LineRepeatLimit <= 0 {
 		agent.LineRepeatLimit = defaults.LineRepeatLimit

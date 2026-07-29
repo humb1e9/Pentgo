@@ -1,8 +1,8 @@
 # PentGo
 
-PentGo 是一个终端 Agent Runtime。启动后输入包含 HTTP(S) URL 或域名的自然语言任务；模型以普通文本返回 Python 或 Bash 代码块，Runtime 在 engagement 专属工作目录中执行代码、保存每个块的 evidence，并把执行结果文本回灌给模型继续决策。
+PentGo 是一个终端 Agent Runtime。启动后输入包含 HTTP(S) URL 或域名的自然语言任务；一个 Eino 工具调用 Agent 在 engagement 专属工作目录中执行动作，并将动作结果追加到单一 `evidence.jsonl`。
 
-运行时没有固定的 Recon、Scan 或 Verify 阶段，也没有预定义命令调用目录。任务的后续步骤由模型根据已回灌的真实 stdout、stderr、退出码和 evidence 路径决定。
+运行时没有固定的 Recon、Scan 或 Verify 阶段。任务的后续步骤由模型根据已回灌的真实 stdout、stderr、退出码和 `[evidence_ref: N]` 决定。
 
 **读代码 / 改功能先看目录地图：** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)（本地 `docs/` 默认 gitignore，克隆后若缺失可向维护者索取）。
 
@@ -50,12 +50,7 @@ REPL 从输入中提取第一个 HTTP(S) URL 或裸域名；裸域名自动补�
     "request_timeout_seconds": 60,
     "execution_timeout_seconds": 1800,
     "max_output_bytes": 65536,
-    "max_parallel_blocks": 4,
-    "no_code_limit": 3,
-    "provider_retry_delay_seconds": 3,
     "network_backoff_seconds": 15,
-    "soft_stuck_turns": 3,
-    "hard_stuck_turns": 5,
     "line_repeat_limit": 100,
     "scan_line_repeat_limit": 500,
     "openai": {
@@ -79,30 +74,15 @@ REPL 从输入中提取第一个 HTTP(S) URL 或裸域名；裸域名自动补�
 }
 ```
 
-OpenAI 兼容 Provider 使用 Chat Completions 普通文本消息，不发送 native tool definitions。`thinking_mode` 非空时会作为 OpenAI 兼容接口的 `thinking` 字段发送。
+OpenAI 与 Anthropic provider 都通过 Eino 的原生 tool-call 模型驱动同一 Agent 循环。
 
 授权门会在执行前校验代码块：默认仅允许输入目标主机及其子域，拦截破坏性 SQL 与系统命令；`allowed_hosts` 可追加额外授权主机。范围检查只静态解析代码中直接出现的 HTTP(S) URL，并非沙箱；变量拼接或其他间接访问形式可能绕过该检查，因此它仅是纵深防御的一层。
 
 ## 执行模型
 
-每轮模型回复中的全部下列 fenced code block 都会按源码顺序收集：
+Agent 可调用 `exec(command)`、`execute_python(script)`、`load_skill(name)` 和 `record_finding(...)`。前两个动作经预检、授权和本地执行后追加一条 JSONL 证据记录；`load_skill` 与 `record_finding` 不写 Journal。每项 finding 必须引用成功动作的 evidence sequence。首个无工具调用的普通助手回复自然结束 engagement。
 
-| Fence | 解释器 |
-| --- | --- |
-| `python`、`python3` | `python3 -u` |
-| `bash`、`sh`、`shell` | `bash` |
-
-同一轮的块最多并发 `max_parallel_blocks` 个；每块在 `work/` 内保留源文件，拥有 `PENTGO_TARGET`、`PENTGO_ENGAGEMENT_ID` 和 `PENTGO_WORKDIR` 环境变量。Python 在执行前会进行语法、JSON、空实现、占位符检查，并对少量缺失 import 或 HTTP timeout 生成可审计修复副本。Shell 代码不使用命令白名单。
-
-Runtime 会回灌每块的状态、退出码、stdout、stderr 和 evidence 路径，并处理无代码回复、无证据声明、预检拒绝、无输出、Provider 单次重试、网络阻塞、重复模型回复和重复输出行。
-
-模型可以单独输出：
-
-```text
-SKILL_LOAD: terminal
-```
-
-以加载注册的本地 Markdown 知识。Skill 只是只读上下文，不是命令适配器。
+运行时脚本使用 `bash` 或 `python3 -u`，拥有 `PENTGO_TARGET`、`PENTGO_ENGAGEMENT_ID` 和 `PENTGO_WORKDIR` 环境变量。Python 在执行前进行语法、JSON、空实现、占位符检查，并对少量缺失 import 或 HTTP timeout 生成修复副本。
 
 ## 产物
 
@@ -110,18 +90,17 @@ SKILL_LOAD: terminal
 
 ```text
 eng-<timestamp>-<random>/
-├── evidence/
-│   └── agent-turn-001-block-001.json
+├── evidence.jsonl
 ├── work/
-│   └── turn-001-block-001.py
+│   └── artifact.txt
 ├── session.json
 └── report.md
 ```
 
-- `session.json` 保存会话状态、任务、加载 Skill、时间线和终止原因。
-- `evidence/*.json` 保存每个代码块的原始/修复代码、解释器、输出、退出状态和截断信息。
+- `session.json` 保存会话状态、任务、finding、最终摘要和终止原因。
+- `evidence.jsonl` 以完成顺序保存 `exec`、`execute_python` 及已发现的 MCP 工具结果。
 - `work/` 保存跨轮产生的脚本和文件。
-- `report.md` 由收尾模型调用基于有界执行摘要和 evidence 路径生成中文 Markdown 报告；该调用不执行代码、不复用完整聊天历史。模型调用失败、返回空文本或任务已取消时，`report.md` 自动回退为确定性执行时间线。
+- `report.md` 在本地按 `session.json` 的确定性结构渲染。
 
 ## 开发验证
 

@@ -69,6 +69,11 @@ REPL 从输入中提取第一个 HTTP(S) URL 或裸域名；裸域名自动补�
       "allow_destructive": false,
       "allow_private_hosts": true,
       "allowed_hosts": []
+    },
+    "mcp": {
+      "command": "/absolute/path/to/local-mcp-server",
+      "args": ["--stdio"],
+      "env": {"FIXTURE_TOKEN": "TOKEN"}
     }
   }
 }
@@ -81,6 +86,8 @@ OpenAI 与 Anthropic provider 都通过 Eino 的原生 tool-call 模型驱动同
 ## 执行模型
 
 Agent 可调用 `exec(command)`、`execute_python(script)`、`load_skill(name)` 和 `record_finding(...)`。前两个动作经预检、授权和本地执行后追加一条 JSONL 证据记录；`load_skill` 与 `record_finding` 不写 Journal。每项 finding 必须引用成功动作的 evidence sequence。首个无工具调用的普通助手回复自然结束 engagement。
+
+`agent.mcp` 可选配置一个本地 stdio MCP server。每次 engagement 启动一个子进程、发现工具并按原始 MCP 工具名挂到 Agent；动作结果与本地执行共用 Evidence Journal，发布前关闭 MCP 子进程。只支持一个本地 stdio server，不提供多服务器、HTTP/SSE、重连或管理层。
 
 运行时脚本使用 `bash` 或 `python3 -u`，拥有 `PENTGO_TARGET`、`PENTGO_ENGAGEMENT_ID` 和 `PENTGO_WORKDIR` 环境变量。Python 在执行前进行语法、JSON、空实现、占位符检查，并对少量缺失 import 或 HTTP timeout 生成修复副本。
 

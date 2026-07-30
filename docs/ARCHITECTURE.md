@@ -16,6 +16,7 @@ PentGo/
 │   ├── terminal/            # REPL 交互
 │   └── runtime/             # ★ 运行时（已拆为 5 个子包）
 │       ├── evidence/        # engagement-local JSONL journal
+│       ├── mcp/             # 单一 local stdio MCP bridge
 │       ├── exec/            # 本地预检 / 执行
 │       ├── authz/           # Scope + Authorizer（依赖 exec.CodeBlock）
 │       ├── session/         # Target + AgentSession
@@ -41,6 +42,7 @@ exec  →  authz
 | `exec` | 预检与本地进程执行 | `CodeBlock`, `Executor` |
 | `authz` | 主机范围 + 破坏性操作门 | `Scope`, `Authorizer` |
 | `evidence` | engagement-local JSONL journal 与引用查询 | `Journal`, `Record` |
+| `mcp` | 单一 stdio MCP 发现与 Eino 工具转换 | `ConnectStdio`, `Client` |
 | `session` | 目标解析与会话状态 | `Target`, `AgentSession` |
 | `loop` | 单一 Eino Agent、工具与自然终止 | `Runner`, `RunEino` |
 
@@ -50,11 +52,11 @@ exec  →  authz
 用户 REPL 输入（含 URL）
   → terminal.ParseTask → sess.Target + Intent
   → app.Service.Run
-       eng writer / evidence journal / Eino model
+       eng writer / evidence journal / optional local stdio MCP discovery / Eino model
        exec.NewExecutor
-       loop.NewRunner（Authorizer, Scope hosts, Journal）
+       loop.NewRunner（Authorizer, Scope hosts, Journal, discovered MCP tools）
        runner.RunEino → 自然终止
-       Journal.Close + Runtime 脚本清理
+       MCP.Close + Journal.Close + Runtime 脚本清理
        report.Publish → session.json + report.md
 ```
 
@@ -91,6 +93,7 @@ internal/runtime/evidence/journal_test.go   ← 同目录，package evidence
 | engagement 接线 | `internal/app/engagement.go` |
 | 模型循环 / 工具 | `internal/runtime/loop` |
 | 证据 journal / 引用 | `internal/runtime/evidence` |
+| MCP stdio bridge | `internal/runtime/mcp` |
 | 执行 / 预检 | `internal/runtime/exec` |
 | 授权范围 | `internal/runtime/authz` |
 | session 字段 | `internal/runtime/session` |

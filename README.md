@@ -1,39 +1,65 @@
 # PentGo
 
-PentGo 是一个基于 Go、Eino 和 Eino ADK 的中文渗透测试智能体。它提供持续对话、多会话、项目共享事实、证据日志、MCP 工具和可回放的会话历史。
+> 基于 Go、Eino ADK 和 MCP 的中文 AI Agent 终端工作台。
 
-## 快速开始
+PentGo 在终端中提供连续对话、工具调用、会话管理、共享上下文和本地持久化能力。它将工作状态保存在当前目录，关闭进程后仍可继续处理历史任务。
 
-### 环境
+## 功能
 
-- Go `1.25` 或更高版本
-- Linux、WSL 或 macOS
-- 支持 Eino tool calling 的 OpenAI 兼容模型或 Anthropic 模型
-- 可选的 stdio、Streamable HTTP 或 SSE MCP Server
+- 通过终端对话驱动模型分析任务、调用工具并持续处理结果。
+- 支持新建、重命名、删除和恢复多个独立会话。
+- 支持本地文件、文本检索、文件编辑和命令执行等工作区工具。
+- 支持通过 MCP 扩展远程工具，并聚合多个 stdio、HTTP 或 SSE 服务。
+- 持久化对话、工具结果和共享事实，进程退出后可恢复历史工作状态。
+- 支持从技能目录发现摘要，并按需加载单份 Markdown 技能正文。
 
-### 构建
+## 运行环境
+
+- Go `1.25` 或更高版本，必须安装在本机并可通过 `go version` 使用。
+- Linux、WSL 或 macOS。
+- 支持工具调用的 OpenAI 兼容模型或 Anthropic 模型。
+- MCP 服务可选，用于扩展远程工具能力。
+
+## 安装
+
+### 安装 Go
+
+请先安装 Go `1.25` 或更新版本，并确认命令可用：
 
 ```bash
-go build -o pentgo ./cmd/pentgo
+go version
 ```
 
-### 配置模型
+Go 官方安装说明见 <https://go.dev/doc/install>。Linux、WSL 或 macOS 用户完成安装后，应重新打开终端，确保 `go` 已加入 `PATH`。
 
-配置文件位置：
+### 构建并启动
+
+```bash
+git clone https://github.com/humb1e9/Pentgo.git
+cd Pentgo
+go build -o pentgo ./cmd/pentgo
+./pentgo
+```
+
+首次启动会在当前目录创建 `.pentgo/` 工作区。源码仓库中的 `skills/` 目录需要保留在启动目录下，供 `/load_skill` 读取。
+
+## 配置模型
+
+配置文件路径：
 
 | 系统 | 路径 |
 | --- | --- |
 | Linux / WSL | `${XDG_CONFIG_HOME:-$HOME/.config}/pentgo/config.json` |
 | macOS | `$HOME/Library/Application Support/pentgo/config.json` |
 
-推荐使用环境变量保存 API key：
+推荐使用环境变量保存 API Key：
 
 ```bash
 export OPENAI_API_KEY="TOKEN"
 mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/pentgo"
 ```
 
-最小配置：
+最小 OpenAI 兼容配置：
 
 ```json
 {
@@ -51,70 +77,35 @@ mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/pentgo"
 }
 ```
 
-Anthropic 使用 `provider: "anthropic"` 和 `agent.anthropic` 配置。OpenAI 兼容服务只需把 `base_url` 和 `model` 换成对应值。
+使用 Anthropic 时，将 `provider` 改为 `anthropic`，并在 `agent.anthropic` 中填写对应的 `base_url`、`model` 和 `api_key_env`。其他 OpenAI 兼容服务只需替换 `base_url` 与 `model`。
 
-### 启动
+## 启动与会话
 
-```bash
-go run ./cmd/pentgo
-```
-
-启动目录就是工作区边界。首次启动会在当前目录创建 `.pentgo/` 和一个交互会话；之后每次执行 `pentgo` 都会创建一条新会话。项目数据不会写入父目录或自动选择兄弟目录。
-
-### 进程命令
-
-```bash
+```text
 pentgo
 pentgo resume
 ```
 
-- `pentgo` 打开当前目录工作区并创建新会话；首次使用时同时创建工作区。
-- `pentgo resume` 仅打开已有工作区，在进入 TUI 前列出现有会话供选择，不会创建工作区或会话。
+`pentgo` 会打开当前目录并创建一个新会话；首次运行时会创建 `.pentgo/` 工作区。`pentgo resume` 只打开已有工作区，在进入终端前列出现有会话供选择，不会创建新会话。
 
 ## 交互命令
 
-启动后进入 Bubble Tea 全屏终端界面：全宽显示当前会话历史、工具活动和输入框。`/new` 创建新的空白会话；历史会话仅通过 `pentgo resume` 在进入 TUI 前选择。
+| 命令 | 说明 |
+| --- | --- |
+| `/load_skill` | 读取技能目录并加载名称与摘要。 |
+| `/new` | 创建并进入新的空白会话。 |
+| `/session rename NAME` | 重命名当前会话。 |
+| `/session list` | 列出当前项目的会话。 |
+| `/session delete [SESSION_ID]` | 删除指定会话；省略 ID 时删除当前会话。 |
+| `/status` | 显示当前会话状态。 |
+| `/blackboard` | 显示项目级共享记录。 |
+| `/clear` | 清除当前终端的临时显示内容。 |
+| `/help` | 显示命令摘要。 |
+| `/exit` | 退出终端。 |
 
-```text
-/load_skill
-/new
-/session rename NAME
-/session list
-/session delete [SESSION_ID]
-/status
-/blackboard
-/clear
-/exit
-```
+## 工作区数据
 
-`/load_skill` 使用显式注入的技能文件系统扫描顶层 `skills/*.md`，只加载名称和描述摘要；模型需要正文时调用 `load_skill`。没有执行 `/load_skill` 仍可进行普通对话。
-
-每个 Agent 初始化时都注册 Eino Local Backend 的内置工具：`ls`、`read_file`、`write_file`、`edit_file`、`glob`、`grep` 和 `execute`。它们以启动目录为根，文件路径使用相对路径；所有调用结果都会写入项目 evidence。MCP 工具是额外能力，不是这些本地工具的前置条件。
-
-## 架构
-
-```text
-cmd/pentgo → cli → app
-                    ├── agent / domain
-                    └── adapters/{llm,mcp,storage,skillfs}
-```
-
-- `internal/app`：用例编排、ProjectRuntime、SessionWorker、事件和生命周期。
-- `internal/agent`：与模型厂商无关的消息、工具和 ModelEngine 协议。
-- `internal/domain`：Project、Session、Turn、Fact 和状态转换。
-- `internal/adapters/llm`：Eino ADK loop、消息转换和 provider 构造。
-- `internal/adapters/builtins`：内置工作区文件系统和命令执行工具。
-- `internal/adapters/mcp`：MCP stdio、Streamable HTTP、SSE 发现、schema 和工具调用。
-- `internal/adapters/storage`：项目、session、transcript、evidence 持久化。
-- `internal/adapters/skillfs`：接收显式 `fs.FS` 的技能文件加载器。
-- `internal/cli`：REPL 命令解析和事件渲染。
-- `internal/config`：用户级运行配置。
-
-一个进程只有一个 ProjectRuntime，一个项目可以同时拥有多个 SessionWorker。worker goroutine 是 session 可变状态的唯一写入者，CLI 只消费快照和有界事件流。
-
-## 持久化与恢复
-
-项目数据位于工作目录的 `.pentgo/`：
+PentGo 以启动目录作为工作区边界，并在其中创建 `.pentgo/`：
 
 ```text
 <working-directory>/
@@ -123,56 +114,49 @@ cmd/pentgo → cli → app
     └── tmp/
 ```
 
-- `pentgo.db` 是项目唯一的持久化事实源，使用 SQLite WAL、外键和事务。
-- project、session、turn、target、fact、evidence 和 transcript 使用规范化关系表；只有 provider 参数这类开放结构使用 JSON 列。
-- project 的 session summaries 从会话表派生，不维护重复索引文件。
-- session 与 project 元数据同事务提交；blackboard 事实在独立事务中原子替换。
-- evidence 使用数据库分配的递增 `evidence_ref`；提交成功后工具结果才返回模型。
-- transcript 按 `(session_id, seq)` 排序，tool calls 存在子表中，历史消息只回放，不会再次调用工具。
-- 普通继续路径是 transcript replay。历史 tool message 只回放，不会再次调用工具；模型适配器不保存领域状态。
+`pentgo.db` 保存项目、会话、对话、共享记录和工具执行记录。请将 `.pentgo/` 视为工作数据目录；删除该目录会删除当前目录对应的历史状态。
 
-正常完成一轮 turn 后，下一条用户消息会进入同一个 session。按 `Ctrl+C` 或 `Ctrl+D` 退出 TUI 时，活动 turn 会保留已写入的 evidence 并标记为 `interrupted`；使用 `pentgo resume` 选择该会话后从 transcript 继续。
+## MCP 工具服务
 
-## MCP
-
-配置多个 MCP Server：
+在 `agent.mcp` 下添加具名服务即可扩展远程工具。每个服务使用 `command` 时默认采用 stdio；也可使用 `type: "http"` 或 `type: "sse"` 配置远程端点。
 
 ```json
 {
   "agent": {
     "mcp": {
-      "nmap": {
-        "command": "/absolute/path/to/nmap-mcp-server",
-        "args": ["--stdio"],
-        "env": {"NMAP_PATH": "/usr/bin/nmap"}
-      },
-      "browser": {
-        "command": "/absolute/path/to/browser-mcp-server",
+      "files": {
+        "command": "/absolute/path/to/tool-server",
         "args": ["--stdio"]
       },
-      "assets": {
+      "catalog": {
         "type": "http",
-        "url": "http://127.0.0.1:80/mcp",
+        "url": "http://127.0.0.1:8080/mcp",
         "headers": {
           "Authorization": "Bearer TOKEN"
         }
-      },
-      "legacy": {
-        "type": "sse",
-        "url": "http://127.0.0.1:8081/sse"
       }
     }
   }
 }
 ```
 
-项目 runtime 拥有全部 MCP client 的连接和关闭生命周期。每个配置项使用 `command`（默认 `stdio`）、`type: "http"`（Streamable HTTP）或 `type: "sse"`（旧版 SSE）建立独立连接；模型直接看到 Server 声明的原始工具名，例如 `nmap_scan` 和 `asset_query`，PentGo 仅在内部按 Server 路由调用。所有外部工具名必须在当前配置中全局唯一。`headers` 会附加到 HTTP/SSE 请求。旧的单 Server 对象会读为 `default`。Server 和工具名称必须匹配 `[A-Za-z0-9_-]`；每个外部工具调用经过 evidence decorator，调用参数和结果写入当前项目 journal。
+启动时会发现各服务公开的工具及参数定义。不同服务中的工具名称必须唯一。
 
-## 验证
+## Skills
 
-```bash
-go test ./... -count=1
-go test -race ./...
-go vet ./...
-git diff --check
-```
+程序从启动目录的 `skills/*.md` 读取技能文件。执行 `/load_skill` 后，系统先提供技能名称和摘要，Agent 在需要时再读取指定文件的正文。
+
+## 常见问题
+
+### 找不到 `go` 命令
+
+请安装 Go `1.25` 或更新版本，并重新打开终端后执行 `go version` 确认安装和 `PATH` 配置正确。
+
+### 模型连接失败
+
+检查 `provider`、`base_url`、`model` 和 API Key 环境变量名称是否与所使用的服务一致。
+
+## 技术文档
+
+- [技术文档](docs/TECHNICAL.md) 说明模块职责、运行时模型和持久化实现。
+- [架构地图](docs/ARCHITECTURE.md) 说明目录结构与依赖方向。

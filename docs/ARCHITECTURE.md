@@ -1,6 +1,11 @@
 # PentGo 目录地图
 
-PentGo 是一个中文交互的渗透测试智能体。目录只按稳定职责分类：业务状态、应用运行、外部适配和用户界面各有唯一位置，具体技术名只出现在 `adapters` 下。
+PentGo 是一个中文交互的 Agent 终端工作台。目录只按稳定职责分类：业务状态、应用运行、外部适配和用户界面各有唯一位置，具体技术名只出现在 `adapters` 下。
+
+## 文档入口
+
+- 使用方式、配置与原生构建命令见[项目 README](../README.md)。
+- 模块职责、运行时状态和持久化细节见[技术文档](TECHNICAL.md)。
 
 ## 目录
 
@@ -109,7 +114,7 @@ project 的 session summaries 从 `sessions` 查询派生。`CommitSession` 原�
 
 ## Skills
 
-`skillfs.Registry` 构造时接收显式 `fs.FS`，不读取当前工作目录，也不使用包级默认 registry。`/load_skill` 扫描顶层 `*.md`，只把名称和描述摘要放进提示词；模型随后用准确名称加载单个正文。
+`skillfs.Registry` 构造时接收显式 `fs.FS`，不读取当前工作目录，也不使用包级默认 registry。`/load_skill` 枚举顶层 `*.md`，只把名称和描述摘要放进提示词；模型随后用准确名称加载单个正文。
 
 ## 验证
 

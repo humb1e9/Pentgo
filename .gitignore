@@ -4,6 +4,7 @@
 # Local design and planning documents (keep the human map tracked)
 /docs/**
 !/docs/ARCHITECTURE.md
+!/docs/TECHNICAL.md
 !/docs/superpowers/
 !/docs/superpowers/plans/
 !/docs/superpowers/plans/*.md

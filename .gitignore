@@ -4,6 +4,9 @@
 # Local design and planning documents (keep the human map tracked)
 /docs/**
 !/docs/ARCHITECTURE.md
+!/docs/superpowers/
+!/docs/superpowers/plans/
+!/docs/superpowers/plans/*.md
 
 # Go module build and analysis artifacts
 /pentgo
@@ -16,9 +19,11 @@ coverage.out
 *.coverprofile
 *.prof
 
-# PentGo engagement output (default cwd publishes eng-<id>/)
+# PentGo project data (metadata stays visible; intermediate files stay local)
+/project-*/tmp/**
 /eng-*/
 /output/
+.pentgo/
 /.pentgo-*/
 pentgo-report-*.md
 /pentgo-output/
@@ -40,3 +45,8 @@ pentgo-report-*.md
 *.swo
 .DS_Store
 Thumbs.db
+
+#Claude and Codex and Codegraph
+.codegraph/
+.claude/
+.codex/

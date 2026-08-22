@@ -25,13 +25,19 @@ const baseSystemPrompt = `你是 PentGo 的渗透测试智能体。你的工作�
 - 对当前项目内其他会话有复用价值的稳定事实，调用 write_project_fact 写入 key 和 value；共享事实不会扩大当前会话的目标范围。
 - 完成当前请求后用中文总结已验证内容、关键证据、发现和仍待验证的部分。`
 
-// SystemPrompt 组合固定中文指令和每轮上下文。
+// BaseSystemPrompt returns the stable system envelope that belongs in context
+// preflight measurements. Callers may pass it back to SystemPrompt unchanged.
+func BaseSystemPrompt() string { return baseSystemPrompt }
+
+// SystemPrompt 组合固定中文指令和每轮上下文。input may be the stable envelope
+// itself when the host supplied it for context-budget measurement.
 func SystemPrompt(input string, projectFacts string) string {
 	var builder strings.Builder
 	builder.WriteString(baseSystemPrompt)
-	if strings.TrimSpace(input) != "" {
+	input = strings.TrimSpace(input)
+	if input != "" && input != baseSystemPrompt {
 		builder.WriteString("\n\n当前运行上下文：\n")
-		builder.WriteString(strings.TrimSpace(input))
+		builder.WriteString(input)
 	}
 	if strings.TrimSpace(projectFacts) == "" {
 		projectFacts = "当前没有记录项目事实。"

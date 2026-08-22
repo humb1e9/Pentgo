@@ -2,116 +2,237 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
-	"pentgo/internal/adapters/builtins"
 	"pentgo/internal/agent"
 
-	"github.com/cloudwego/eino/adk"
+	einoopenai "github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 )
 
 type scriptedModel struct {
-	messages []*schema.Message
-	inputs   [][]*schema.Message
+	chunks    []*schema.Message
+	streamErr error
+	recvErr   error
+	inputs    [][]*schema.Message
+	toolInfos [][]*schema.ToolInfo
 }
 
-func (model *scriptedModel) Generate(_ context.Context, input []*schema.Message, _ ...model.Option) (*schema.Message, error) {
-	model.inputs = append(model.inputs, append([]*schema.Message(nil), input...))
-	if len(model.messages) == 0 {
-		return nil, fmt.Errorf("script exhausted")
+func (*scriptedModel) Generate(context.Context, []*schema.Message, ...model.Option) (*schema.Message, error) {
+	return nil, fmt.Errorf("Generate must not be called by StreamStep")
+}
+
+func (fixture *scriptedModel) Stream(_ context.Context, input []*schema.Message, _ ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+	fixture.inputs = append(fixture.inputs, append([]*schema.Message(nil), input...))
+	if fixture.streamErr != nil {
+		return nil, fixture.streamErr
 	}
-	message := model.messages[0]
-	model.messages = model.messages[1:]
-	return message, nil
+	if fixture.recvErr == nil {
+		return schema.StreamReaderFromArray(fixture.chunks), nil
+	}
+	reader, writer := schema.Pipe[*schema.Message](len(fixture.chunks) + 1)
+	go func() {
+		defer writer.Close()
+		for _, chunk := range fixture.chunks {
+			writer.Send(chunk, nil)
+		}
+		writer.Send(nil, fixture.recvErr)
+	}()
+	return reader, nil
 }
 
-func (*scriptedModel) Stream(context.Context, []*schema.Message, ...model.Option) (*schema.StreamReader[*schema.Message], error) {
-	return nil, fmt.Errorf("streaming unsupported")
+func (fixture *scriptedModel) WithTools(infos []*schema.ToolInfo) (model.ToolCallingChatModel, error) {
+	fixture.toolInfos = append(fixture.toolInfos, append([]*schema.ToolInfo(nil), infos...))
+	return fixture, nil
 }
 
-func (model *scriptedModel) WithTools([]*schema.ToolInfo) (model.ToolCallingChatModel, error) {
-	return model, nil
+type engineFixtureTool struct {
+	invoked bool
 }
-
-type engineFixtureTool struct{}
 
 func (*engineFixtureTool) Name() string        { return "fixture_probe" }
 func (*engineFixtureTool) Description() string { return "执行 fixture 检查。" }
 func (*engineFixtureTool) InputSchema() map[string]any {
 	return map[string]any{"type": "object", "required": []any{"value"}, "properties": map[string]any{"value": map[string]any{"type": "string"}}}
 }
-func (*engineFixtureTool) Invoke(context.Context, map[string]any) (string, error) {
-	return "RESULT", nil
+func (fixture *engineFixtureTool) Invoke(context.Context, map[string]any) (string, error) {
+	fixture.invoked = true
+	panic("StreamStep must not invoke tools")
 }
 
-func TestEinoEnginePreservesReasoningContentAcrossMessageBoundary(t *testing.T) {
-	model := &scriptedModel{messages: []*schema.Message{{
-		Role: schema.Assistant, Content: "ok", ReasoningContent: "reason first",
-	}}}
-	engine, err := NewEngine(context.Background(), model, nil, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	events, err := engine.Run(context.Background(), agent.TurnInput{Messages: []agent.Message{{Role: agent.RoleUser, Content: "hello"}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var got agent.Message
-	for event := range events {
-		if event.Message.Role == agent.RoleAssistant {
-			got = event.Message
-		}
-	}
-	if got.ReasoningContent != "reason first" {
-		t.Fatalf("reasoning content = %q", got.ReasoningContent)
-	}
-
-	replayed := toSchemaMessages([]agent.Message{{Role: agent.RoleAssistant, ReasoningContent: "reason replay"}})
-	if len(replayed) != 1 || replayed[0].ReasoningContent != "reason replay" {
-		t.Fatalf("replayed messages = %#v", replayed)
-	}
-}
-
-func TestEinoEngineMapsToolCallAndResult(t *testing.T) {
-	model := &scriptedModel{messages: []*schema.Message{
-		schema.AssistantMessage("", []schema.ToolCall{{ID: "call-1", Function: schema.FunctionCall{Name: "fixture_probe", Arguments: `{"value":"TARGET"}`}}}),
-		schema.AssistantMessage("已完成", nil),
+func TestStepStreamsTextThenReturnsOneCompleteAssistantMessage(t *testing.T) {
+	fixture := &scriptedModel{chunks: []*schema.Message{
+		{Role: schema.Assistant, Content: "你好", ReasoningContent: "先"},
+		{Role: schema.Assistant, Content: "，世界", ReasoningContent: "思考"},
 	}}
-	engine, err := NewEngine(context.Background(), model, []agent.Tool{&engineFixtureTool{}}, nil, nil)
+	engine, err := NewEngine(context.Background(), fixture, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	events, err := engine.Run(context.Background(), agent.TurnInput{Messages: []agent.Message{{Role: agent.RoleUser, Content: "检查 TARGET"}}})
+	events, err := engine.StreamStep(context.Background(), agent.ModelStepInput{Messages: []agent.Message{{Role: agent.RoleUser, Content: "hello"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var messages []agent.Message
+	var deltas []agent.Message
+	var finals []agent.Message
 	for event := range events {
 		if event.Err != nil {
 			t.Fatal(event.Err)
 		}
-		if event.Message.Role != "" {
-			messages = append(messages, event.Message)
+		if event.Delta.Role != "" {
+			deltas = append(deltas, event.Delta)
+		}
+		if event.Final != nil {
+			finals = append(finals, *event.Final)
 		}
 	}
-	if len(messages) < 3 || len(messages[0].ToolCalls) != 1 || messages[1].Role != agent.RoleTool || messages[1].Content != "RESULT" || messages[len(messages)-1].Content != "已完成" {
-		t.Fatalf("mapped messages = %#v", messages)
+	if len(deltas) != 2 || deltas[0].Content != "你好" || deltas[1].Content != "，世界" {
+		t.Fatalf("deltas = %#v", deltas)
+	}
+	if len(finals) != 1 || finals[0].Role != agent.RoleAssistant || finals[0].Content != "你好，世界" || finals[0].ReasoningContent != "先思考" {
+		t.Fatalf("finals = %#v", finals)
 	}
 }
 
-func TestEinoEngineUsesChineseSystemPrompt(t *testing.T) {
-	model := &scriptedModel{messages: []*schema.Message{schema.AssistantMessage("收到", nil)}}
-	engine, err := NewEngine(context.Background(), model, nil, nil, nil)
+func TestStepBindsToolsAndPreservesCompleteToolCalls(t *testing.T) {
+	index := 0
+	fixture := &scriptedModel{chunks: []*schema.Message{
+		{Role: schema.Assistant, ToolCalls: []schema.ToolCall{{Index: &index, ID: "call-1", Function: schema.FunctionCall{Name: "fixture_probe", Arguments: `{"value":"tar`}}}},
+		{Role: schema.Assistant, ToolCalls: []schema.ToolCall{{Index: &index, Function: schema.FunctionCall{Arguments: `get"}`}}}},
+	}}
+	tool := &engineFixtureTool{}
+	engine, err := NewEngine(context.Background(), fixture, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	events, err := engine.Run(context.Background(), agent.TurnInput{Messages: []agent.Message{
+	events, err := engine.StreamStep(context.Background(), agent.ModelStepInput{
+		Messages: []agent.Message{{Role: agent.RoleUser, Content: "check target"}},
+		Tools:    []agent.Tool{tool},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var final *agent.Message
+	for event := range events {
+		if event.Err != nil {
+			t.Fatal(event.Err)
+		}
+		if event.Final != nil {
+			final = event.Final
+		}
+	}
+	if len(fixture.toolInfos) != 1 || len(fixture.toolInfos[0]) != 1 || fixture.toolInfos[0][0].Name != "fixture_probe" {
+		t.Fatalf("bound tools = %#v", fixture.toolInfos)
+	}
+	if final == nil || len(final.ToolCalls) != 1 {
+		t.Fatalf("final = %#v", final)
+	}
+	call := final.ToolCalls[0]
+	if call.ID != "call-1" || call.Name != "fixture_probe" || call.RawArguments != `{"value":"target"}` || call.Arguments["value"] != "target" {
+		t.Fatalf("tool call = %#v", call)
+	}
+}
+
+func TestStepDoesNotExecuteTools(t *testing.T) {
+	fixture := &scriptedModel{chunks: []*schema.Message{
+		schema.AssistantMessage("", []schema.ToolCall{{ID: "call-1", Function: schema.FunctionCall{Name: "fixture_probe", Arguments: `{"value":"x"}`}}}),
+	}}
+	tool := &engineFixtureTool{}
+	engine, err := NewEngine(context.Background(), fixture, []agent.Tool{tool})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := engine.StreamStep(context.Background(), agent.ModelStepInput{Messages: []agent.Message{{Role: agent.RoleUser, Content: "call tool"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var final *agent.Message
+	for event := range events {
+		if event.Err != nil {
+			t.Fatal(event.Err)
+		}
+		if event.Final != nil {
+			final = event.Final
+		}
+	}
+	if tool.invoked {
+		t.Fatal("tool was invoked inside model adapter")
+	}
+	if final == nil || len(final.ToolCalls) != 1 || final.ToolCalls[0].Name != "fixture_probe" {
+		t.Fatalf("final = %#v", final)
+	}
+}
+
+func TestStepTransportsAsynchronousStreamErrors(t *testing.T) {
+	fixture := &scriptedModel{
+		chunks:  []*schema.Message{schema.AssistantMessage("partial", nil)},
+		recvErr: &einoopenai.APIError{Code: "context_length_exceeded", Message: "too many tokens"},
+	}
+	engine, err := NewEngine(context.Background(), fixture, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := engine.StreamStep(context.Background(), agent.ModelStepInput{Messages: []agent.Message{{Role: agent.RoleUser, Content: "hello"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var deltas, finals, streamErrors int
+	for event := range events {
+		if event.Delta.Role != "" {
+			deltas++
+		}
+		if event.Final != nil {
+			finals++
+		}
+		if event.Err != nil {
+			streamErrors++
+			if !errors.Is(event.Err, agent.ErrContextWindowExceeded) {
+				t.Fatalf("stream error = %v", event.Err)
+			}
+		}
+	}
+	if deltas != 1 || finals != 0 || streamErrors != 1 {
+		t.Fatalf("deltas/finals/errors = %d/%d/%d", deltas, finals, streamErrors)
+	}
+}
+
+func TestStepNormalizesConfiguredContextOverflow(t *testing.T) {
+	fixture := &scriptedModel{streamErr: &einoopenai.APIError{Code: "context_length_exceeded", Message: "too many tokens"}}
+	engine, err := NewEngine(context.Background(), fixture, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = engine.StreamStep(context.Background(), agent.ModelStepInput{Messages: []agent.Message{{Role: agent.RoleUser, Content: "hello"}}})
+	if !errors.Is(err, agent.ErrContextWindowExceeded) {
+		t.Fatalf("error = %v, want context-window sentinel", err)
+	}
+}
+
+func TestNormalizeContextWindowErrorLeavesUnknownErrorsUntouched(t *testing.T) {
+	original := &einoopenai.APIError{Code: "invalid_request_error", Message: "unsupported option"}
+	if got := normalizeContextWindowError(original); got != original || errors.Is(got, agent.ErrContextWindowExceeded) {
+		t.Fatalf("normalized unknown error = %v", got)
+	}
+}
+
+func TestNormalizeContextWindowErrorLeavesUnstructuredOverflowTextUntouched(t *testing.T) {
+	original := errors.New(`create new streaming message fail: {"error":{"type":"invalid_request_error","message":"prompt is too long: maximum context length exceeded"}}`)
+	if got := normalizeContextWindowError(original); got != original || errors.Is(got, agent.ErrContextWindowExceeded) {
+		t.Fatalf("normalized unstructured error = %v", got)
+	}
+}
+
+func TestStepUsesChineseSystemPromptAndReplaysMessages(t *testing.T) {
+	fixture := &scriptedModel{chunks: []*schema.Message{schema.AssistantMessage("收到", nil)}}
+	engine, err := NewEngine(context.Background(), fixture, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := engine.StreamStep(context.Background(), agent.ModelStepInput{Messages: []agent.Message{
 		{Role: agent.RoleSystem, Content: `<pentgo-skill-catalog digest="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">` + "\n- `api`：API routing\n</pentgo-skill-catalog>"},
 		{Role: agent.RoleUser, Content: "检查 API"},
 	}})
@@ -120,10 +241,10 @@ func TestEinoEngineUsesChineseSystemPrompt(t *testing.T) {
 	}
 	for range events {
 	}
-	if len(model.inputs) != 1 || len(model.inputs[0]) != 3 || model.inputs[0][0].Role != schema.System || model.inputs[0][1].Role != schema.System || model.inputs[0][2].Role != schema.User {
-		t.Fatalf("model input order = %#v", model.inputs)
+	if len(fixture.inputs) != 1 || len(fixture.inputs[0]) != 3 || fixture.inputs[0][0].Role != schema.System || fixture.inputs[0][1].Role != schema.System || fixture.inputs[0][2].Role != schema.User {
+		t.Fatalf("model input order = %#v", fixture.inputs)
 	}
-	fixed := model.inputs[0][0].Content
+	fixed := fixture.inputs[0][0].Content
 	for _, want := range []string{"渗透测试智能体", "会话上下文存在 PentGo 技能目录", "调用 load_skill", "不得猜测技能名称"} {
 		if !strings.Contains(fixed, want) {
 			t.Fatalf("fixed prompt missing %q: %q", want, fixed)
@@ -132,110 +253,18 @@ func TestEinoEngineUsesChineseSystemPrompt(t *testing.T) {
 	if strings.Contains(fixed, "`api`：API routing") || strings.Contains(fixed, "/load_skill") || strings.Contains(fixed, "C"+"TF") {
 		t.Fatalf("fixed prompt unexpectedly repeats catalog or CLI command: %q", fixed)
 	}
-	if !strings.Contains(model.inputs[0][1].Content, "`api`：API routing") {
-		t.Fatalf("session catalog was not replayed: %#v", model.inputs)
+	if !strings.Contains(fixture.inputs[0][1].Content, "`api`：API routing") {
+		t.Fatalf("session catalog was not replayed: %#v", fixture.inputs)
 	}
 }
 
-func TestEinoEngineDoesNotPersistDomainState(t *testing.T) {
-	model := &scriptedModel{messages: []*schema.Message{schema.AssistantMessage("一次响应", nil)}}
-	engine, err := NewEngine(context.Background(), model, nil, nil, nil)
-	if err != nil {
-		t.Fatal(err)
+func TestMessageConversionPreservesReasoningAndRawArguments(t *testing.T) {
+	replayed := toSchemaMessages([]agent.Message{{Role: agent.RoleAssistant, ReasoningContent: "reason replay", ToolCalls: []agent.ToolCall{{ID: "id", Name: "probe", RawArguments: "{malformed"}}}})
+	if len(replayed) != 1 || replayed[0].ReasoningContent != "reason replay" || replayed[0].ToolCalls[0].Function.Arguments != "{malformed" {
+		t.Fatalf("replayed messages = %#v", replayed)
 	}
-	events, err := engine.Run(context.Background(), agent.TurnInput{SessionID: "session-fixture", Messages: []agent.Message{{Role: agent.RoleUser, Content: "任务"}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for range events {
-	}
-	if len(model.inputs) != 1 || len(model.inputs[0]) != 2 {
-		t.Fatalf("engine input = %#v", model.inputs)
+	converted := fromSchemaMessage(schema.AssistantMessage("", []schema.ToolCall{{ID: "id", Function: schema.FunctionCall{Name: "probe", Arguments: "{malformed"}}}))
+	if len(converted.ToolCalls) != 1 || converted.ToolCalls[0].RawArguments != "{malformed" || converted.ToolCalls[0].Arguments == nil {
+		t.Fatalf("converted = %#v", converted)
 	}
 }
-
-func TestEinoEngineRegistersFilesystemToolsWithEvidence(t *testing.T) {
-	root := t.TempDir()
-	workspace, err := builtins.NewWorkspace(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	model := &scriptedModel{messages: []*schema.Message{
-		schema.AssistantMessage("", []schema.ToolCall{{ID: "call-1", Function: schema.FunctionCall{Name: "write_file", Arguments: `{"file_path":"notes/result.txt","content":"recorded"}`}}}),
-		schema.AssistantMessage("已完成", nil),
-	}}
-	var calls []string
-	engine, err := NewEngine(context.Background(), model, nil, workspace, func(_ context.Context, name string, _ map[string]any, success bool, output string) (string, error) {
-		if !success {
-			t.Fatalf("filesystem tool %s failed: %s", name, output)
-		}
-		calls = append(calls, name)
-		return output + "\n[evidence_ref: 1]", nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	events, err := engine.Run(context.Background(), agent.TurnInput{Messages: []agent.Message{{Role: agent.RoleUser, Content: "写入文件"}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var messages []agent.Message
-	for event := range events {
-		if event.Err != nil {
-			t.Fatal(event.Err)
-		}
-		if event.Message.Role != "" {
-			messages = append(messages, event.Message)
-		}
-	}
-	if len(calls) != 1 || calls[0] != "write_file" {
-		t.Fatalf("recorded tools = %#v", calls)
-	}
-	handlers, err := engine.handlers(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	runContext := &adk.ChatModelAgentContext{}
-	for _, handler := range handlers {
-		_, runContext, err = handler.BeforeAgent(context.Background(), runContext)
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	names := make(map[string]bool, len(runContext.Tools))
-	for _, tool := range runContext.Tools {
-		info, infoErr := tool.Info(context.Background())
-		if infoErr != nil {
-			t.Fatal(infoErr)
-		}
-		names[info.Name] = true
-	}
-	for _, name := range []string{"ls", "read_file", "write_file", "edit_file", "glob", "grep", "execute"} {
-		if !names[name] {
-			t.Fatalf("filesystem tool %q missing from %#v", name, names)
-		}
-	}
-	if content, readErr := os.ReadFile(filepath.Join(root, "notes", "result.txt")); readErr != nil || string(content) != "recorded" {
-		t.Fatalf("content/error = %q/%v", content, readErr)
-	}
-	if len(messages) < 2 || messages[1].Role != agent.RoleTool || !strings.Contains(messages[1].Content, "evidence_ref: 1") {
-		t.Fatalf("messages = %#v", messages)
-	}
-}
-
-func TestEinoEngineRejectsBuiltinToolNameCollision(t *testing.T) {
-	model := &scriptedModel{messages: []*schema.Message{schema.AssistantMessage("unused", nil)}}
-	engine, err := NewEngine(context.Background(), model, []agent.Tool{&namedFixtureTool{name: "execute"}}, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := engine.Run(context.Background(), agent.TurnInput{Messages: []agent.Message{{Role: agent.RoleUser, Content: "TARGET"}}}); err == nil {
-		t.Fatal("built-in name collision succeeded")
-	}
-}
-
-type namedFixtureTool struct{ name string }
-
-func (tool *namedFixtureTool) Name() string                                      { return tool.name }
-func (*namedFixtureTool) Description() string                                    { return "fixture" }
-func (*namedFixtureTool) Invoke(context.Context, map[string]any) (string, error) { return "", nil }

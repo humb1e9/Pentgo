@@ -1,6 +1,9 @@
 package agent
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
 // 应用层和模型适配层共用的消息角色与事件类型。
 const (
@@ -62,18 +65,24 @@ type ModelStepInput struct {
 	SurfaceMessages map[int]Message
 }
 
-// TurnEvent 将模型输出流式传递给应用层。Message 事件保留 transcript 顺序，
-// Error 和 Done 事件标记一次执行的终止状态。
-type TurnEvent struct {
-	Kind    string
-	Message Message
-	Tool    string
-	Output  string
-	Err     error
+// ModelStreamEvent is one event from a single provider request. Delta events
+// are UI-only partial output. Exactly one event has Final set after the adapter
+// has assembled every provider chunk; callers must not persist or execute a
+// partial Delta. Err transports asynchronous stream failures.
+type ModelStreamEvent struct {
+	Delta Message
+	Final *Message
+	Err   error
 }
 
-// ModelEngine 执行一轮模型调用并产生 Provider 无关事件。它不得持有领域状态，
-// 因为 transcript 才是恢复会话的事实来源。
-type ModelEngine interface {
-	Run(context.Context, TurnInput) (<-chan TurnEvent, error)
+// ErrContextWindowExceeded identifies a provider-confirmed context-window
+// overflow. The host may compact the Context Surface and retry the pending
+// provider request once; unknown provider errors must not be normalized to it.
+var ErrContextWindowExceeded = errors.New("model context window exceeded")
+
+// ModelStepper performs exactly one streamed provider request for an already
+// assembled ModelStepInput. It binds the supplied tool schemas but never
+// invokes tools; tool execution belongs to the host-controlled loop.
+type ModelStepper interface {
+	StreamStep(context.Context, ModelStepInput) (<-chan ModelStreamEvent, error)
 }

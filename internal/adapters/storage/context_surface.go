@@ -115,6 +115,9 @@ func (store *ContextSurfaceStore) StartCompaction(generation int64, startSeq, en
 	if first < 0 || last < first {
 		return rollback(ErrInvalidSurfaceRange)
 	}
+	if err := validateBalancedToolPairsTx(tx, store.sessionID, startSeq, endSeq); err != nil {
+		return rollback(err)
+	}
 	lifecycle := agent.CompactionLifecycle{
 		ID:         newSurfaceID(),
 		SessionID:  store.sessionID,
@@ -173,6 +176,9 @@ func (store *ContextSurfaceStore) ReplaceRange(expectedGeneration int64, startSe
 	first, last := selectedSurfaceRange(nodes, startSeq, endSeq)
 	if first < 0 || last < first {
 		return rollback(ErrInvalidSurfaceRange)
+	}
+	if err := validateBalancedToolPairsTx(tx, store.sessionID, startSeq, endSeq); err != nil {
+		return rollback(err)
 	}
 	nextGeneration := generation + 1
 	if replacement.ID == "" {
@@ -515,6 +521,57 @@ func selectedSurfaceRange(nodes []agent.SurfaceNode, startSeq, endSeq int) (int,
 		}
 	}
 	return first, last
+}
+
+func validateBalancedToolPairsTx(tx *sql.Tx, sessionID string, startSeq, endSeq int) error {
+	rows, err := tx.Query(`
+SELECT message_seq, id FROM transcript_tool_calls
+WHERE session_id = ? ORDER BY message_seq, position`, sessionID)
+	if err != nil {
+		return fmt.Errorf("read context surface tool calls: %w", err)
+	}
+	defer rows.Close()
+	calls := make(map[string]int)
+	for rows.Next() {
+		var sequence int
+		var id string
+		if err := rows.Scan(&sequence, &id); err != nil {
+			return fmt.Errorf("scan context surface tool call: %w", err)
+		}
+		if id != "" {
+			calls[id] = sequence
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read context surface tool calls: %w", err)
+	}
+	resultRows, err := tx.Query(`
+SELECT seq, tool_call_id FROM transcript_messages
+WHERE session_id = ? AND role = ? AND tool_call_id <> '' ORDER BY seq`, sessionID, agent.RoleTool)
+	if err != nil {
+		return fmt.Errorf("read context surface tool results: %w", err)
+	}
+	defer resultRows.Close()
+	for resultRows.Next() {
+		var sequence int
+		var callID string
+		if err := resultRows.Scan(&sequence, &callID); err != nil {
+			return fmt.Errorf("scan context surface tool result: %w", err)
+		}
+		callSequence, found := calls[callID]
+		if !found {
+			return ErrInvalidSurfaceRange
+		}
+		callSelected := callSequence >= startSeq && callSequence <= endSeq
+		resultSelected := sequence >= startSeq && sequence <= endSeq
+		if callSelected != resultSelected {
+			return ErrInvalidSurfaceRange
+		}
+	}
+	if err := resultRows.Err(); err != nil {
+		return fmt.Errorf("read context surface tool results: %w", err)
+	}
+	return nil
 }
 
 func nextSurfacePositionTx(tx *sql.Tx, sessionID string) (int, error) {

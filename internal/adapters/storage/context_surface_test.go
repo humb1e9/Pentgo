@@ -40,14 +40,14 @@ func TestContextSurfaceReplacePersistsAndRawTranscriptRemainsUntouched(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := surface.StartCompaction(0, 1, 2); err != nil {
+	if _, err := surface.StartCompaction(0, 1, 3); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := surface.ReplaceRange(0, 1, 2, agent.SurfaceNode{
+	snapshot, err := surface.ReplaceRange(0, 1, 3, agent.SurfaceNode{
 		ID:             "checkpoint-1",
 		Kind:           agent.SurfaceNodeCheckpoint,
 		SourceStartSeq: 1,
-		SourceEndSeq:   2,
+		SourceEndSeq:   3,
 		Content:        "checkpoint",
 	})
 	if err != nil {
@@ -66,7 +66,7 @@ func TestContextSurfaceReplacePersistsAndRawTranscriptRemainsUntouched(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.Nodes) != 3 || snapshot.Nodes[0].Kind != agent.SurfaceNodeCheckpoint || snapshot.Nodes[0].Content != "checkpoint" || snapshot.Nodes[1].SourceStartSeq != 3 || snapshot.Nodes[2].SourceStartSeq != 4 {
+	if len(snapshot.Nodes) != 2 || snapshot.Nodes[0].Kind != agent.SurfaceNodeCheckpoint || snapshot.Nodes[0].Content != "checkpoint" || snapshot.Nodes[1].SourceStartSeq != 4 {
 		t.Fatalf("surface = %#v", snapshot)
 	}
 	transcript, err := store.OpenTranscript(session.ID)
@@ -108,6 +108,24 @@ func TestContextSurfaceAppendsNewRawTranscriptCoverage(t *testing.T) {
 	}
 }
 
+func TestContextSurfaceRejectsRangeThatSplitsToolPair(t *testing.T) {
+	store, session := surfaceTranscript(t)
+	defer store.Close()
+	surface, err := store.OpenContextSurface(session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer surface.Close()
+	for _, selected := range [][2]int{{1, 2}, {2, 2}, {3, 3}, {3, 4}} {
+		if _, err := surface.StartCompaction(0, selected[0], selected[1]); err == nil {
+			t.Fatalf("split tool pair range %v was accepted", selected)
+		}
+	}
+	if _, err := surface.StartCompaction(0, 2, 3); err != nil {
+		t.Fatalf("balanced tool pair rejected: %v", err)
+	}
+}
+
 func TestContextSurfaceReplaceRequiresStartedLifecycle(t *testing.T) {
 	store, session := surfaceTranscript(t)
 	defer store.Close()
@@ -140,10 +158,10 @@ func TestContextSurfaceAppendedSourceUsesCurrentGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer surface.Close()
-	if _, err := surface.StartCompaction(0, 1, 2); err != nil {
+	if _, err := surface.StartCompaction(0, 1, 3); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := surface.ReplaceRange(0, 1, 2, agent.SurfaceNode{Kind: agent.SurfaceNodeCheckpoint, SourceStartSeq: 1, SourceEndSeq: 2, Content: "checkpoint"}); err != nil {
+	if _, err := surface.ReplaceRange(0, 1, 3, agent.SurfaceNode{Kind: agent.SurfaceNodeCheckpoint, SourceStartSeq: 1, SourceEndSeq: 3, Content: "checkpoint"}); err != nil {
 		t.Fatal(err)
 	}
 	transcript, err := store.OpenTranscript(session.ID)
@@ -175,10 +193,10 @@ func TestContextSurfaceRejectsStaleGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer surface.Close()
-	if _, err := surface.StartCompaction(0, 1, 2); err != nil {
+	if _, err := surface.StartCompaction(0, 1, 3); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := surface.ReplaceRange(0, 1, 2, agent.SurfaceNode{Kind: agent.SurfaceNodeCheckpoint, SourceStartSeq: 1, SourceEndSeq: 2, Content: "first"}); err != nil {
+	if _, err := surface.ReplaceRange(0, 1, 3, agent.SurfaceNode{Kind: agent.SurfaceNodeCheckpoint, SourceStartSeq: 1, SourceEndSeq: 3, Content: "first"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := surface.ReplaceRange(0, 3, 4, agent.SurfaceNode{Kind: agent.SurfaceNodeCheckpoint, SourceStartSeq: 3, SourceEndSeq: 4, Content: "stale"}); err == nil {
@@ -197,7 +215,7 @@ func TestContextSurfaceRestoresUnfinishedCompactionWithoutMutation(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := surface.StartCompaction(before.Generation, 1, 2); err != nil {
+	if _, err := surface.StartCompaction(before.Generation, 1, 3); err != nil {
 		t.Fatal(err)
 	}
 	if err := surface.Close(); err != nil {

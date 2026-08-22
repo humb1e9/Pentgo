@@ -5,16 +5,12 @@ import (
 	"errors"
 )
 
-// 应用层和模型适配层共用的消息角色与事件类型。
+// 应用层和模型适配层共用的消息角色。
 const (
 	RoleSystem    = "system"
 	RoleUser      = "user"
 	RoleAssistant = "assistant"
 	RoleTool      = "tool"
-
-	TurnEventMessage = "message"
-	TurnEventError   = "error"
-	TurnEventDone    = "done"
 )
 
 // ToolCall 是单次助手工具调用的 Provider 无关表示。
@@ -37,18 +33,6 @@ type Message struct {
 	ToolName         string         `json:"tool_name,omitempty"`
 	ToolArguments    map[string]any `json:"tool_arguments,omitempty"`
 	ToolCalls        []ToolCall     `json:"tool_calls,omitempty"`
-}
-
-// TurnInput 是单次模型执行的不可变输入。Messages 来自持久化 transcript 回放；
-// 工具和提示词补充信息仅在本次执行中有效。
-type TurnInput struct {
-	SessionID     string
-	Messages      []Message
-	Tools         []Tool
-	SystemPrompt  string
-	ProjectFacts  string
-	SkillSummary  string
-	MaxIterations int
 }
 
 // ModelStepInput is one fully assembled, provider-visible request. Context

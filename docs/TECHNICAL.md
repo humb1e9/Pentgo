@@ -105,7 +105,7 @@ type Tool interface {
 
 - Eino Local Backend 提供 `ls`、`read_file`、`write_file`、`edit_file`、`glob`、`grep` 和 `execute`。
 - 应用层提供 `write_project_fact`，用于写入项目级共享记录。
-- 执行 `/load_skill` 后，应用层提供 `load_skill`。
+- 应用层在启动时发现至少一个有效技能后，向模型提供 `load_skill`。
 - MCP 服务发现到的工具通过同一协议加入本轮集合。
 
 工作区后端拒绝绝对路径、目录跳转和解析后离开根目录的符号链接路径。命令执行会显式切换到工作区目录后再运行。
@@ -124,9 +124,9 @@ MCP 工具保留服务声明的描述与 JSON Schema。调用完成后，应用�
 
 ## 7. 技能目录与按需加载
 
-`skillfs.Registry` 接收显式 `fs.FS`，不读取包级全局状态。枚举时只读取顶层 `*.md` 文件的名称、YAML frontmatter 描述或首个标题，并生成目录摘要。
+`skillfs.Registry` 接收显式 `fs.FS`，不读取包级全局状态。PentGo 在每次进程启动时扫描一次顶层 `*.md`，要求每份有效技能提供非空 YAML frontmatter `description`；描述经过本地标准化和长度限制后形成稳定 digest。无法读取、frontmatter 格式错误或缺少描述的单份技能会被跳过，并作为终端本地诊断显示，不会阻断其它技能。
 
-完整正文在模型调用 `load_skill` 后才读取。单份正文限制为 32 KiB，避免单个文件无限占用模型上下文。
+每个新建或恢复的会话都会收到一条由宿主写入 transcript 的 digest 版本化目录 system message；未变化的目录不会重复注入，修改 `skills/` 后重启 PentGo 才会重新扫描，并在恢复会话时以新目录显式替换旧目录。后续 turn 只回放该上下文，不重新扫描。完整正文在模型以目录中的准确名称调用 `load_skill` 后才读取。单份正文限制为 32 KiB，避免单个文件无限占用模型上下文。
 
 原生运行默认使用：
 

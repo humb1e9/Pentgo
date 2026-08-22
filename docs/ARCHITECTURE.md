@@ -114,7 +114,7 @@ project 的 session summaries 从 `sessions` 查询派生。`CommitSession` 原�
 
 ## Skills
 
-`skillfs.Registry` 构造时接收显式 `fs.FS`，不读取当前工作目录，也不使用包级默认 registry。`/load_skill` 枚举顶层 `*.md`，只把名称和描述摘要放进提示词；模型随后用准确名称加载单个正文。
+`skillfs.Registry` 构造时接收显式 `fs.FS`，不读取当前工作目录，也不使用包级默认 registry。Coordinator 每次启动时本地扫描一次顶层 `*.md`，用有效 YAML frontmatter 描述建立内存名称/路径白名单和稳定 digest；坏文件被诊断并跳过。新建或恢复会话时，宿主将 digest 版本化的精简目录作为一条 system transcript message 注入；未变更目录不会重复注入，变更目录会显式替换旧目录。模型依据该会话上下文以准确名称调用 `load_skill` 后才读取单个正文。
 
 ## 验证
 

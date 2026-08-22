@@ -84,7 +84,7 @@ func (engine *Engine) Run(ctx context.Context, input agent.TurnInput) (<-chan ag
 	if err != nil {
 		return nil, err
 	}
-	instruction := SystemPrompt(input.SystemPrompt, input.SkillSummary, input.ProjectFacts)
+	instruction := SystemPrompt(input.SystemPrompt, input.ProjectFacts)
 	maxIterations := input.MaxIterations
 	if maxIterations <= 0 {
 		maxIterations = engine.maxIterations

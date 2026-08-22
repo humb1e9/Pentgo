@@ -83,14 +83,29 @@ func TestEinoEngineUsesChineseSystemPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	events, err := engine.Run(context.Background(), agent.TurnInput{Messages: []agent.Message{{Role: agent.RoleUser, Content: "检查"}}})
+	events, err := engine.Run(context.Background(), agent.TurnInput{Messages: []agent.Message{
+		{Role: agent.RoleSystem, Content: `<pentgo-skill-catalog digest="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">` + "\n- `api`：API routing\n</pentgo-skill-catalog>"},
+		{Role: agent.RoleUser, Content: "检查 API"},
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for range events {
 	}
-	if len(model.inputs) == 0 || model.inputs[0][0].Role != schema.System || !strings.Contains(model.inputs[0][0].Content, "渗透测试智能体") || strings.Contains(model.inputs[0][0].Content, "C"+"TF") {
-		t.Fatalf("system input = %#v", model.inputs)
+	if len(model.inputs) != 1 || len(model.inputs[0]) != 3 || model.inputs[0][0].Role != schema.System || model.inputs[0][1].Role != schema.System || model.inputs[0][2].Role != schema.User {
+		t.Fatalf("model input order = %#v", model.inputs)
+	}
+	fixed := model.inputs[0][0].Content
+	for _, want := range []string{"渗透测试智能体", "会话上下文存在 PentGo 技能目录", "调用 load_skill", "不得猜测技能名称"} {
+		if !strings.Contains(fixed, want) {
+			t.Fatalf("fixed prompt missing %q: %q", want, fixed)
+		}
+	}
+	if strings.Contains(fixed, "`api`：API routing") || strings.Contains(fixed, "/load_skill") || strings.Contains(fixed, "C"+"TF") {
+		t.Fatalf("fixed prompt unexpectedly repeats catalog or CLI command: %q", fixed)
+	}
+	if !strings.Contains(model.inputs[0][1].Content, "`api`：API routing") {
+		t.Fatalf("session catalog was not replayed: %#v", model.inputs)
 	}
 }
 

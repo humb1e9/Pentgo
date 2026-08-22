@@ -1,87 +1,144 @@
 package skillfs
 
 import (
+	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io/fs"
 	"sort"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 )
 
-// maxSkillBytes 限制单个注入技能正文的大小，以保护模型上下文容量。
-const maxSkillBytes = 32000
+// maxSkillBytes limits the size of a skill body injected into the model context.
+const maxSkillBytes = 32 * 1024
 
-// Skill 是一份 Markdown 文档在提示词中可见的目录条目。
+// maxCatalogDescriptionBytes keeps a large skill catalog within a bounded session context.
+const maxCatalogDescriptionBytes = 160
+
+// Skill is the metadata for a Markdown document visible in the skill catalog.
 type Skill struct {
 	Name        string
 	Description string
 }
 
-// Registry 保存扫描得到的目录，并按稳定名称加载正文。
+// Diagnostic describes a file or scan failure that did not abort a scan.
+type Diagnostic struct {
+	Path   string
+	Reason string
+}
+
+// ScanResult is the complete result of a registry scan.
+type ScanResult struct {
+	Catalog     []Skill
+	Digest      string
+	Diagnostics []Diagnostic
+}
+
+// ErrUnknownSkill is returned when a name was not present in the last scan.
+var ErrUnknownSkill = errors.New("unknown skill")
+
+// Registry stores scanned metadata and paths, but never full skill bodies.
 type Registry struct {
-	mu      sync.RWMutex
-	source  fs.FS
-	ready   bool
-	catalog []Skill
-	paths   map[string]string
+	mu          sync.RWMutex
+	source      fs.FS
+	catalog     []Skill
+	paths       map[string]string
+	digest      string
+	diagnostics []Diagnostic
 }
 
-// NewRegistry 将注册表绑定到 source；读取前必须先执行 Scan。
+// NewRegistry binds a registry to source. Skills are discovered by Scan.
 func NewRegistry(source fs.FS) *Registry {
-	return &Registry{source: source}
+	return &Registry{source: source, paths: make(map[string]string)}
 }
 
-// Loaded 判断成功的 Scan 是否已填充目录。
-func (registry *Registry) Loaded() bool {
+// HasSkills reports whether the last scan found at least one valid skill.
+func (registry *Registry) HasSkills() bool {
 	if registry == nil {
 		return false
 	}
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
-	return registry.ready
+	return len(registry.catalog) != 0
 }
 
-// Scan 仅读取顶层 Markdown 元数据，并返回注入提示词的摘要。
-// 完整正文会保持未加载状态，直至调用 Load。
-func (registry *Registry) Scan() (string, error) {
+// Loaded is retained as a compatibility alias for HasSkills.
+// Deprecated: use HasSkills.
+func (registry *Registry) Loaded() bool {
+	return registry.HasSkills()
+}
+
+// Scan reads Markdown frontmatter and atomically replaces all registry state.
+// Individual file failures are recorded as diagnostics and do not stop scanning.
+func (registry *Registry) Scan() ScanResult {
+	result := ScanResult{}
+	paths := make(map[string]string)
 	if registry == nil || registry.source == nil {
-		return "", fmt.Errorf("skill registry filesystem is nil")
+		result.Diagnostics = []Diagnostic{{Path: "skills", Reason: "skill registry filesystem is unavailable"}}
+		if registry != nil {
+			registry.replace(result, paths)
+		}
+		return result
 	}
-	paths, err := fs.Glob(registry.source, "*.md")
+
+	matches, err := fs.Glob(registry.source, "*.md")
 	if err != nil {
-		return "", fmt.Errorf("scan skills: %w", err)
+		result.Diagnostics = []Diagnostic{{Path: "skills", Reason: fmt.Sprintf("glob skills: %v", err)}}
+		registry.replace(result, paths)
+		return result
 	}
-	catalog := make([]Skill, 0, len(paths))
-	registered := make(map[string]string, len(paths))
-	for _, path := range paths {
+
+	catalog := make([]Skill, 0, len(matches))
+	for _, path := range matches {
 		content, err := fs.ReadFile(registry.source, path)
 		if err != nil {
-			return "", fmt.Errorf("read skill %s: %w", path, err)
+			result.Diagnostics = append(result.Diagnostics, Diagnostic{Path: path, Reason: fmt.Sprintf("read skill: %v", err)})
+			continue
 		}
-		frontmatter, body, err := parseDocument(content)
+		metadata, _, err := parseDocument(content)
 		if err != nil {
-			return "", fmt.Errorf("parse skill %s: %w", path, err)
+			result.Diagnostics = append(result.Diagnostics, Diagnostic{Path: path, Reason: err.Error()})
+			continue
+		}
+		description := normalizeDescription(metadata.Description)
+		if description == "" {
+			result.Diagnostics = append(result.Diagnostics, Diagnostic{Path: path, Reason: "frontmatter description is required"})
+			continue
 		}
 		name := strings.TrimSuffix(path, ".md")
-		description := strings.TrimSpace(frontmatter.Description)
-		if description == "" {
-			description = heading(name, body)
-		}
 		catalog = append(catalog, Skill{Name: name, Description: description})
-		registered[name] = path
+		paths[name] = path
 	}
 	sort.Slice(catalog, func(i, j int) bool { return catalog[i].Name < catalog[j].Name })
-	registry.mu.Lock()
-	registry.catalog = catalog
-	registry.paths = registered
-	registry.ready = true
-	registry.mu.Unlock()
-	return registry.Summary()
+	result.Catalog = catalog
+	result.Digest = catalogDigest(catalog)
+	registry.replace(result, paths)
+	return cloneScanResult(result)
 }
 
-// Catalog 返回按名称排序的已扫描技能元数据副本。
+func (registry *Registry) replace(result ScanResult, paths map[string]string) {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	registry.catalog = append([]Skill(nil), result.Catalog...)
+	registry.paths = make(map[string]string, len(paths))
+	for name, path := range paths {
+		registry.paths[name] = path
+	}
+	registry.digest = result.Digest
+	registry.diagnostics = append([]Diagnostic(nil), result.Diagnostics...)
+}
+
+func cloneScanResult(result ScanResult) ScanResult {
+	result.Catalog = append([]Skill(nil), result.Catalog...)
+	result.Diagnostics = append([]Diagnostic(nil), result.Diagnostics...)
+	return result
+}
+
+// Catalog returns a defensive copy of sorted scanned metadata.
 func (registry *Registry) Catalog() []Skill {
 	if registry == nil {
 		return nil
@@ -91,7 +148,27 @@ func (registry *Registry) Catalog() []Skill {
 	return append([]Skill(nil), registry.catalog...)
 }
 
-// Names 返回 Load 可接受的排序后目录标识。
+// Diagnostics returns a defensive copy of the last scan diagnostics.
+func (registry *Registry) Diagnostics() []Diagnostic {
+	if registry == nil {
+		return nil
+	}
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	return append([]Diagnostic(nil), registry.diagnostics...)
+}
+
+// Digest returns the stable digest of the last scanned catalog.
+func (registry *Registry) Digest() string {
+	if registry == nil {
+		return ""
+	}
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	return registry.digest
+}
+
+// Names returns sorted names accepted by Load.
 func (registry *Registry) Names() []string {
 	catalog := registry.Catalog()
 	names := make([]string, 0, len(catalog))
@@ -101,91 +178,145 @@ func (registry *Registry) Names() []string {
 	return names
 }
 
-// Summary 渲染供模型发现技能的目录元数据，但不包含技能正文。
-func (registry *Registry) Summary() (string, error) {
+// RenderCatalog renders compact metadata without any skill body.
+func (registry *Registry) RenderCatalog(replacement bool) string {
 	if registry == nil {
-		return "", fmt.Errorf("skill registry is nil")
+		return bound([]byte("<pentgo-skill-catalog digest=\"\">\n</pentgo-skill-catalog>"))
 	}
 	registry.mu.RLock()
-	defer registry.mu.RUnlock()
-	if !registry.ready {
-		return "", fmt.Errorf("skills are not loaded; run /load_skill first")
-	}
+	catalog := append([]Skill(nil), registry.catalog...)
+	digest := registry.digest
+	registry.mu.RUnlock()
+
 	var builder strings.Builder
-	builder.WriteString("## 可用 PentGo 技能\n\n")
-	for _, skill := range registry.catalog {
-		fmt.Fprintf(&builder, "- `%s`：%s\n", skill.Name, skill.Description)
+	fmt.Fprintf(&builder, "<pentgo-skill-catalog digest=\"%s\">\n", digest)
+	if replacement {
+		builder.WriteString("This catalog completely replaces every earlier PentGo skill catalog in this session.\n")
 	}
-	return bound([]byte(builder.String())), nil
+	if len(catalog) == 0 {
+		if replacement {
+			builder.WriteString("No PentGo skills are currently available. Do not use names from earlier PentGo skill catalogs.\n")
+		}
+	} else {
+		builder.WriteString("Available PentGo skills:\n")
+		for _, skill := range catalog {
+			fmt.Fprintf(&builder, "- `%s`：%s\n", skill.Name, skill.Description)
+		}
+		builder.WriteString("When the task clearly matches a listed skill, call load_skill with its exact name before specialized work. Do not guess skill names; if no entry matches, continue normally.\n")
+	}
+	builder.WriteString("</pentgo-skill-catalog>")
+	return bound([]byte(builder.String()))
 }
 
-// Load 在确认文档存在于扫描结果后，返回大小受限的文档正文。
+// Load lazily reads and validates a skill body from a path accepted by Scan.
 func (registry *Registry) Load(name string) (string, error) {
-	if registry == nil {
-		return "", fmt.Errorf("skill registry is nil")
-	}
 	name = strings.TrimSpace(name)
+	if registry == nil {
+		return "", fmt.Errorf("%w: %q", ErrUnknownSkill, name)
+	}
 	registry.mu.RLock()
-	defer registry.mu.RUnlock()
-	if !registry.ready || registry.source == nil {
-		return "", fmt.Errorf("skills are not loaded; run /load_skill first")
-	}
+	source := registry.source
 	path, ok := registry.paths[name]
-	if !ok {
-		return "", fmt.Errorf("unknown skill %q", name)
+	registry.mu.RUnlock()
+	if !ok || source == nil {
+		return "", fmt.Errorf("%w: %q", ErrUnknownSkill, name)
 	}
-	content, err := fs.ReadFile(registry.source, path)
+	content, err := fs.ReadFile(source, path)
 	if err != nil {
 		return "", fmt.Errorf("load skill %q: %w", name, err)
 	}
-	_, body, err := parseDocument(content)
+	metadata, body, err := parseDocument(content)
 	if err != nil {
 		return "", fmt.Errorf("parse skill %q: %w", name, err)
+	}
+	if normalizeDescription(metadata.Description) == "" {
+		return "", fmt.Errorf("parse skill %q: description is required", name)
 	}
 	return bound(body), nil
 }
 
-// frontmatter 是从技能文档中提取的可选 YAML 元数据。
 type frontmatter struct {
 	Description string `yaml:"description"`
 }
 
-// parseDocument 在存在 YAML frontmatter 时将其与 Markdown 正文分离。
+// parseDocument requires strict YAML frontmatter and returns its stripped body.
 func parseDocument(content []byte) (frontmatter, []byte, error) {
-	text := strings.TrimSpace(string(content))
-	if !strings.HasPrefix(text, "---") || (len(text) > 3 && text[3] != '\n' && text[3] != '\r') {
-		return frontmatter{}, []byte(text), nil
-	}
-	rest := text[3:]
-	end := strings.Index(rest, "\n---")
-	if end < 0 {
+	text := string(content)
+	firstEnd := strings.IndexByte(text, '\n')
+	if firstEnd < 0 {
+		if strings.TrimSuffix(text, "\r") != "---" {
+			return frontmatter{}, nil, fmt.Errorf("frontmatter opening delimiter not found")
+		}
 		return frontmatter{}, nil, fmt.Errorf("frontmatter closing delimiter not found")
 	}
-	var metadata frontmatter
-	if err := yaml.Unmarshal([]byte(strings.TrimSpace(rest[:end])), &metadata); err != nil {
-		return frontmatter{}, []byte(strings.TrimSpace(rest[end+len("\n---"):])), nil
+	firstLine := strings.TrimSuffix(text[:firstEnd], "\r")
+	if firstLine != "---" {
+		return frontmatter{}, nil, fmt.Errorf("frontmatter opening delimiter not found")
 	}
-	return metadata, []byte(strings.TrimSpace(rest[end+len("\n---"):])), nil
-}
 
-// heading 选取第一个 Markdown 标题，缺失时回退至文件名。
-func heading(name string, content []byte) string {
-	for _, line := range strings.Split(string(content), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "#") {
-			value := strings.TrimSpace(strings.TrimLeft(line, "#"))
-			if value != "" {
-				return value
-			}
+	rest := text[firstEnd+1:]
+	position := 0
+	for {
+		lineEnd := strings.IndexByte(rest[position:], '\n')
+		line := rest[position:]
+		next := len(rest)
+		if lineEnd >= 0 {
+			line = rest[position : position+lineEnd]
+			next = position + lineEnd + 1
 		}
+		if strings.TrimSuffix(line, "\r") == "---" {
+			var metadata frontmatter
+			yamlText := rest[:position]
+			if err := yaml.Unmarshal([]byte(yamlText), &metadata); err != nil {
+				return frontmatter{}, nil, fmt.Errorf("invalid YAML frontmatter: %w", err)
+			}
+			metadata.Description = normalizeDescription(metadata.Description)
+			if metadata.Description == "" {
+				return frontmatter{}, nil, fmt.Errorf("frontmatter description is required")
+			}
+			body := rest[next:]
+			return metadata, []byte(strings.TrimSpace(body)), nil
+		}
+		if lineEnd < 0 {
+			break
+		}
+		position = next
 	}
-	return name
+	return frontmatter{}, nil, fmt.Errorf("frontmatter closing delimiter not found")
 }
 
-// bound 截断超出大小限制的文档正文，并添加可见标记。
+func normalizeDescription(description string) string {
+	description = strings.ToValidUTF8(description, "�")
+	description = strings.Join(strings.Fields(description), " ")
+	if len(description) <= maxCatalogDescriptionBytes {
+		return description
+	}
+	limit := maxCatalogDescriptionBytes - len("...")
+	for limit > 0 && (description[limit]&0xc0) == 0x80 {
+		limit--
+	}
+	return description[:limit] + "..."
+}
+
+func catalogDigest(catalog []Skill) string {
+	if len(catalog) == 0 {
+		return ""
+	}
+	hash := sha256.New()
+	for _, skill := range catalog {
+		fmt.Fprintf(hash, "%s\n%s\n", skill.Name, skill.Description)
+	}
+	return fmt.Sprintf("%x", hash.Sum(nil))
+}
+
+// bound truncates an injected document to the maximum skill size.
 func bound(content []byte) string {
-	if len(content) > maxSkillBytes {
-		content = content[:maxSkillBytes]
+	if len(content) <= maxSkillBytes {
+		return string(content)
+	}
+	content = content[:maxSkillBytes]
+	for len(content) > 0 && !utf8.Valid(content) {
+		content = content[:len(content)-1]
 	}
 	return string(content)
 }

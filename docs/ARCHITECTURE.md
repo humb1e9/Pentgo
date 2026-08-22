@@ -17,7 +17,7 @@ internal/
 ├── agent/                          厂商无关的消息、工具和模型协议
 ├── domain/                         Project、Session、Turn、Fact 纯状态
 ├── adapters/
-│   ├── llm/                        Eino ADK 与模型 provider 适配
+│   ├── llm/                        Eino 模型 provider 的单步流适配
 │   ├── mcp/                        外部 MCP stdio/HTTP/SSE、LocalRegistry 与 Tool 适配
 │   ├── storage/                    SQLite 持久化
 │   └── skillfs/                    Markdown 技能文件加载
@@ -70,7 +70,7 @@ cmd ──→ config
             └── turn 事件
 ```
 
-- `ProjectRuntime` 拥有项目 context、evidence、blackboard、Local Backend、LocalRegistry、组合 MCP provider、transcript handle 和 worker。每个新建的 Eino Agent 都用该 Local Backend 注册 `ls`、`read_file`、`write_file`、`edit_file`、`glob`、`grep` 和 `execute`。LocalRegistry 读取 `agent.local_tools` 中用户声明的普通 CLI；每个具名外部 MCP Server 维护独立的 stdio、Streamable HTTP 或 SSE 连接；所有工具以全局唯一名称暴露。
+- `ProjectRuntime` 拥有项目 context、evidence、blackboard、受约束的 Workspace、LocalRegistry、组合 MCP provider、transcript handle 和 worker。host 每轮以 `agent.Tool` 暴露 `ls`、`read_file`、`write_file`、`edit_file`、`glob`、`grep` 和 `execute`；每个具名外部 MCP Server 维护独立的 stdio、Streamable HTTP 或 SSE 连接；所有工具以全局唯一名称暴露。
 - `SessionWorker` 自己的 goroutine 才能修改 `domain.Session`；`Snapshot` 返回原子发布的深拷贝。
 - 一个 session 同时只运行一个 turn；同一项目内不同 session 可以并发运行。
 - `pentgo` 打开 `<cwd>/.pentgo/` 并创建新会话；目录不存在时同时创建工作区。`pentgo resume` 在进入 TUI 前列出会话并恢复用户选择的历史会话。
@@ -84,14 +84,16 @@ cmd ──→ config
 app.SessionWorker
   → app.TurnService.BeginTurn
   → transcript.Append(user)
-  → agent.ModelEngine.Run(transcript replay + tools)
-  → transcript.Append(assistant/tool messages in order)
-  → evidenceTool persists tool result before returning it to the model
+  → ContextAssembler.Prepare(Surface + bounded Blackboard)
+  → agent.ModelStepper.StreamStep(one provider request)
+  → host consumes deltas (UI only)
+  → transcript.Append(complete assistant/tool messages in order)
+  → host records evidence once per tool result
   → app.TurnService.FinishTurn
   → app.ProjectRuntime.PersistState
 ```
 
-正常完成的 turn 不会关闭 session。模型适配器不保存 session、project、blackboard 或 checkpoint；重启后的正常继续始终从完整 transcript 创建新模型运行，历史 tool message 只回放，不再次调用工具。
+正常完成的 turn 不会关闭 session。模型适配器不保存 session、project、blackboard 或 checkpoint；host loop 拥有工具调用和最多一次 overflow recovery。启用 context window 时，raw transcript 是审计 ledger，Context Surface 是可压缩的模型投影；活动信息只进入 UI，不进入 transcript。重启后的继续从持久化 Surface 组装请求，历史 tool message 只回放，不再次调用工具。
 
 ## 持久化边界
 
@@ -108,9 +110,9 @@ project 的 session summaries 从 `sessions` 查询派生。`CommitSession` 原�
 
 ## Tool 边界
 
-`agent.Tool` 只有名称、描述和 `Invoke(context.Context, map[string]any)`。需要保留 provider schema 的工具额外实现 `agent.ToolSchemaProvider`。`adapters/llm` 将其转换为 ADK tool；`adapters/mcp` 将 MCP schema 转为同一协议。
+`agent.Tool` 只有名称、描述和 `Invoke(context.Context, map[string]any)`。需要保留 provider schema 的工具额外实现 `agent.ToolSchemaProvider`。`adapters/llm` 只把 schema 绑定到单次 streamed request，不执行工具；`adapters/mcp` 将 MCP schema 转为同一协议。
 
-应用层提供 `write_project_fact` 和按需启用的 `load_skill`。Eino Local Backend 工具随 Agent 初始化注册，路径锚定在工作目录；LocalRegistry 的用户声明本机 CLI 与外部 MCP 工具都先执行，再由应用层的 evidence decorator 写入证据。两类执行工具都返回带有 `[evidence_ref: N]` 的持久化结果。
+应用层提供 `write_project_fact` 和按需启用的 `load_skill`。Workspace wrappers、LocalRegistry 的用户声明本机 CLI 与外部 MCP 工具都由 host loop 执行，再由统一 executor 写入证据。所有执行工具都返回带有 `[evidence_ref: N]` 的持久化结果。
 
 ## Skills
 

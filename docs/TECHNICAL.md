@@ -25,7 +25,7 @@ internal/
 ├── domain/                         Project、Session、Turn、Fact 纯状态
 ├── adapters/
 │   ├── builtins/                   工作区文件与命令后端
-│   ├── llm/                        Eino ADK 与模型 provider 适配
+│   ├── llm/                        Eino 模型 provider 的单步流适配
 │   ├── mcp/                        外部 MCP stdio、HTTP、SSE、LocalRegistry 与 Tool 适配
 │   ├── skillfs/                    Markdown 技能文件加载
 │   └── storage/                    SQLite 持久化
@@ -76,16 +76,17 @@ cmd ──→ config
 app.SessionWorker
   → app.TurnService.BeginTurn
   → transcript.Append(user)
-  → agent.ModelEngine.Run(transcript replay + tools)
-  → transcript.Append(assistant/tool messages in order)
-  → evidenceTool persists tool result before returning it to the model
+  → agent.ModelStepper.StreamStep(assembled request)
+  → app host loop consumes deltas (UI only)
+  → transcript.Append(complete assistant/tool messages in order)
+  → host records evidence before returning each tool result
   → app.TurnService.FinishTurn
   → app.ProjectRuntime.PersistState
 ```
 
-`TurnService` 在发布界面事件前先持久化每条 transcript 消息。失败、取消和中断会被映射为相应的 turn 状态，并在返回调用方前保存最后快照。
+`TurnService` 在发布界面事件前先持久化每条 transcript 消息。模型适配器只执行一个 streamed provider request，绝不在 adapter 内调用工具；工具并发执行后仍按 provider 调用顺序持久化。失败、取消和中断会被映射为相应的 turn 状态，并在返回调用方前保存最后快照。上下文超限最多触发一次压缩恢复重试。
 
-模型适配器是短生命周期对象，不保存 session、project、共享记录或 checkpoint。下一轮或进程恢复时，系统从完整 transcript 创建新的模型运行。
+模型适配器是短生命周期对象，不保存 session、project、共享记录或 checkpoint。启用 `agent.context.context_window` 时，host 在每个 provider request 前从持久化 Context Surface 物化请求；Surface 是模型可见投影，raw transcript、tool calls 与 evidence records 仍是不可变审计数据。默认阈值为窗口的 80%，保留近期尾部 16%，项目事实预算为 8%；超大的 tool result 使用 Unicode 安全的头尾裁剪，必要时生成 checkpoint。压缩活动只作为 terminal/UI activity，不写入 transcript。
 
 ## 5. 工具接入模型
 
@@ -103,7 +104,7 @@ type Tool interface {
 
 工具集合由以下部分组成：
 
-- Eino Local Backend 提供 `ls`、`read_file`、`write_file`、`edit_file`、`glob`、`grep` 和 `execute`。
+- Host workspace tools 提供 `ls`、`read_file`、`write_file`、`edit_file`、`glob`、`grep` 和 `execute`；它们通过受约束的 Workspace backend 执行。
 - 应用层提供 `write_project_fact`，用于写入项目级共享记录。
 - 应用层在启动时发现至少一个有效技能后，向模型提供 `load_skill`。
 - `mcp.LocalRegistry` 读取 `agent.local_tools` 中用户声明的普通 CLI；不维护固定工具列表，也不执行 PATH 身份探测。每个配置项都通过同一协议加入本轮集合。
@@ -121,7 +122,7 @@ type Tool interface {
 
 项目运行时在打开项目时连接全部具名外部服务、读取其工具目录，并与 `agent.local_tools` 声明的 LocalRegistry 工具聚合到统一 provider。每个本机 CLI 统一接受 `{"args": ["..."]}`，并使用 `exec.CommandContext` 的 argv 调用，不经过 shell；命令的安装、版本和身份由用户负责。服务名和工具名需满足 `[A-Za-z0-9_-]`；不同来源提供的工具名必须全局唯一。
 
-MCP 工具保留服务声明的描述与 JSON Schema。调用完成后，应用层装饰器会记录参数、状态和输出，再将带记录编号的输出返回给模型。配置中的环境变量值和 HTTP Header 值会在输出中被替换为脱敏标记。
+MCP 工具保留服务声明的描述与 JSON Schema。调用完成后，host executor 统一记录 workspace、session、LocalRegistry 和 MCP 工具的参数、状态和输出，再将带记录编号的输出返回给模型。配置中的环境变量值和 HTTP Header 值会在输出中被替换为脱敏标记。
 
 ## 7. 技能目录与按需加载
 

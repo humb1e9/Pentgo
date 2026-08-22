@@ -48,6 +48,9 @@ mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/pentgo"
   "agent": {
     "provider": "openai",
     "max_turns": 20,
+    "context": {
+      "context_window": 128000
+    },
     "openai": {
       "base_url": "https://api.openai.com/v1",
       "model": "你的模型名",
@@ -58,6 +61,8 @@ mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/pentgo"
 ```
 
 使用 Anthropic 时，将 `provider` 改为 `anthropic`，并在 `agent.anthropic` 中填写 `base_url`、`model` 与 `api_key_env`。其他兼容 OpenAI 的服务通常只需替换 `base_url` 和 `model`。
+
+当配置 `agent.context.context_window` 后，PentGo 会自动管理长会话上下文，优先保留近期工作与项目事实；完整项目审计数据仍保存在本地。省略该配置则保持完整 transcript 回放兼容行为。
 
 ### 3. 启动
 

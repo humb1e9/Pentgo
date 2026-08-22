@@ -49,6 +49,27 @@ func (tool *fixtureTool) Invoke(context.Context, map[string]any) (string, error)
 	return "fixture result", nil
 }
 
+type orderedFixtureTool struct {
+	name    string
+	waitFor <-chan struct{}
+	done    chan<- string
+}
+
+func (tool *orderedFixtureTool) Name() string        { return tool.name }
+func (tool *orderedFixtureTool) Description() string { return "测试并发工具排序。" }
+func (tool *orderedFixtureTool) InputSchema() map[string]any {
+	return map[string]any{"type": "object"}
+}
+func (tool *orderedFixtureTool) Invoke(context.Context, map[string]any) (string, error) {
+	if tool.waitFor != nil {
+		<-tool.waitFor
+	}
+	if tool.done != nil {
+		tool.done <- tool.name
+	}
+	return tool.name + " result", nil
+}
+
 // newApplicationFixture assembles the same runtime, transcript, and tool
 // boundaries as production while replacing only the model stepper.
 func newApplicationFixture(t *testing.T, stepper agent.ModelStepper, external ...agent.Tool) (*ProjectRuntime, *domain.Session, *TurnService) {
@@ -93,6 +114,41 @@ func (preparer *countingContextPreparer) Prepare(_ context.Context, sessionID, s
 func (preparer *countingContextPreparer) PrepareOverflowRecovery(_ context.Context, sessionID, systemPrompt string, tools []agent.Tool) (agent.ModelStepInput, []agent.ContextActivity, error) {
 	preparer.overflowRetries++
 	return agent.ModelStepInput{SessionID: sessionID, Messages: preparer.runtime.Transcript(sessionID).Messages(), SystemPrompt: systemPrompt, Tools: append([]agent.Tool(nil), tools...)}, []agent.ContextActivity{{Kind: agent.ContextOverflowRetry, Message: "recovered"}}, nil
+}
+
+func TestTurnPersistsConcurrentToolResultsInProviderCallOrder(t *testing.T) {
+	secondDone := make(chan string, 1)
+	releaseFirst := make(chan struct{})
+	go func() {
+		<-secondDone
+		close(releaseFirst)
+	}()
+	steps := 0
+	stepper := scriptedStepper{stream: func(_ context.Context, input agent.ModelStepInput) []agent.ModelStreamEvent {
+		steps++
+		switch steps {
+		case 1:
+			return []agent.ModelStreamEvent{{Final: &agent.Message{Role: agent.RoleAssistant, ToolCalls: []agent.ToolCall{
+				{ID: "call-a", Name: "first"},
+				{ID: "call-b", Name: "second"},
+			}}}}
+		case 2:
+			return []agent.ModelStreamEvent{{Final: &agent.Message{Role: agent.RoleAssistant, Content: "complete"}}}
+		default:
+			return []agent.ModelStreamEvent{{Err: errors.New("unexpected step")}}
+		}
+	}}
+	projectRuntime, session, _ := newApplicationFixture(t, stepper,
+		&orderedFixtureTool{name: "first", waitFor: releaseFirst},
+		&orderedFixtureTool{name: "second", done: secondDone},
+	)
+	if err := <-projectRuntime.Submit(context.Background(), session.ID, "run concurrent tools"); err != nil {
+		t.Fatal(err)
+	}
+	messages := projectRuntime.Transcript(session.ID).Messages()
+	if len(messages) != 5 || len(messages[1].ToolCalls) != 2 || messages[2].ToolName != "first" || messages[3].ToolName != "second" || messages[4].Content != "complete" {
+		t.Fatalf("transcript order = %#v", messages)
+	}
 }
 
 func TestTurnPersistsUserToolAssistantMessages(t *testing.T) {

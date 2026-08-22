@@ -84,6 +84,52 @@ func (store *TranscriptStore) Append(message agent.Message) error {
 	return nil
 }
 
+// AppendBatch commits an ordered group of messages as one transaction before
+// publishing any of them to the in-memory replay cache. It is used for one
+// assistant tool-call batch's results so recovery never observes only a prefix.
+func (store *TranscriptStore) AppendBatch(messages []agent.Message) error {
+	if store == nil || store.db == nil {
+		return fmt.Errorf("transcript store is nil")
+	}
+	if len(messages) == 0 {
+		return nil
+	}
+	cloned := make([]agent.Message, len(messages))
+	for index, message := range messages {
+		if strings.TrimSpace(message.Role) == "" {
+			return fmt.Errorf("transcript message role is empty")
+		}
+		cloned[index] = cloneMessage(message)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.failed != nil {
+		return store.failed
+	}
+	if store.closed {
+		store.failed = fmt.Errorf("append transcript batch: closed")
+		return store.failed
+	}
+	tx, err := store.db.Begin()
+	if err != nil {
+		store.failed = fmt.Errorf("append transcript batch: %w", err)
+		return store.failed
+	}
+	for _, message := range cloned {
+		if _, err := insertNextMessageTx(tx, store.sessionID, message); err != nil {
+			_ = tx.Rollback()
+			store.failed = fmt.Errorf("append transcript batch: %w", err)
+			return store.failed
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		store.failed = fmt.Errorf("append transcript batch: %w", err)
+		return store.failed
+	}
+	store.messages = append(store.messages, cloned...)
+	return nil
+}
+
 // insertNextMessageTx 在与其工具调用相同的事务中分配 seq，
 // 从而在回放时保留精确的模型消息顺序。
 func insertNextMessageTx(tx *sql.Tx, sessionID string, message agent.Message) (int, error) {

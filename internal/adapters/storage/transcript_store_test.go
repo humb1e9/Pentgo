@@ -99,6 +99,34 @@ func TestTranscriptStoresAllocateSequencesAcrossHandles(t *testing.T) {
 	}
 }
 
+func TestTranscriptStoreAppendBatchIsAtomic(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+	session := domain.NewSession("session-batch", "inspect", testTime())
+	if err := store.SaveSession(session); err != nil {
+		t.Fatal(err)
+	}
+	transcript, err := store.OpenTranscript(session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer transcript.Close()
+	messages := []agent.Message{
+		{Role: agent.RoleTool, ToolCallID: "call-1", ToolName: "first", Content: "first result"},
+		{Role: agent.RoleTool, ToolCallID: "call-2", ToolName: "second", ToolArguments: map[string]any{"invalid": func() {}}, Content: "second result"},
+	}
+	if err := transcript.AppendBatch(messages); err == nil {
+		t.Fatal("AppendBatch returned nil for unencodable second message")
+	}
+	loaded, err := loadTranscriptDB(store.db, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 0 || len(transcript.Messages()) != 0 {
+		t.Fatalf("partial batch persisted: database=%#v cache=%#v", loaded, transcript.Messages())
+	}
+}
+
 func TestTranscriptMessagesReturnsDeepCopy(t *testing.T) {
 	store := newTestStore(t)
 	defer store.Close()

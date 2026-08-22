@@ -219,20 +219,24 @@ func (service *TurnService) RunTurn(ctx context.Context, runtime *ProjectRuntime
 			runtime.Emit(session.ID, Event{TurnID: turn.ID, Kind: EventToolStarted, Message: call.Name, Data: call})
 		}
 		results := invokeToolCalls(ctx, runtime, tools, final.ToolCalls)
-		for _, result := range results {
+		toolMessages := make([]agent.Message, len(results))
+		for index, result := range results {
 			// A successful evidence write turns an invoked-tool failure into a
 			// model-recoverable tool message. Any remaining error is an audit or
 			// execution-boundary failure and must not create an unrecorded row.
 			if result.err != nil {
 				return service.finishError(runtime, session, turn.ID, result.err, service.currentTime())
 			}
-			if err := transcript.Append(result.message); err != nil {
-				return service.finishError(runtime, session, turn.ID, err, service.currentTime())
-			}
-			if err := service.persist(runtime, session); err != nil {
-				return service.finishError(runtime, session, turn.ID, err, service.currentTime())
-			}
-			runtime.Emit(session.ID, Event{TurnID: turn.ID, Kind: EventToolFinished, Message: result.message.ToolName, Output: result.message.Content})
+			toolMessages[index] = result.message
+		}
+		if err := transcript.AppendBatch(toolMessages); err != nil {
+			return service.finishError(runtime, session, turn.ID, err, service.currentTime())
+		}
+		if err := service.persist(runtime, session); err != nil {
+			return service.finishError(runtime, session, turn.ID, err, service.currentTime())
+		}
+		for _, message := range toolMessages {
+			runtime.Emit(session.ID, Event{TurnID: turn.ID, Kind: EventToolFinished, Message: message.ToolName, Output: message.Content})
 		}
 	}
 	return service.finishError(runtime, session, turn.ID, fmt.Errorf("maximum model requests exceeded"), service.currentTime())

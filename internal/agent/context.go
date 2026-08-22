@@ -31,6 +31,16 @@ type ContextSurface struct {
 	Nodes      []SurfaceNode
 }
 
+// ContextMeasurement separates the model-context budget by immutable request
+// component so pressure decisions can explain what consumed the budget.
+type ContextMeasurement struct {
+	SystemTokens     int
+	ToolSchemaTokens int
+	BlackboardTokens int
+	SurfaceTokens    int
+	TotalTokens      int
+}
+
 // CompactionLifecycle records the durable state of one planned replacement.
 type CompactionLifecycle struct {
 	ID         string

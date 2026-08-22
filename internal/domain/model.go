@@ -68,6 +68,7 @@ type Fact struct {
 	Source    string    `json:"source,omitempty"`
 	SessionID string    `json:"session_id,omitempty"`
 	At        time.Time `json:"at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Blackboard 是项目范围内共享事实的集合。
@@ -210,8 +211,16 @@ func (board *Blackboard) NoteFact(fact Fact) error {
 	} else {
 		fact.At = fact.At.UTC()
 	}
+	if fact.UpdatedAt.IsZero() {
+		fact.UpdatedAt = time.Now().UTC()
+	} else {
+		fact.UpdatedAt = fact.UpdatedAt.UTC()
+	}
 	for index, existing := range board.Facts {
 		if existing.Key == fact.Key {
+			// A replacement is a fresh observation even when callers provide an
+			// older source timestamp for the observation itself.
+			fact.UpdatedAt = time.Now().UTC()
 			board.Facts[index] = fact
 			return nil
 		}

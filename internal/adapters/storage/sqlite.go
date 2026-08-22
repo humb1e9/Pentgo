@@ -11,7 +11,7 @@ import (
 )
 
 // schemaVersion 记录每个项目数据库应使用的 SQLite 布局版本。
-const schemaVersion = 4
+const schemaVersion = 5
 
 // schema 由 openSQLite 在单个事务中应用于新数据库。
 // 表使用规范化关系持久化事实，而非序列化状态块。
@@ -73,7 +73,8 @@ CREATE TABLE IF NOT EXISTS facts (
     value TEXT NOT NULL,
     source TEXT NOT NULL DEFAULT '',
     session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
-    at INTEGER NOT NULL
+    at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS transcript_messages (
@@ -246,6 +247,32 @@ CREATE TABLE IF NOT EXISTS context_compactions (
 		}
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("commit sqlite schema v3 to v4 migration: %w", err)
+		}
+	}
+	if version >= 1 && version <= 4 {
+		var hasFacts bool
+		if err := db.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'facts')`).Scan(&hasFacts); err != nil {
+			return fmt.Errorf("inspect sqlite schema v4 to v5 migration: %w", err)
+		}
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("begin sqlite schema v4 to v5 migration: %w", err)
+		}
+		if hasFacts {
+			if _, err := tx.Exec(`ALTER TABLE facts ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0; UPDATE facts SET updated_at = at WHERE updated_at = 0;`); err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf("migrate sqlite facts v4 to v5: %w", err)
+			}
+		}
+		if _, err := tx.Exec(`
+CREATE UNIQUE INDEX IF NOT EXISTS context_compactions_one_started_range
+    ON context_compactions(session_id, generation, source_start_seq, source_end_seq)
+    WHERE status = 'started';`); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("migrate sqlite context compactions v4 to v5: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit sqlite schema v4 to v5 migration: %w", err)
 		}
 	}
 	return nil

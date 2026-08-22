@@ -210,8 +210,9 @@ func TestBlackboardRoundTripsFacts(t *testing.T) {
 	if err := store.SaveSession(session); err != nil {
 		t.Fatal(err)
 	}
+	updatedAt := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
 	board := &domain.Blackboard{
-		Facts: []domain.Fact{{Key: "host", Value: "TARGET", Source: "test", SessionID: session.ID, At: time.Now().UTC()}},
+		Facts: []domain.Fact{{Key: "host", Value: "TARGET", Source: "test", SessionID: session.ID, At: time.Now().UTC(), UpdatedAt: updatedAt}},
 	}
 	if err := store.SaveBlackboard(board); err != nil {
 		t.Fatal(err)
@@ -220,7 +221,7 @@ func TestBlackboardRoundTripsFacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded.Facts) != 1 || loaded.Facts[0].Key != "host" || loaded.Facts[0].SessionID != session.ID {
+	if len(loaded.Facts) != 1 || loaded.Facts[0].Key != "host" || loaded.Facts[0].SessionID != session.ID || !loaded.Facts[0].UpdatedAt.Equal(updatedAt) {
 		t.Fatalf("blackboard = %+v", loaded)
 	}
 }

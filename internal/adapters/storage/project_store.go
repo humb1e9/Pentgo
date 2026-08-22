@@ -513,20 +513,21 @@ func (store *ProjectStore) LoadBlackboard() (*domain.Blackboard, error) {
 		return nil, fmt.Errorf("project store is nil")
 	}
 	board := &domain.Blackboard{Facts: []domain.Fact{}}
-	rows, err := store.db.Query("SELECT key, value, source, session_id, at FROM facts ORDER BY position")
+	rows, err := store.db.Query("SELECT key, value, source, session_id, at, updated_at FROM facts ORDER BY position")
 	if err != nil {
 		return nil, fmt.Errorf("load blackboard facts: %w", err)
 	}
 	for rows.Next() {
 		var fact domain.Fact
 		var sessionID sql.NullString
-		var at int64
-		if err := rows.Scan(&fact.Key, &fact.Value, &fact.Source, &sessionID, &at); err != nil {
+		var at, updatedAt int64
+		if err := rows.Scan(&fact.Key, &fact.Value, &fact.Source, &sessionID, &at, &updatedAt); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("load blackboard fact: %w", err)
 		}
 		fact.SessionID = sessionID.String
 		fact.At = parseTime(at)
+		fact.UpdatedAt = parseTime(updatedAt)
 		board.Facts = append(board.Facts, fact)
 	}
 	if err := rows.Close(); err != nil {
@@ -570,10 +571,13 @@ func saveBlackboardTx(tx *sql.Tx, board *domain.Blackboard) error {
 		if fact.At.IsZero() {
 			fact.At = time.Now().UTC()
 		}
+		if fact.UpdatedAt.IsZero() {
+			fact.UpdatedAt = fact.At
+		}
 		if _, err := tx.Exec(`
-			INSERT INTO facts(key, position, value, source, session_id, at)
-			VALUES(?, ?, ?, ?, ?, ?)`,
-			fact.Key, position, fact.Value, fact.Source, nullableText(fact.SessionID), timeValue(fact.At),
+			INSERT INTO facts(key, position, value, source, session_id, at, updated_at)
+			VALUES(?, ?, ?, ?, ?, ?, ?)`,
+			fact.Key, position, fact.Value, fact.Source, nullableText(fact.SessionID), timeValue(fact.At), timeValue(fact.UpdatedAt),
 		); err != nil {
 			return fmt.Errorf("save blackboard fact: %w", err)
 		}

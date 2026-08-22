@@ -35,6 +35,21 @@ func TestNewSessionDerivesName(t *testing.T) {
 	}
 }
 
+func TestBlackboardReplacementRefreshesFactUpdatedAt(t *testing.T) {
+	first := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	board := &Blackboard{}
+	if err := board.NoteFact(Fact{Key: "target", Value: "first", At: first, UpdatedAt: first}); err != nil {
+		t.Fatal(err)
+	}
+	if err := board.NoteFact(Fact{Key: "target", Value: "replacement", At: first}); err != nil {
+		t.Fatal(err)
+	}
+	fact := board.Facts[0]
+	if fact.Value != "replacement" || !fact.UpdatedAt.After(first) {
+		t.Fatalf("fact = %#v", fact)
+	}
+}
+
 func TestTurnStatusTransitions(t *testing.T) {
 	session := NewSession("session-1", "inspect", time.Now().UTC())
 	turn, err := session.BeginTurn("turn-1", "inspect", time.Now().UTC())

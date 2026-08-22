@@ -14,19 +14,21 @@ import (
 // SkillLoader 返回按准确名称指定的技能文档全文。
 type SkillLoader func(string) (string, error)
 
-// runtimeToolProvider 构建单个会话 turn 可见的工具集合。它在会话内提供项目事实和
-// 可选技能，并为远端工具添加项目级证据持久化装饰。
+// runtimeToolProvider builds the tools visible to one session turn. The optional
+// skill loader comes from process-start discovery; the catalog itself lives in
+// the persisted session transcript rather than this turn's tool configuration.
 type runtimeToolProvider struct {
-	runtime      *ProjectRuntime
-	session      *domain.Session
-	external     []agent.Tool
-	loadSkill    SkillLoader
-	skillSummary string
+	runtime         *ProjectRuntime
+	session         *domain.Session
+	external        []agent.Tool
+	loadSkill       SkillLoader
+	skillsAvailable bool
 }
 
-// newRuntimeToolProvider 复制外部工具，避免 Provider 后续变化影响正在配置的 turn。
-func newRuntimeToolProvider(runtime *ProjectRuntime, session *domain.Session, external []agent.Tool, loadSkill SkillLoader, skillSummary string) *runtimeToolProvider {
-	return &runtimeToolProvider{runtime: runtime, session: session, external: append([]agent.Tool(nil), external...), loadSkill: loadSkill, skillSummary: skillSummary}
+// newRuntimeToolProvider copies external tools so later Provider changes cannot
+// affect the turn being configured.
+func newRuntimeToolProvider(runtime *ProjectRuntime, session *domain.Session, external []agent.Tool, loadSkill SkillLoader, skillsAvailable bool) *runtimeToolProvider {
+	return &runtimeToolProvider{runtime: runtime, session: session, external: append([]agent.Tool(nil), external...), loadSkill: loadSkill, skillsAvailable: skillsAvailable}
 }
 
 // Tools 合并会话级内置工具和项目级远端工具，并拒绝可能遮蔽 Eino Local Backend
@@ -38,7 +40,7 @@ func (provider *runtimeToolProvider) Tools(context.Context) ([]agent.Tool, error
 	tools := []agent.Tool{
 		&writeProjectFactTool{runtime: provider.runtime, session: provider.session},
 	}
-	if provider.loadSkill != nil && strings.TrimSpace(provider.skillSummary) != "" {
+	if provider.loadSkill != nil && provider.skillsAvailable {
 		tools = append(tools, &loadSkillTool{load: provider.loadSkill})
 	}
 	seen := make(map[string]bool, len(tools)+len(provider.external))

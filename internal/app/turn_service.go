@@ -20,14 +20,14 @@ type EngineFactory func(context.Context, *domain.Session, *ProjectRuntime) (agen
 // TurnService 编排一次可持久化的模型 turn：写入用户消息、执行模型、追加每条输出消息，
 // 最后发布进度事件。
 type TurnService struct {
-	configMu      sync.RWMutex
-	engine        agent.ModelEngine
-	engineFactory EngineFactory
-	store         *storage.ProjectStore
-	tools         agent.ToolProvider
-	loadSkill     SkillLoader
-	skillSummary  string
-	now           func() time.Time
+	configMu        sync.RWMutex
+	engine          agent.ModelEngine
+	engineFactory   EngineFactory
+	store           *storage.ProjectStore
+	tools           agent.ToolProvider
+	loadSkill       SkillLoader
+	skillsAvailable bool
+	now             func() time.Time
 }
 
 // NewTurnService 使用可选的固定测试依赖创建服务。生产环境通常由 EngineFactory
@@ -45,15 +45,15 @@ func (service *TurnService) SetEngineFactory(factory EngineFactory) {
 	}
 }
 
-// SetSkillLoader 将已显式扫描的技能注册表提供给后续 turn。
-func (service *TurnService) SetSkillLoader(load SkillLoader, summary string) {
+// SetSkillCatalog configures the process-start discovered skill loader for later turns.
+func (service *TurnService) SetSkillCatalog(load SkillLoader, available bool) {
 	if service == nil {
 		return
 	}
 	service.configMu.Lock()
 	defer service.configMu.Unlock()
 	service.loadSkill = load
-	service.skillSummary = strings.TrimSpace(summary)
+	service.skillsAvailable = available
 }
 
 // SetClock 替换时钟，供编排逻辑进行确定性测试。
@@ -107,13 +107,13 @@ func (service *TurnService) RunTurn(ctx context.Context, projectRuntime *Project
 	if err != nil {
 		return service.finishError(projectRuntime, session, turn.ID, err, service.currentTime())
 	}
-	loadSkill, skillSummary := service.skillConfig()
-	toolProvider := newRuntimeToolProvider(projectRuntime, session, externalTools, loadSkill, skillSummary)
+	loadSkill, skillsAvailable := service.skillConfig()
+	toolProvider := newRuntimeToolProvider(projectRuntime, session, externalTools, loadSkill, skillsAvailable)
 	tools, err := toolProvider.Tools(ctx)
 	if err != nil {
 		return service.finishError(projectRuntime, session, turn.ID, err, service.currentTime())
 	}
-	events, err := engine.Run(ctx, agent.TurnInput{SessionID: session.ID, Messages: transcript.Messages(), Tools: tools, ProjectFacts: blackboardText(projectRuntime.Blackboard()), SkillSummary: skillSummary})
+	events, err := engine.Run(ctx, agent.TurnInput{SessionID: session.ID, Messages: transcript.Messages(), Tools: tools, ProjectFacts: blackboardText(projectRuntime.Blackboard())})
 	if err != nil {
 		return service.finishError(projectRuntime, session, turn.ID, err, service.currentTime())
 	}
@@ -235,12 +235,12 @@ func (service *TurnService) currentTime() time.Time {
 	return clock().UTC()
 }
 
-// skillConfig 以一致快照读取加载器配置。
-func (service *TurnService) skillConfig() (SkillLoader, string) {
+// skillConfig returns a consistent snapshot of startup-discovered skill availability.
+func (service *TurnService) skillConfig() (SkillLoader, bool) {
 	if service == nil {
-		return nil, ""
+		return nil, false
 	}
 	service.configMu.RLock()
 	defer service.configMu.RUnlock()
-	return service.loadSkill, service.skillSummary
+	return service.loadSkill, service.skillsAvailable
 }

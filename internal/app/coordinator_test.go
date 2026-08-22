@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"testing/fstest"
 
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
@@ -129,6 +132,98 @@ func TestCoordinatorMessagesReturnsTranscript(t *testing.T) {
 	}
 }
 
+func TestCoordinatorScansOnceAndInjectsCatalogBeforeFirstUserMessage(t *testing.T) {
+	files := &countingFS{FS: fstest.MapFS{
+		"api.md": &fstest.MapFile{Data: []byte("---\ndescription: API routing\n---\n# API\n\nBODY\n")},
+	}}
+	fixture := &coordinatorModel{messages: []*schema.Message{schema.AssistantMessage("完成", nil)}}
+	coordinator := New(config.Default(), t.TempDir(), Dependencies{
+		SkillsFS: files,
+		NewModel: func(context.Context, config.AgentConfig) (model.ToolCallingChatModel, error) {
+			return fixture, nil
+		},
+	})
+	defer coordinator.CloseProject()
+	startupOpens := files.opens.Load()
+	if startupOpens == 0 {
+		t.Fatal("skills were not scanned during Coordinator construction")
+	}
+	if _, _, err := coordinator.OpenOrCreateWorkspace(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	session, err := coordinator.NewSession("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-coordinator.Submit(context.Background(), session.ID, "检查 API"); err != nil {
+		t.Fatal(err)
+	}
+	if got := files.opens.Load(); got != startupOpens {
+		t.Fatalf("skill filesystem opened %d times after startup, want %d", got, startupOpens)
+	}
+	messages := coordinator.Messages(session.ID)
+	if len(messages) < 3 || messages[0].Role != agent.RoleSystem || !strings.Contains(messages[0].Content, "`api`：API routing") || messages[1].Role != agent.RoleUser {
+		t.Fatalf("messages = %#v", messages)
+	}
+}
+
+func TestCoordinatorResumeUpdatesOnlyChangedSkillCatalog(t *testing.T) {
+	root := t.TempDir()
+	oldFiles := fstest.MapFS{
+		"api.md": &fstest.MapFile{Data: []byte("---\ndescription: Old API routing\n---\n# API\n")},
+	}
+	first := New(config.Default(), root, Dependencies{SkillsFS: oldFiles})
+	if _, _, err := first.OpenOrCreateWorkspace(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	session, err := first.NewSession("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.CloseProject(); err != nil {
+		t.Fatal(err)
+	}
+
+	unchanged := New(config.Default(), root, Dependencies{SkillsFS: oldFiles})
+	if _, err := unchanged.OpenCurrentProject(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := unchanged.ResumeSession(session.ID); err != nil {
+		t.Fatal(err)
+	}
+	if messages := unchanged.Messages(session.ID); len(messages) != 1 {
+		t.Fatalf("unchanged catalog messages = %#v", messages)
+	}
+	if err := unchanged.CloseProject(); err != nil {
+		t.Fatal(err)
+	}
+
+	changed := New(config.Default(), root, Dependencies{SkillsFS: fstest.MapFS{
+		"api.md": &fstest.MapFile{Data: []byte("---\ndescription: New API routing\n---\n# API\n")},
+	}})
+	defer changed.CloseProject()
+	if _, err := changed.OpenCurrentProject(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := changed.ResumeSession(session.ID); err != nil {
+		t.Fatal(err)
+	}
+	messages := changed.Messages(session.ID)
+	if len(messages) != 2 || !strings.Contains(messages[1].Content, "completely replaces every earlier") || !strings.Contains(messages[1].Content, "New API routing") {
+		t.Fatalf("changed catalog messages = %#v", messages)
+	}
+}
+
+func TestCoordinatorRetainsStartupSkillDiagnostics(t *testing.T) {
+	coordinator := New(config.Default(), t.TempDir(), Dependencies{SkillsFS: fstest.MapFS{
+		"bad.md": &fstest.MapFile{Data: []byte("# missing required metadata\n")},
+	}})
+	defer coordinator.CloseProject()
+	if diagnostics := coordinator.SkillDiagnostics(); len(diagnostics) != 1 || diagnostics[0].Path != "bad.md" || !strings.Contains(diagnostics[0].Reason, "frontmatter") {
+		t.Fatalf("diagnostics = %#v", diagnostics)
+	}
+}
+
 func TestCoordinatorRegistersFilesystemToolsForEachAgent(t *testing.T) {
 	root := t.TempDir()
 	fixture := &coordinatorModel{messages: []*schema.Message{
@@ -156,6 +251,16 @@ func TestCoordinatorRegistersFilesystemToolsForEachAgent(t *testing.T) {
 	if len(messages) < 3 || messages[2].Role != agent.RoleTool || !strings.Contains(messages[2].Content, "evidence_ref: 1") {
 		t.Fatalf("messages = %#v", messages)
 	}
+}
+
+type countingFS struct {
+	fs.FS
+	opens atomic.Int32
+}
+
+func (source *countingFS) Open(name string) (fs.File, error) {
+	source.opens.Add(1)
+	return source.FS.Open(name)
 }
 
 type coordinatorModel struct {

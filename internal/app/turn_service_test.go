@@ -132,11 +132,25 @@ func TestTurnDoneLeavesSessionReusable(t *testing.T) {
 	}
 }
 
+func TestRuntimeToolsExposeAutomaticSkillLoaderWhenCatalogExists(t *testing.T) {
+	projectRuntime, session, _ := newApplicationFixture(t, scriptedEngine{run: func(context.Context, agent.TurnInput) []agent.TurnEvent {
+		return nil
+	}})
+	loader := func(string) (string, error) { return "body", nil }
+	tools, err := newRuntimeToolProvider(projectRuntime, session, nil, loader, true).Tools(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools) != 2 || tools[0].Name() != "write_project_fact" || tools[1].Name() != "load_skill" {
+		t.Fatalf("tools = %#v", tools)
+	}
+}
+
 func TestRuntimeToolsExposeOnlyWriteProjectFact(t *testing.T) {
 	projectRuntime, session, _ := newApplicationFixture(t, scriptedEngine{run: func(context.Context, agent.TurnInput) []agent.TurnEvent {
 		return nil
 	}})
-	tools, err := newRuntimeToolProvider(projectRuntime, session, nil, nil, "").Tools(context.Background())
+	tools, err := newRuntimeToolProvider(projectRuntime, session, nil, nil, false).Tools(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

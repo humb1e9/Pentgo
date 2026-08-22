@@ -44,15 +44,17 @@ type Dependencies struct {
 // Coordinator 负责打开和关闭一个目录的 ProjectRuntime。它是 CLI 使用的门面，
 // 并串行化项目生命周期状态迁移。
 type Coordinator struct {
-	mu        sync.RWMutex
-	lifecycle sync.Mutex
-	cfg       config.Config
-	root      string
-	deps      Dependencies
-	store     *storage.ProjectStore
-	runtime   *ProjectRuntime
-	service   *TurnService
-	skills    *skillsadapter.Registry
+	mu               sync.RWMutex
+	lifecycle        sync.Mutex
+	cfg              config.Config
+	root             string
+	deps             Dependencies
+	store            *storage.ProjectStore
+	runtime          *ProjectRuntime
+	service          *TurnService
+	skills           *skillsadapter.Registry
+	skillDiagnostics []skillsadapter.Diagnostic
+	skillAvailable   bool
 }
 
 // New 创建以 outputRoot 为根目录的 Coordinator，并为未提供的依赖补充生产默认值。
@@ -63,25 +65,26 @@ func New(cfg config.Config, outputRoot string, deps Dependencies) *Coordinator {
 	if deps.NewModel == nil {
 		deps.NewModel = llm.NewModel
 	}
-	return &Coordinator{cfg: cfg, root: strings.TrimSpace(outputRoot), deps: deps, skills: skillsadapter.NewRegistry(deps.SkillsFS)}
+	registry := skillsadapter.NewRegistry(deps.SkillsFS)
+	result := registry.Scan()
+	return &Coordinator{
+		cfg:              cfg,
+		root:             strings.TrimSpace(outputRoot),
+		deps:             deps,
+		skills:           registry,
+		skillDiagnostics: append([]skillsadapter.Diagnostic(nil), result.Diagnostics...),
+		skillAvailable:   registry.HasSkills(),
+	}
 }
 
-// LoadSkills 扫描显式指定的技能文件系统，并将摘要提供给当前项目后续配置的 turn。
-func (coordinator *Coordinator) LoadSkills() (string, error) {
-	if coordinator == nil || coordinator.skills == nil {
-		return "", fmt.Errorf("skill registry is unavailable")
-	}
-	summary, err := coordinator.skills.Scan()
-	if err != nil {
-		return "", err
+// SkillDiagnostics returns the immutable process-start skill scan diagnostics.
+func (coordinator *Coordinator) SkillDiagnostics() []skillsadapter.Diagnostic {
+	if coordinator == nil {
+		return nil
 	}
 	coordinator.mu.RLock()
-	service := coordinator.service
-	coordinator.mu.RUnlock()
-	if service != nil {
-		service.SetSkillLoader(coordinator.skills.Load, summary)
-	}
-	return summary, nil
+	defer coordinator.mu.RUnlock()
+	return append([]skillsadapter.Diagnostic(nil), coordinator.skillDiagnostics...)
 }
 
 // CreateProject 在 Coordinator 根目录初始化并打开项目。
@@ -216,14 +219,11 @@ func (coordinator *Coordinator) openStore(ctx context.Context, store *storage.Pr
 		engine.SetMaxIterations(coordinator.cfg.Agent.MaxTurns)
 		return engine, nil
 	})
-	if coordinator.skills != nil && coordinator.skills.Loaded() {
-		summary, summaryErr := coordinator.skills.Summary()
-		if summaryErr != nil {
-			_ = projectRuntime.Close()
-			return summaryErr
-		}
-		service.SetSkillLoader(coordinator.skills.Load, summary)
+	var loadSkill SkillLoader
+	if coordinator.skillAvailable && coordinator.skills != nil {
+		loadSkill = coordinator.skills.Load
 	}
+	service.SetSkillCatalog(loadSkill, coordinator.skillAvailable)
 	if err := projectRuntime.SetTurnHandler(func(runContext context.Context, session *domain.Session, message string) error {
 		return service.RunTurn(runContext, projectRuntime, session, message)
 	}); err != nil {
@@ -283,7 +283,15 @@ func (coordinator *Coordinator) NewSession(intent string, targets ...string) (*d
 	if len(targets) == 0 {
 		targets = extractTargets(intent)
 	}
-	return runtime.NewSession(intent, targets...)
+	session, err := runtime.NewSession(intent, targets...)
+	if err != nil {
+		return nil, err
+	}
+	if err := ensureSessionSkillCatalog(runtime.Transcript(session.ID), coordinator.skills); err != nil {
+		_ = runtime.DeleteSession(session.ID)
+		return nil, err
+	}
+	return runtime.Snapshot(session.ID), nil
 }
 
 // ResumeSession 校验指定会话已附加到运行时。
@@ -307,7 +315,10 @@ func (coordinator *Coordinator) ResumeSession(id string) (*domain.Session, error
 	if session == nil {
 		return nil, fmt.Errorf("session %q does not exist", id)
 	}
-	return session, nil
+	if err := ensureSessionSkillCatalog(runtime.Transcript(id), coordinator.skills); err != nil {
+		return nil, err
+	}
+	return runtime.Snapshot(id), nil
 }
 
 // DeleteSession 删除指定会话及其 transcript，其他会话保持运行。

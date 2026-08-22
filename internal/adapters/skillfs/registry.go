@@ -66,12 +66,6 @@ func (registry *Registry) HasSkills() bool {
 	return len(registry.catalog) != 0
 }
 
-// Loaded is retained as a compatibility alias for HasSkills.
-// Deprecated: use HasSkills.
-func (registry *Registry) Loaded() bool {
-	return registry.HasSkills()
-}
-
 // Scan reads Markdown frontmatter and atomically replaces all registry state.
 // Individual file failures are recorded as diagnostics and do not stop scanning.
 func (registry *Registry) Scan() ScanResult {

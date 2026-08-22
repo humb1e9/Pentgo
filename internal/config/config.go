@@ -39,6 +39,59 @@ type AgentConfig struct {
 	Anthropic             ModelProviderConfig `json:"anthropic"`
 	MCP                   MCPServers          `json:"mcp,omitempty"`
 	LocalTools            LocalTools          `json:"local_tools,omitempty"`
+	Context               AgentContextConfig  `json:"context,omitempty"`
+}
+
+// AgentContextConfig configures optional persistent context budgeting. A zero
+// ContextWindow preserves the legacy full-transcript replay behavior.
+type AgentContextConfig struct {
+	ContextWindow            int     `json:"context_window,omitempty"`
+	ThresholdRatio           float64 `json:"threshold_ratio,omitempty"`
+	RetainRatio              float64 `json:"retain_ratio,omitempty"`
+	BlackboardRatio          float64 `json:"blackboard_ratio,omitempty"`
+	ToolResultThresholdChars int     `json:"tool_result_threshold_chars,omitempty"`
+	ToolResultHeadChars      int     `json:"tool_result_head_chars,omitempty"`
+	ToolResultTailChars      int     `json:"tool_result_tail_chars,omitempty"`
+	CheckpointMaxTokens      int     `json:"checkpoint_max_tokens,omitempty"`
+	CheckpointProvider       string  `json:"checkpoint_provider,omitempty"`
+	CheckpointModel          string  `json:"checkpoint_model,omitempty"`
+}
+
+const toolResultPruneMarker = "\n\n[... tool result middle pruned ...]\n\n"
+
+// Enabled reports whether context budgeting is active for this agent.
+func (config AgentContextConfig) Enabled() bool {
+	return config.ContextWindow > 0
+}
+
+// Effective applies the Phase 1 defaults to enabled policies only. Disabled
+// policies are returned unchanged so callers retain legacy replay behavior.
+func (config AgentContextConfig) Effective() AgentContextConfig {
+	if !config.Enabled() {
+		return config
+	}
+	if config.ThresholdRatio == 0 {
+		config.ThresholdRatio = 0.80
+	}
+	if config.RetainRatio == 0 {
+		config.RetainRatio = 0.16
+	}
+	if config.BlackboardRatio == 0 {
+		config.BlackboardRatio = 0.08
+	}
+	if config.ToolResultThresholdChars == 0 {
+		config.ToolResultThresholdChars = 8192
+	}
+	if config.ToolResultHeadChars == 0 {
+		config.ToolResultHeadChars = 4096
+	}
+	if config.ToolResultTailChars == 0 {
+		config.ToolResultTailChars = 1024
+	}
+	if config.CheckpointMaxTokens == 0 {
+		config.CheckpointMaxTokens = 8192
+	}
+	return config
 }
 
 // LocalToolConfig declares one user-managed local CLI that LocalRegistry
@@ -171,6 +224,37 @@ func validateLocalTools(tools LocalTools) error {
 	return nil
 }
 
+func validateAgentContextConfig(policy AgentContextConfig) error {
+	if policy.ContextWindow < 0 {
+		return fmt.Errorf("context_window must be >= 0")
+	}
+	if !policy.Enabled() {
+		return nil
+	}
+	policy = policy.Effective()
+	if policy.ThresholdRatio <= 0 || policy.ThresholdRatio > 1 {
+		return fmt.Errorf("threshold_ratio must be in (0, 1]")
+	}
+	if policy.RetainRatio <= 0 || policy.RetainRatio >= policy.ThresholdRatio {
+		return fmt.Errorf("retain_ratio must be in (0, threshold_ratio)")
+	}
+	if policy.BlackboardRatio <= 0 || policy.BlackboardRatio >= policy.ThresholdRatio {
+		return fmt.Errorf("blackboard_ratio must be in (0, threshold_ratio)")
+	}
+	if policy.ToolResultThresholdChars <= 0 || policy.ToolResultHeadChars < 0 || policy.ToolResultTailChars < 0 || policy.ToolResultHeadChars+len([]rune(toolResultPruneMarker))+policy.ToolResultTailChars > policy.ToolResultThresholdChars {
+		return fmt.Errorf("tool result threshold/head/tail settings are invalid")
+	}
+	if policy.CheckpointMaxTokens <= 0 {
+		return fmt.Errorf("checkpoint_max_tokens must be > 0")
+	}
+	providerSet := strings.TrimSpace(policy.CheckpointProvider) != ""
+	modelSet := strings.TrimSpace(policy.CheckpointModel) != ""
+	if providerSet != modelSet {
+		return fmt.Errorf("checkpoint_provider and checkpoint_model must be configured together")
+	}
+	return nil
+}
+
 func normalizeAgentConfig(agent *AgentConfig) {
 	defaults := defaultAgentConfig()
 	if agent.Provider == "" {
@@ -244,6 +328,10 @@ func Load() (Config, error) {
 	if err := validateLocalTools(cfg.Agent.LocalTools); err != nil {
 		return Default(), err
 	}
+	if err := validateAgentContextConfig(cfg.Agent.Context); err != nil {
+		return Default(), err
+	}
 	normalizeAgentConfig(&cfg.Agent)
+	cfg.Agent.Context = cfg.Agent.Context.Effective()
 	return cfg, nil
 }

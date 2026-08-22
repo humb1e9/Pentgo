@@ -19,6 +19,71 @@ func TestDefaultLeavesOptionalToolProvidersDisabled(t *testing.T) {
 	if len(Default().Agent.MCP) != 0 || len(Default().Agent.LocalTools) != 0 {
 		t.Fatalf("default agent config = %+v", Default().Agent)
 	}
+	if Default().Agent.Context.ContextWindow != 0 {
+		t.Fatalf("default context = %+v", Default().Agent.Context)
+	}
+}
+
+func TestLoadContextPolicy(t *testing.T) {
+	writeConfig(t, `{"agent":{"context":{"context_window":128000,"threshold_ratio":0.8,"retain_ratio":0.16,"blackboard_ratio":0.08,"tool_result_threshold_chars":8192,"tool_result_head_chars":4096,"tool_result_tail_chars":1024,"checkpoint_max_tokens":8192,"checkpoint_provider":"openai","checkpoint_model":"summary-model"}}}`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.Agent.Context
+	if got.ContextWindow != 128000 || got.ThresholdRatio != 0.8 || got.CheckpointModel != "summary-model" {
+		t.Fatalf("context = %#v", got)
+	}
+}
+
+func TestLoadContextPolicyAppliesEffectiveDefaults(t *testing.T) {
+	writeConfig(t, `{"agent":{"context":{"context_window":128000}}}`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.Agent.Context
+	if !got.Enabled() || got.ThresholdRatio != 0.80 || got.RetainRatio != 0.16 || got.BlackboardRatio != 0.08 || got.ToolResultThresholdChars != 8192 || got.ToolResultHeadChars != 4096 || got.ToolResultTailChars != 1024 || got.CheckpointMaxTokens != 8192 {
+		t.Fatalf("effective context = %#v", got)
+	}
+}
+
+func TestLoadRejectsInvalidContextPolicy(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		data string
+		want string
+	}{
+		{name: "negative window", data: `{"agent":{"context":{"context_window":-1}}}`, want: "context_window"},
+		{name: "retain beyond threshold", data: `{"agent":{"context":{"context_window":1000,"threshold_ratio":0.8,"retain_ratio":0.8}}}`, want: "retain_ratio"},
+		{name: "unpaired checkpoint route", data: `{"agent":{"context":{"context_window":1000,"checkpoint_provider":"openai"}}}`, want: "checkpoint_provider and checkpoint_model"},
+		{name: "tool result shape", data: `{"agent":{"context":{"context_window":1000,"tool_result_threshold_chars":10,"tool_result_head_chars":8,"tool_result_tail_chars":8}}}`, want: "tool result"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			writeConfig(t, test.data)
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func writeConfig(t *testing.T, data string) {
+	t.Helper()
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	path, err := ConfigFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestLoadPreservesNamedStdioMCPConfigs(t *testing.T) {

@@ -38,6 +38,7 @@ type ProjectRuntime struct {
 type sessionRuntime struct {
 	worker     *SessionWorker
 	transcript *storage.TranscriptStore
+	surface    *storage.ContextSurfaceStore
 }
 
 // OpenProjectRuntime 加载项目状态并打开工作区和证据 journal。调用方必须先设置
@@ -222,8 +223,14 @@ func (runtime *ProjectRuntime) openSessionLocked(session *domain.Session) error 
 	if err != nil {
 		return err
 	}
+	surface, err := runtime.store.OpenContextSurface(session.ID)
+	if err != nil {
+		_ = transcript.Close()
+		return err
+	}
 	worker, err := NewSessionWorker(runtime.ctx, session, turn)
 	if err != nil {
+		_ = surface.Close()
 		_ = transcript.Close()
 		return err
 	}
@@ -232,10 +239,11 @@ func (runtime *ProjectRuntime) openSessionLocked(session *domain.Session) error 
 	if runtime.closed || runtime.sessions[session.ID] != nil {
 		worker.Stop()
 		go func() { <-worker.Done() }()
+		_ = surface.Close()
 		_ = transcript.Close()
 		return fmt.Errorf("session %q is already open", session.ID)
 	}
-	runtime.sessions[session.ID] = &sessionRuntime{worker: worker, transcript: transcript}
+	runtime.sessions[session.ID] = &sessionRuntime{worker: worker, transcript: transcript, surface: surface}
 	return nil
 }
 
@@ -248,6 +256,7 @@ func (runtime *ProjectRuntime) removeSessionLocked(id string) {
 	if session != nil {
 		session.worker.Stop()
 		<-session.worker.Done()
+		_ = session.surface.Close()
 		_ = session.transcript.Close()
 	}
 }
@@ -443,6 +452,21 @@ func (runtime *ProjectRuntime) Transcript(sessionID string) *storage.TranscriptS
 	return session.transcript
 }
 
+// ContextSurface returns the live persistent model-context projection for an
+// open session, or nil when the session is unavailable.
+func (runtime *ProjectRuntime) ContextSurface(sessionID string) *storage.ContextSurfaceStore {
+	if runtime == nil {
+		return nil
+	}
+	runtime.mu.RLock()
+	session := runtime.sessions[sessionID]
+	runtime.mu.RUnlock()
+	if session == nil {
+		return nil
+	}
+	return session.surface
+}
+
 // Project 返回当前项目元数据及派生索引的副本。
 func (runtime *ProjectRuntime) Project() *domain.Project {
 	if runtime == nil {
@@ -609,6 +633,9 @@ func (runtime *ProjectRuntime) Close() error {
 	for _, session := range sessions {
 		<-session.worker.Done()
 		if err := runtime.PersistState(session.worker.Snapshot()); closeErr == nil && err != nil {
+			closeErr = err
+		}
+		if err := session.surface.Close(); closeErr == nil && err != nil {
 			closeErr = err
 		}
 		if err := session.transcript.Close(); closeErr == nil && err != nil {

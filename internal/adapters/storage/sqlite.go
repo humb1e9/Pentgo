@@ -11,7 +11,7 @@ import (
 )
 
 // schemaVersion 记录每个项目数据库应使用的 SQLite 布局版本。
-const schemaVersion = 3
+const schemaVersion = 4
 
 // schema 由 openSQLite 在单个事务中应用于新数据库。
 // 表使用规范化关系持久化事实，而非序列化状态块。
@@ -100,6 +100,36 @@ CREATE TABLE IF NOT EXISTS transcript_tool_calls (
     FOREIGN KEY (session_id, message_seq)
         REFERENCES transcript_messages(session_id, seq) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS context_surface_nodes (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('source', 'checkpoint', 'pruned_tool')),
+    source_start_seq INTEGER NOT NULL,
+    source_end_seq INTEGER NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    generation INTEGER NOT NULL,
+    PRIMARY KEY(session_id, id),
+    UNIQUE(session_id, position)
+);
+
+CREATE TABLE IF NOT EXISTS context_surface_state (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    generation INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS context_compactions (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    generation INTEGER NOT NULL,
+    source_start_seq INTEGER NOT NULL,
+    source_end_seq INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('started', 'committed', 'failed')),
+    error TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    finished_at INTEGER
+);
 `
 
 // openSQLite 为项目数据库配置 WAL 持久性、外键和私有所有者权限，
@@ -173,6 +203,46 @@ func migrateSQLite(db *sql.DB, version int) error {
 	if version >= 1 && version <= 2 {
 		if _, err := db.Exec("ALTER TABLE transcript_messages ADD COLUMN reasoning_content TEXT NOT NULL DEFAULT ''"); err != nil {
 			return fmt.Errorf("migrate sqlite schema v2 to v3: %w", err)
+		}
+	}
+	if version >= 1 && version <= 3 {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("begin sqlite schema v3 to v4 migration: %w", err)
+		}
+		if _, err := tx.Exec(`
+CREATE TABLE IF NOT EXISTS context_surface_nodes (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('source', 'checkpoint', 'pruned_tool')),
+    source_start_seq INTEGER NOT NULL,
+    source_end_seq INTEGER NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    generation INTEGER NOT NULL,
+    PRIMARY KEY(session_id, id),
+    UNIQUE(session_id, position)
+);
+CREATE TABLE IF NOT EXISTS context_surface_state (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    generation INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS context_compactions (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    generation INTEGER NOT NULL,
+    source_start_seq INTEGER NOT NULL,
+    source_end_seq INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('started', 'committed', 'failed')),
+    error TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    finished_at INTEGER
+);`); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("migrate sqlite schema v3 to v4: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit sqlite schema v3 to v4 migration: %w", err)
 		}
 	}
 	return nil

@@ -46,4 +46,12 @@ PRAGMA user_version = 2;`)
 	if count != 1 {
 		t.Fatalf("reasoning_content columns = %d, want 1", count)
 	}
+	for _, table := range []string{"context_surface_nodes", "context_surface_state", "context_compactions"} {
+		if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Fatalf("table %q count = %d, want 1", table, count)
+		}
+	}
 }

@@ -141,8 +141,14 @@ func TestRuntimeToolsExposeAutomaticSkillLoaderWhenCatalogExists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools) != 2 || tools[0].Name() != "write_project_fact" || tools[1].Name() != "load_skill" {
+	want := []string{"ls", "read_file", "write_file", "edit_file", "glob", "grep", "execute", "write_project_fact", "load_skill"}
+	if len(tools) != len(want) {
 		t.Fatalf("tools = %#v", tools)
+	}
+	for index, name := range want {
+		if tools[index].Name() != name {
+			t.Fatalf("tool %d = %q, want %q", index, tools[index].Name(), name)
+		}
 	}
 }
 
@@ -154,10 +160,16 @@ func TestRuntimeToolsExposeOnlyWriteProjectFact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools) != 1 || tools[0].Name() != "write_project_fact" {
+	want := []string{"ls", "read_file", "write_file", "edit_file", "glob", "grep", "execute", "write_project_fact"}
+	if len(tools) != len(want) {
 		t.Fatalf("tools = %#v", tools)
 	}
-	if _, err := tools[0].Invoke(context.Background(), map[string]any{"key": "base_url", "value": "https://TARGET"}); err != nil {
+	for index, name := range want {
+		if tools[index].Name() != name {
+			t.Fatalf("tool %d = %q, want %q", index, tools[index].Name(), name)
+		}
+	}
+	if _, err := tools[7].Invoke(context.Background(), map[string]any{"key": "base_url", "value": "https://TARGET"}); err != nil {
 		t.Fatal(err)
 	}
 	board := projectRuntime.Blackboard()

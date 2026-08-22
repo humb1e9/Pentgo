@@ -37,9 +37,8 @@ func (provider *runtimeToolProvider) Tools(context.Context) ([]agent.Tool, error
 	if provider == nil || provider.runtime == nil || provider.session == nil {
 		return nil, fmt.Errorf("runtime tool provider is incomplete")
 	}
-	tools := []agent.Tool{
-		&writeProjectFactTool{runtime: provider.runtime, session: provider.session},
-	}
+	tools := builtins.NewTools(provider.runtime.Workspace())
+	tools = append(tools, &writeProjectFactTool{runtime: provider.runtime, session: provider.session})
 	if provider.loadSkill != nil && provider.skillsAvailable {
 		tools = append(tools, &loadSkillTool{load: provider.loadSkill})
 	}

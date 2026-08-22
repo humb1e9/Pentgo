@@ -304,6 +304,9 @@ func (model *terminalModel) renderConversation() {
 	}
 	lines := make([]string, 0)
 	for _, message := range model.coordinator.Messages(model.focused) {
+		if message.Role == agent.RoleSystem {
+			continue
+		}
 		lines = append(lines, renderMessage(message, model.contentWidth(), model.showToolDetails, model.runningTools))
 	}
 	if model.generating {

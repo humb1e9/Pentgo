@@ -269,6 +269,27 @@ func TestTerminalModelRejectsObsoleteLoadSkillCommand(t *testing.T) {
 	}
 }
 
+func TestTerminalModelHidesSystemSkillCatalogFromConversation(t *testing.T) {
+	coordinator := app.New(config.Default(), t.TempDir(), app.Dependencies{SkillsFS: fstest.MapFS{
+		"api.md": &fstest.MapFile{Data: []byte("---\ndescription: API routing\n---\n# API\n")},
+	}})
+	defer coordinator.CloseProject()
+	if _, _, err := coordinator.OpenOrCreateWorkspace(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	session, err := coordinator.NewSession("new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := newTerminalModel(context.Background(), coordinator, session.ID)
+	model.width, model.height = 100, 32
+	model.layout()
+	model.refresh()
+	if view := ansi.Strip(model.View()); strings.Contains(view, "Available PentGo skills") || strings.Contains(view, "API routing") {
+		t.Fatalf("system catalog leaked into TUI conversation:\n%s", view)
+	}
+}
+
 func TestTerminalModelShowsSkillDiagnosticsOutsideTranscript(t *testing.T) {
 	coordinator := app.New(config.Default(), t.TempDir(), app.Dependencies{SkillsFS: fstest.MapFS{
 		"bad.md": &fstest.MapFile{Data: []byte("# missing required metadata\n")},

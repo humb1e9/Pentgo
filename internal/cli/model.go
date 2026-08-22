@@ -129,6 +129,12 @@ func newTerminalModel(ctx context.Context, coordinator *app.Coordinator, focused
 	}
 	model.layout()
 	model.refresh()
+	if coordinator != nil {
+		for _, diagnostic := range coordinator.SkillDiagnostics() {
+			model.addActivity(activityError, fmt.Sprintf("技能已跳过：%s：%s", diagnostic.Path, diagnostic.Reason))
+		}
+		model.refresh()
+	}
 	return model
 }
 
@@ -337,7 +343,7 @@ func (model *terminalModel) renderWelcome() string {
 	content := strings.Join([]string{
 		modelStyle.Render("准备开始"),
 		"PentGo 会在当前项目中协助你分析目标、调用已配置工具并保留证据。",
-		mutedStyle.Render("/load_skill 加载技能  ·  /new 新建会话  ·  /help 查看命令"),
+		mutedStyle.Render("/new 新建会话  ·  /help 查看命令"),
 	}, "\n\n")
 	return welcomeStyle.Width(width).Render(project + "\n\n" + content)
 }
@@ -389,17 +395,6 @@ func (model *terminalModel) handleLine(line string) tea.Cmd {
 	switch command {
 	case "/quit", "/exit":
 		return tea.Quit
-	case "/load_skill":
-		if argument != "" {
-			model.addActivity(activityError, "错误：/load_skill 不接受参数")
-			return nil
-		}
-		summary, err := model.coordinator.LoadSkills()
-		if err != nil {
-			model.addActivity(activityError, "错误："+err.Error())
-		} else {
-			model.addActivity(activityInfo, fmt.Sprintf("已加载 %d 个技能", strings.Count(summary, "- `")))
-		}
 	case "/status":
 		model.addActivity(activityInfo, model.sessionStatus())
 	case "/blackboard", "/board":
@@ -418,7 +413,7 @@ func (model *terminalModel) handleLine(line string) tea.Cmd {
 		model.focused = ""
 		model.watchSession("")
 	case "/help":
-		model.addActivity(activityInfo, "/new  /load_skill  /session rename|list|delete  /status  /blackboard  /clear  /exit")
+		model.addActivity(activityInfo, "/new  /session rename|list|delete  /status  /blackboard  /clear  /exit")
 	case "/project":
 		verb, value, _ := strings.Cut(argument, " ")
 		if verb != "new" || strings.TrimSpace(value) == "" {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -235,7 +236,7 @@ func TestRenderMessageBoundsToolOutput(t *testing.T) {
 }
 
 func TestTerminalModelShowsWelcomeCardForEmptySession(t *testing.T) {
-	coordinator := app.New(config.Default(), t.TempDir(), app.Dependencies{})
+	coordinator := app.New(config.Default(), t.TempDir(), app.Dependencies{SkillsFS: fstest.MapFS{}})
 	defer coordinator.CloseProject()
 	if _, _, err := coordinator.OpenOrCreateWorkspace(context.Background()); err != nil {
 		t.Fatal(err)
@@ -250,10 +251,48 @@ func TestTerminalModelShowsWelcomeCardForEmptySession(t *testing.T) {
 	model.refresh()
 
 	view := ansi.Strip(model.View())
-	for _, want := range []string{"PentGo", "准备开始", "/load_skill", "/new", "/help", "Enter 发送", "Ctrl+O 详情"} {
+	for _, want := range []string{"PentGo", "准备开始", "/new", "/help", "Enter 发送", "Ctrl+O 详情"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
+	}
+	if strings.Contains(view, "/load_skill") {
+		t.Fatalf("obsolete command remains visible:\n%s", view)
+	}
+}
+
+func TestTerminalModelRejectsObsoleteLoadSkillCommand(t *testing.T) {
+	model := newTerminalModel(context.Background(), nil, "")
+	model.handleLine("/load_skill")
+	if !model.hasActivity(activityError, "错误：未知命令") {
+		t.Fatalf("activity = %#v", model.activity)
+	}
+}
+
+func TestTerminalModelShowsSkillDiagnosticsOutsideTranscript(t *testing.T) {
+	coordinator := app.New(config.Default(), t.TempDir(), app.Dependencies{SkillsFS: fstest.MapFS{
+		"bad.md": &fstest.MapFile{Data: []byte("# missing required metadata\n")},
+	}})
+	defer coordinator.CloseProject()
+	if _, _, err := coordinator.OpenOrCreateWorkspace(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	session, err := coordinator.NewSession("new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := newTerminalModel(context.Background(), coordinator, session.ID)
+	model.width, model.height = 100, 32
+	model.layout()
+	model.refresh()
+	view := ansi.Strip(model.View())
+	for _, want := range []string{"技能已跳过：bad.md", "frontmatter"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view missing %q:\n%s", want, view)
+		}
+	}
+	if messages := coordinator.Messages(session.ID); len(messages) != 0 {
+		t.Fatalf("diagnostics entered transcript: %#v", messages)
 	}
 }
 

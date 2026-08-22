@@ -31,7 +31,7 @@ func NewContextAssembler(runtime *ProjectRuntime, policy config.AgentContextConf
 // Prepare returns one model-visible request and any non-transcript context
 // activities. The enabled path always measures a freshly materialized Surface.
 func (assembler *ContextAssembler) Prepare(ctx context.Context, sessionID, systemPrompt string, tools []agent.Tool) (agent.ModelStepInput, []agent.ContextActivity, error) {
-	if assembler == nil || assembler.runtime == nil || assembler.meter == nil {
+	if assembler == nil || assembler.runtime == nil {
 		return agent.ModelStepInput{}, nil, fmt.Errorf("context assembler dependencies are incomplete")
 	}
 	if ctx == nil {
@@ -50,19 +50,22 @@ func (assembler *ContextAssembler) Prepare(ctx context.Context, sessionID, syste
 			Tools:        append([]agent.Tool(nil), tools...),
 		}, nil, nil
 	}
+	if assembler.meter == nil {
+		return agent.ModelStepInput{}, nil, fmt.Errorf("context assembler meter is nil")
+	}
 	surfaceStore := assembler.runtime.ContextSurface(sessionID)
 	if surfaceStore == nil {
 		return agent.ModelStepInput{}, nil, fmt.Errorf("session context surface is unavailable")
 	}
-	messages := numberedMessages(transcript.Messages())
+	surface, transcriptMessages, err := surfaceStore.SnapshotWithTranscript()
+	if err != nil {
+		return agent.ModelStepInput{}, nil, err
+	}
+	messages := numberedMessages(transcriptMessages)
 	facts := RenderBoundedBlackboard(assembler.runtime.Blackboard(), int(float64(assembler.policy.ContextWindow)*assembler.policy.BlackboardRatio))
 	activities := make([]agent.ContextActivity, 0, 3)
 	if facts.Truncated {
 		activities = append(activities, agent.ContextActivity{Kind: agent.ContextBlackboardLimited, Message: fmt.Sprintf("已限制项目事实注入（显示 %d，省略 %d）。", facts.Shown, facts.Omitted)})
-	}
-	surface, err := surfaceStore.Snapshot()
-	if err != nil {
-		return agent.ModelStepInput{}, activities, err
 	}
 	input, err := assembler.materialize(sessionID, systemPrompt, tools, facts.Text, surface, messages)
 	if err != nil {
@@ -77,7 +80,7 @@ func (assembler *ContextAssembler) Prepare(ctx context.Context, sessionID, syste
 		return agent.ModelStepInput{}, append(activities, rejectedContextActivity("系统提示词、工具或项目事实本身超过上下文预算。")), ErrContextPreflight
 	}
 	compactor := NewContextCompactor(assembler.policy, surfaceStore, assembler.meter, assembler.summarizer)
-	pruned, pruneActivities, err := compactor.Prune(ctx, CompactionRequest{Surface: surface, Messages: messages, SystemPrompt: systemPrompt, Blackboard: facts.Text, Tools: tools})
+	pruned, prunes, pruneActivities, err := compactor.PreviewPrune(ctx, CompactionRequest{Surface: surface, Messages: messages, SystemPrompt: systemPrompt, Blackboard: facts.Text, Tools: tools})
 	activities = append(activities, pruneActivities...)
 	if err != nil {
 		return agent.ModelStepInput{}, append(activities, rejectedContextActivity(err.Error())), err
@@ -88,12 +91,27 @@ func (assembler *ContextAssembler) Prepare(ctx context.Context, sessionID, syste
 	}
 	measurement = assembler.meter.Measure(contextRequestFromInput(input))
 	if measurement.TotalTokens < contextThreshold(assembler.policy) {
+		if len(prunes) != 0 {
+			if _, err := surfaceStore.PruneTools(surface.Generation, prunes); err != nil {
+				return agent.ModelStepInput{}, append(activities, rejectedContextActivity(err.Error())), err
+			}
+		}
 		return input, activities, nil
 	}
 	if assembler.summarizer == nil {
 		return agent.ModelStepInput{}, append(activities, rejectedContextActivity("无法在没有 checkpoint summarizer 的情况下压缩上下文。")), ErrContextPreflight
 	}
-	checkpointed, checkpointActivities, err := compactor.Checkpoint(ctx, CompactionRequest{Surface: pruned, Messages: messages, SystemPrompt: systemPrompt, Blackboard: facts.Text, Tools: tools})
+	checkpointRequest := CompactionRequest{Surface: pruned, Messages: messages, SystemPrompt: systemPrompt, Blackboard: facts.Text, Tools: tools, Prunes: prunes}
+	checkpointed, checkpointActivities, err := compactor.CheckpointWithValidator(ctx, checkpointRequest, func(candidate agent.ContextSurface) error {
+		candidateInput, err := assembler.materialize(sessionID, systemPrompt, tools, facts.Text, candidate, messages)
+		if err != nil {
+			return err
+		}
+		if measurement := assembler.meter.Measure(contextRequestFromInput(candidateInput)); measurement.TotalTokens >= contextThreshold(assembler.policy) {
+			return ErrContextPreflight
+		}
+		return nil
+	})
 	activities = append(activities, checkpointActivities...)
 	if err != nil {
 		return agent.ModelStepInput{}, append(activities, rejectedContextActivity(err.Error())), err
@@ -111,11 +129,13 @@ func (assembler *ContextAssembler) Prepare(ctx context.Context, sessionID, syste
 
 func (assembler *ContextAssembler) materialize(sessionID, systemPrompt string, tools []agent.Tool, facts string, surface agent.ContextSurface, messages map[int]agent.Message) (agent.ModelStepInput, error) {
 	result := agent.ModelStepInput{
-		SessionID:     sessionID,
-		SystemPrompt:  systemPrompt,
-		ProjectFacts:  facts,
-		Tools:         append([]agent.Tool(nil), tools...),
-		ContextWindow: assembler.policy.ContextWindow,
+		SessionID:       sessionID,
+		SystemPrompt:    systemPrompt,
+		ProjectFacts:    facts,
+		Tools:           append([]agent.Tool(nil), tools...),
+		ContextWindow:   assembler.policy.ContextWindow,
+		SurfaceNodes:    append([]agent.SurfaceNode(nil), surface.Nodes...),
+		SurfaceMessages: cloneContextMessages(messages),
 	}
 	for _, node := range surface.Nodes {
 		switch node.Kind {
@@ -145,12 +165,16 @@ func (assembler *ContextAssembler) materialize(sessionID, systemPrompt string, t
 }
 
 func contextRequestFromInput(input agent.ModelStepInput) ContextRequest {
-	nodes := make([]agent.SurfaceNode, 0, len(input.Messages))
-	messages := make(map[int]agent.Message, len(input.Messages))
-	for index, message := range input.Messages {
-		sequence := index + 1
-		nodes = append(nodes, agent.SurfaceNode{Kind: agent.SurfaceNodeSource, SourceStartSeq: sequence, SourceEndSeq: sequence})
-		messages[sequence] = message
+	nodes := append([]agent.SurfaceNode(nil), input.SurfaceNodes...)
+	messages := cloneContextMessages(input.SurfaceMessages)
+	if len(nodes) == 0 {
+		nodes = make([]agent.SurfaceNode, 0, len(input.Messages))
+		messages = make(map[int]agent.Message, len(input.Messages))
+		for index, message := range input.Messages {
+			sequence := index + 1
+			nodes = append(nodes, agent.SurfaceNode{Kind: agent.SurfaceNodeSource, SourceStartSeq: sequence, SourceEndSeq: sequence})
+			messages[sequence] = message
+		}
 	}
 	return ContextRequest{SystemPrompt: input.SystemPrompt, Blackboard: input.ProjectFacts, Tools: input.Tools, Nodes: nodes, Messages: messages}
 }

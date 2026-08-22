@@ -23,6 +23,17 @@ func (meter *countingContextMeter) Measure(request ContextRequest) agent.Context
 	return meter.inner.Measure(request)
 }
 
+func TestAssemblerUsesLegacyFullTranscriptWhenContextDisabledWithNilMeter(t *testing.T) {
+	fixture := newAssemblerFixture(t)
+	defer fixture.close()
+	appendAssemblerMessages(t, fixture, []agent.Message{{Role: agent.RoleUser, Content: "legacy"}})
+	assembler := NewContextAssembler(fixture.runtime, config.AgentContextConfig{}, nil, nil)
+	input, activities, err := assembler.Prepare(context.Background(), fixture.session.ID, "system", nil)
+	if err != nil || len(activities) != 0 || len(input.Messages) != 1 || input.Messages[0].Content != "legacy" {
+		t.Fatalf("input/activities/error = %#v/%#v/%v", input, activities, err)
+	}
+}
+
 func TestAssemblerUsesLegacyFullTranscriptWhenContextDisabled(t *testing.T) {
 	fixture := newAssemblerFixture(t)
 	defer fixture.close()

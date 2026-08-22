@@ -52,12 +52,14 @@ type TurnInput struct {
 // management materializes persistent Surface nodes into Messages before this
 // boundary; adapters must not read transcript or project state themselves.
 type ModelStepInput struct {
-	SessionID     string
-	Messages      []Message
-	SystemPrompt  string
-	ProjectFacts  string
-	Tools         []Tool
-	ContextWindow int
+	SessionID       string
+	Messages        []Message
+	SystemPrompt    string
+	ProjectFacts    string
+	Tools           []Tool
+	ContextWindow   int
+	SurfaceNodes    []SurfaceNode
+	SurfaceMessages map[int]Message
 }
 
 // TurnEvent 将模型输出流式传递给应用层。Message 事件保留 transcript 顺序，

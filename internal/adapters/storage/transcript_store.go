@@ -218,6 +218,16 @@ func (store *TranscriptStore) Close() error {
 // loadTranscriptDB 从规范化表中重建消息及其有序工具调用子项；
 // 回放期间绝不调用历史工具。
 func loadTranscriptDB(db *sql.DB, sessionID string) ([]agent.Message, error) {
+	return loadTranscriptQueryer(db, sessionID)
+}
+
+type transcriptQueryer interface {
+	Query(string, ...any) (*sql.Rows, error)
+}
+
+// loadTranscriptQueryer reconstructs messages through either a database handle
+// or the transaction that captured the paired Context Surface snapshot.
+func loadTranscriptQueryer(db transcriptQueryer, sessionID string) ([]agent.Message, error) {
 	rows, err := db.Query(`
 		SELECT seq, role, content, reasoning_content, tool_call_id, tool_name, tool_arguments_json
 		FROM transcript_messages WHERE session_id = ? ORDER BY seq`, sessionID)

@@ -29,6 +29,7 @@ type CompactionRequest struct {
 	Blackboard   string
 	Tools        []agent.Tool
 	ModelRoute   string
+	Prunes       map[int]string
 }
 
 // ContextCompactor prunes oversized tool output before replacing an old,
@@ -48,47 +49,56 @@ func NewContextCompactor(policy config.AgentContextConfig, surface *storage.Cont
 // Prepare first prunes oversized tool output, then creates one checkpoint when
 // the remaining Surface alone is still beyond the configured threshold.
 func (compactor *ContextCompactor) Prepare(ctx context.Context, request CompactionRequest) (agent.ContextSurface, []agent.ContextActivity, error) {
-	pruned, activities, err := compactor.Prune(ctx, request)
+	pruned, replacements, activities, err := compactor.PreviewPrune(ctx, request)
 	if err != nil {
 		return request.Surface, activities, err
 	}
 	request.Surface = pruned
+	request.Prunes = replacements
 	if !compactor.policy.Enabled() || compactor.meter == nil {
 		return pruned, activities, nil
 	}
 	measurement := compactor.meter.Measure(ContextRequest{SystemPrompt: request.SystemPrompt, Blackboard: request.Blackboard, Tools: request.Tools, Nodes: pruned.Nodes, Messages: request.Messages})
 	if measurement.TotalTokens < contextThreshold(compactor.policy) {
+		if len(replacements) != 0 {
+			updated, err := compactor.surface.PruneTools(request.Surface.Generation, replacements)
+			if err != nil {
+				return request.Surface, activities, err
+			}
+			return updated, activities, nil
+		}
 		return pruned, activities, nil
 	}
 	checkpointed, checkpointActivities, err := compactor.Checkpoint(ctx, request)
 	activities = append(activities, checkpointActivities...)
 	if err != nil {
-		return pruned, activities, err
+		return request.Surface, activities, err
 	}
 	return checkpointed, activities, nil
 }
 
-// Prune replaces all oversized raw tool results in one atomic projection
-// update. It never prunes user or assistant messages.
-func (compactor *ContextCompactor) Prune(ctx context.Context, request CompactionRequest) (agent.ContextSurface, []agent.ContextActivity, error) {
+// PreviewPrune creates an in-memory Surface preview and matching replacement
+// map. It never persists changes, so callers can reject a later checkpoint
+// attempt without changing the live projection.
+func (compactor *ContextCompactor) PreviewPrune(ctx context.Context, request CompactionRequest) (agent.ContextSurface, map[int]string, []agent.ContextActivity, error) {
 	if compactor == nil || compactor.surface == nil {
-		return request.Surface, nil, fmt.Errorf("context compactor surface is nil")
+		return request.Surface, nil, nil, fmt.Errorf("context compactor surface is nil")
 	}
 	if !compactor.policy.Enabled() {
-		return request.Surface, nil, nil
+		return request.Surface, nil, nil, nil
 	}
 	surface := request.Surface
 	if surface.SessionID == "" {
 		var err error
 		surface, err = compactor.surface.Snapshot()
 		if err != nil {
-			return request.Surface, nil, err
+			return request.Surface, nil, nil, err
 		}
 	}
 	replacements := make(map[int]string)
-	for _, node := range surface.Nodes {
+	for index, node := range surface.Nodes {
 		if err := ctx.Err(); err != nil {
-			return request.Surface, nil, err
+			return request.Surface, nil, nil, err
 		}
 		if node.Kind != agent.SurfaceNodeSource || node.SourceStartSeq != node.SourceEndSeq {
 			continue
@@ -99,20 +109,33 @@ func (compactor *ContextCompactor) Prune(ctx context.Context, request Compaction
 		}
 		if content, changed := pruneToolResult(message.Content, compactor.policy); changed {
 			replacements[node.SourceStartSeq] = content
+			surface.Nodes[index].Kind = agent.SurfaceNodePrunedTool
+			surface.Nodes[index].Content = content
 		}
 	}
-	if len(replacements) == 0 {
-		return surface, nil, nil
+	activities := makePruneActivities(request.Surface.Nodes, replacements)
+	return surface, replacements, activities, nil
+}
+
+// Prune persists all oversized raw tool results as one atomic projection
+// update. It is used only after a preflight path has succeeded.
+func (compactor *ContextCompactor) Prune(ctx context.Context, request CompactionRequest) (agent.ContextSurface, []agent.ContextActivity, error) {
+	if compactor == nil || compactor.surface == nil {
+		return request.Surface, nil, fmt.Errorf("context compactor surface is nil")
 	}
-	updated, err := compactor.surface.PruneTools(surface.Generation, replacements)
+	if !compactor.policy.Enabled() {
+		return request.Surface, nil, nil
+	}
+	preview, replacements, activities, err := compactor.PreviewPrune(ctx, request)
 	if err != nil {
 		return request.Surface, nil, err
 	}
-	activities := make([]agent.ContextActivity, 0, len(replacements))
-	for _, node := range surface.Nodes {
-		if _, changed := replacements[node.SourceStartSeq]; changed {
-			activities = append(activities, agent.ContextActivity{Kind: agent.ContextToolPruned, Message: fmt.Sprintf("已裁剪工具结果 #%d 以释放上下文。", node.SourceStartSeq)})
-		}
+	if len(replacements) == 0 {
+		return preview, activities, nil
+	}
+	updated, err := compactor.surface.PruneTools(request.Surface.Generation, replacements)
+	if err != nil {
+		return request.Surface, nil, err
 	}
 	return updated, activities, nil
 }
@@ -120,6 +143,13 @@ func (compactor *ContextCompactor) Prune(ctx context.Context, request Compaction
 // Checkpoint summarizes the compactable balanced prefix and commits exactly one
 // replacement only if the complete framed result is a genuine reduction.
 func (compactor *ContextCompactor) Checkpoint(ctx context.Context, request CompactionRequest) (agent.ContextSurface, []agent.ContextActivity, error) {
+	return compactor.CheckpointWithValidator(ctx, request, nil)
+}
+
+// CheckpointWithValidator prepares the replacement and validates the complete
+// candidate Surface before making the durable replacement. A failed validator
+// records a failed lifecycle while leaving all prior nodes unchanged.
+func (compactor *ContextCompactor) CheckpointWithValidator(ctx context.Context, request CompactionRequest, validate func(agent.ContextSurface) error) (agent.ContextSurface, []agent.ContextActivity, error) {
 	if compactor == nil || compactor.surface == nil || compactor.summarizer == nil {
 		return request.Surface, nil, fmt.Errorf("context checkpoint compactor is incomplete")
 	}
@@ -166,16 +196,55 @@ func (compactor *ContextCompactor) Checkpoint(ctx context.Context, request Compa
 	if utf8.RuneCountInString(content) >= selectedSurfaceRunes(selected, request.Messages) {
 		return request.Surface, nil, checkpointFailure(compactor.surface, lifecycle.ID, errors.New("checkpoint replacement does not shrink context"))
 	}
-	updated, err := compactor.surface.ReplaceRange(request.Surface.Generation, start, end, agent.SurfaceNode{
+	tailPrunes := make(map[int]string)
+	for sequence, content := range request.Prunes {
+		if sequence > end {
+			tailPrunes[sequence] = content
+		}
+	}
+	candidate := request.Surface
+	candidate.Generation++
+	candidate.Nodes = make([]agent.SurfaceNode, 0, len(request.Surface.Nodes))
+	insertedCheckpoint := false
+	for _, node := range request.Surface.Nodes {
+		if node.SourceStartSeq >= start && node.SourceEndSeq <= end {
+			if !insertedCheckpoint {
+				candidate.Nodes = append(candidate.Nodes, agent.SurfaceNode{Kind: agent.SurfaceNodeCheckpoint, SourceStartSeq: start, SourceEndSeq: end, Content: content})
+				insertedCheckpoint = true
+			}
+			continue
+		}
+		if replacement, ok := tailPrunes[node.SourceStartSeq]; ok {
+			node.Kind = agent.SurfaceNodePrunedTool
+			node.Content = replacement
+		}
+		candidate.Nodes = append(candidate.Nodes, node)
+	}
+	if validate != nil {
+		if err := validate(candidate); err != nil {
+			return request.Surface, nil, checkpointFailure(compactor.surface, lifecycle.ID, err)
+		}
+	}
+	updated, err := compactor.surface.ReplaceRangeWithPrunes(request.Surface.Generation, start, end, agent.SurfaceNode{
 		Kind:           agent.SurfaceNodeCheckpoint,
 		SourceStartSeq: start,
 		SourceEndSeq:   end,
 		Content:        content,
-	})
+	}, tailPrunes)
 	if err != nil {
 		return request.Surface, nil, checkpointFailure(compactor.surface, lifecycle.ID, err)
 	}
 	return updated, []agent.ContextActivity{{Kind: agent.ContextCheckpointCreated, Message: fmt.Sprintf("已创建上下文 checkpoint（消息 #%d–#%d）。", start, end)}}, nil
+}
+
+func makePruneActivities(nodes []agent.SurfaceNode, replacements map[int]string) []agent.ContextActivity {
+	activities := make([]agent.ContextActivity, 0, len(replacements))
+	for _, node := range nodes {
+		if _, changed := replacements[node.SourceStartSeq]; changed {
+			activities = append(activities, agent.ContextActivity{Kind: agent.ContextToolPruned, Message: fmt.Sprintf("已裁剪工具结果 #%d 以释放上下文。", node.SourceStartSeq)})
+		}
+	}
+	return activities
 }
 
 func pruneToolResult(content string, policy config.AgentContextConfig) (string, bool) {
@@ -339,6 +408,9 @@ func cloneSelectedContextMessages(nodes []agent.SurfaceNode, messages map[int]ag
 	for _, node := range nodes {
 		for sequence := node.SourceStartSeq; sequence <= node.SourceEndSeq; sequence++ {
 			if message, ok := messages[sequence]; ok {
+				if node.Kind == agent.SurfaceNodePrunedTool && sequence == node.SourceStartSeq && node.SourceStartSeq == node.SourceEndSeq {
+					message.Content = node.Content
+				}
 				selected[sequence] = message
 			}
 		}

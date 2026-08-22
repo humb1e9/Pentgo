@@ -62,18 +62,62 @@ func (store *ContextSurfaceStore) Path() string {
 // Snapshot returns an ordered, defensive surface snapshot. Newly appended raw
 // transcript messages are represented as source nodes before the snapshot.
 func (store *ContextSurfaceStore) Snapshot() (agent.ContextSurface, error) {
+	surface, _, err := store.SnapshotWithTranscript()
+	return surface, err
+}
+
+// SnapshotWithTranscript reads the Context Surface and referenced immutable
+// transcript rows through one SQLite transaction. A caller therefore never
+// assembles a source node against a separately observed transcript revision.
+func (store *ContextSurfaceStore) SnapshotWithTranscript() (agent.ContextSurface, []agent.Message, error) {
 	if store == nil || store.db == nil {
-		return agent.ContextSurface{}, fmt.Errorf("context surface store is nil")
+		return agent.ContextSurface{}, nil, fmt.Errorf("context surface store is nil")
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if err := store.ensureOpen(); err != nil {
-		return agent.ContextSurface{}, err
+		return agent.ContextSurface{}, nil, err
 	}
-	if err := store.syncSourceNodes(); err != nil {
-		return agent.ContextSurface{}, err
+	for attempt := 0; attempt < 3; attempt++ {
+		if err := store.syncSourceNodes(); err != nil {
+			return agent.ContextSurface{}, nil, err
+		}
+		tx, err := store.db.Begin()
+		if err != nil {
+			return agent.ContextSurface{}, nil, fmt.Errorf("begin context surface snapshot: %w", err)
+		}
+		rollback := func(cause error) (agent.ContextSurface, []agent.Message, error) {
+			_ = tx.Rollback()
+			return agent.ContextSurface{}, nil, cause
+		}
+		generation, err := currentSurfaceGenerationTx(tx, store.sessionID)
+		if err != nil {
+			return rollback(err)
+		}
+		nodes, err := loadContextSurfaceNodesTx(tx, store.sessionID)
+		if err != nil {
+			return rollback(err)
+		}
+		messages, err := loadTranscriptQueryer(tx, store.sessionID)
+		if err != nil {
+			return rollback(err)
+		}
+		maxCovered := 0
+		for _, node := range nodes {
+			if node.SourceEndSeq > maxCovered {
+				maxCovered = node.SourceEndSeq
+			}
+		}
+		if len(messages) > maxCovered {
+			_ = tx.Rollback()
+			continue
+		}
+		if err := tx.Commit(); err != nil {
+			return agent.ContextSurface{}, nil, fmt.Errorf("commit context surface snapshot: %w", err)
+		}
+		return agent.ContextSurface{SessionID: store.sessionID, Generation: generation, Nodes: nodes}, messages, nil
 	}
-	return loadContextSurface(store.db, store.sessionID)
+	return agent.ContextSurface{}, nil, fmt.Errorf("context surface snapshot changed during assembly")
 }
 
 // StartCompaction durably records a planned replacement before a summarizer is
@@ -146,6 +190,13 @@ VALUES (?, ?, ?, ?, ?, ?, ?)`, lifecycle.ID, lifecycle.SessionID, lifecycle.Gene
 // ReplaceRange atomically validates a snapshot generation and source range,
 // writes one replacement node, reorders positions, and commits its lifecycle.
 func (store *ContextSurfaceStore) ReplaceRange(expectedGeneration int64, startSeq, endSeq int, replacement agent.SurfaceNode) (agent.ContextSurface, error) {
+	return store.ReplaceRangeWithPrunes(expectedGeneration, startSeq, endSeq, replacement, nil)
+}
+
+// ReplaceRangeWithPrunes commits a checkpoint replacement and any retained-tail
+// tool-result prunes in one transaction. A failure leaves the prior Surface
+// unchanged.
+func (store *ContextSurfaceStore) ReplaceRangeWithPrunes(expectedGeneration int64, startSeq, endSeq int, replacement agent.SurfaceNode, prunes map[int]string) (agent.ContextSurface, error) {
 	if store == nil || store.db == nil {
 		return agent.ContextSurface{}, fmt.Errorf("context surface store is nil")
 	}
@@ -192,6 +243,36 @@ func (store *ContextSurfaceStore) ReplaceRange(expectedGeneration int64, startSe
 		return rollback(err)
 	}
 	nextGeneration := generation + 1
+	pruneSequences := make([]int, 0, len(prunes))
+	for sourceSeq, content := range prunes {
+		if sourceSeq <= endSeq || strings.TrimSpace(content) == "" {
+			return rollback(ErrInvalidSurfaceRange)
+		}
+		pruneSequences = append(pruneSequences, sourceSeq)
+	}
+	sort.Ints(pruneSequences)
+	pruneIDs := make(map[int]string, len(pruneSequences))
+	for _, sourceSeq := range pruneSequences {
+		var id string
+		var kind agent.SurfaceNodeKind
+		if err := tx.QueryRow(`SELECT id, kind FROM context_surface_nodes WHERE session_id = ? AND source_start_seq = ? AND source_end_seq = ?`, store.sessionID, sourceSeq, sourceSeq).Scan(&id, &kind); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return rollback(ErrInvalidSurfaceRange)
+			}
+			return rollback(fmt.Errorf("read checkpoint tail prune node: %w", err))
+		}
+		if kind != agent.SurfaceNodeSource {
+			return rollback(ErrInvalidSurfaceRange)
+		}
+		var role string
+		if err := tx.QueryRow(`SELECT role FROM transcript_messages WHERE session_id = ? AND seq = ?`, store.sessionID, sourceSeq).Scan(&role); err != nil {
+			return rollback(fmt.Errorf("read checkpoint tail prune source: %w", err))
+		}
+		if role != agent.RoleTool {
+			return rollback(ErrInvalidSurfaceRange)
+		}
+		pruneIDs[sourceSeq] = id
+	}
 	if replacement.ID == "" {
 		replacement.ID = newSurfaceID()
 	}
@@ -204,6 +285,19 @@ func (store *ContextSurfaceStore) ReplaceRange(expectedGeneration int64, startSe
 INSERT INTO context_surface_nodes(session_id, id, position, kind, source_start_seq, source_end_seq, content, generation)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, store.sessionID, replacement.ID, replacement.Position, replacement.Kind, replacement.SourceStartSeq, replacement.SourceEndSeq, replacement.Content, replacement.Generation); err != nil {
 		return rollback(fmt.Errorf("insert context surface replacement: %w", err))
+	}
+	for _, sourceSeq := range pruneSequences {
+		result, err := tx.Exec(`
+UPDATE context_surface_nodes SET kind = ?, content = ?, generation = ?
+WHERE session_id = ? AND id = ? AND kind = ?`, agent.SurfaceNodePrunedTool, prunes[sourceSeq], nextGeneration, store.sessionID, pruneIDs[sourceSeq], agent.SurfaceNodeSource)
+		if err != nil {
+			return rollback(fmt.Errorf("write checkpoint tail prune: %w", err))
+		}
+		if changed, err := result.RowsAffected(); err != nil {
+			return rollback(fmt.Errorf("write checkpoint tail prune rows: %w", err))
+		} else if changed != 1 {
+			return rollback(ErrInvalidSurfaceRange)
+		}
 	}
 	if err := renumberContextSurfaceNodesTx(tx, store.sessionID); err != nil {
 		return rollback(err)

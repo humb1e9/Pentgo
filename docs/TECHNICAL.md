@@ -37,7 +37,7 @@ skills/                             运行时 Markdown 技能数据
 依赖方向保持单向：
 
 ```text
-cmd/pentgo ──→ config
+cmd ──→ config
     ├── cli ──→ app
     └─────────→ app
                   ├── agent

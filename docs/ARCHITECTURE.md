@@ -36,14 +36,14 @@ skills/                             运行时 Markdown 技能数据
 | 怎样连接某项外部技术或写入介质？ | `internal/adapters/<technology>` |
 | 用户怎样通过终端操作应用？ | `internal/cli` |
 | 进程怎样读取用户配置？ | `internal/config` |
-| 进程怎样启动和装配依赖？ | `cmd/pentgo` |
+| 进程怎样启动和装配依赖？ | `cmd` |
 
 不再使用 `contracts`、`execution`、`orchestrator`、`terminal` 这类相互重叠的顶层分类。新增外部实现进入 `adapters`；只有出现新的稳定职责时才增加顶层目录。
 
 ## 依赖方向
 
 ```text
-cmd/pentgo ──→ config
+cmd ──→ config
     ├── cli ──→ app
     └─────────→ app
                   ├── agent

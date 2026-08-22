@@ -37,7 +37,7 @@ Go 官方安装说明见 <https://go.dev/doc/install>。Linux、WSL 或 macOS �
 ```bash
 git clone https://github.com/humb1e9/Pentgo.git
 cd Pentgo
-go build -o pentgo ./cmd/pentgo
+go build -o pentgo ./cmd
 ./pentgo
 ```
 

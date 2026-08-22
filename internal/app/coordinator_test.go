@@ -110,6 +110,73 @@ func TestRenameSessionPersistsName(t *testing.T) {
 	}
 }
 
+func TestResumeUsesPersistedSurfaceNotFullTranscript(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Default()
+	cfg.Agent.Context.ContextWindow = 10_000
+	first := New(cfg, root, Dependencies{})
+	if _, _, err := first.OpenOrCreateWorkspace(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	session, err := first.NewSession("resume surface")
+	if err != nil {
+		t.Fatal(err)
+	}
+	transcript := first.runtime.Transcript(session.ID)
+	for _, message := range []agent.Message{
+		{Role: agent.RoleUser, Content: "old raw user"},
+		{Role: agent.RoleAssistant, Content: "old raw answer"},
+		{Role: agent.RoleUser, Content: "recent raw user"},
+		{Role: agent.RoleAssistant, Content: "recent raw answer"},
+	} {
+		if err := transcript.Append(message); err != nil {
+			t.Fatal(err)
+		}
+	}
+	surface := first.runtime.ContextSurface(session.ID)
+	if _, err := surface.StartCompaction(0, 1, 2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := surface.ReplaceRange(0, 1, 2, agent.SurfaceNode{Kind: agent.SurfaceNodeCheckpoint, SourceStartSeq: 1, SourceEndSeq: 2, Content: "checkpoint oldest work"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.CloseProject(); err != nil {
+		t.Fatal(err)
+	}
+
+	fixture := &coordinatorModel{messages: []*schema.Message{schema.AssistantMessage("after resume", nil)}}
+	resumed := New(cfg, root, Dependencies{NewModel: func(context.Context, config.AgentConfig) (model.ToolCallingChatModel, error) { return fixture, nil }})
+	defer resumed.CloseProject()
+	if _, err := resumed.OpenCurrentProject(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resumed.ResumeSession(session.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-resumed.Submit(context.Background(), session.ID, "new request"); err != nil {
+		t.Fatal(err)
+	}
+	if len(fixture.inputs) != 1 {
+		t.Fatalf("model inputs = %d", len(fixture.inputs))
+	}
+	var contents []string
+	for _, message := range fixture.inputs[0] {
+		contents = append(contents, message.Content)
+	}
+	joined := strings.Join(contents, "\n")
+	for _, want := range []string{"checkpoint oldest work", "recent raw user", "recent raw answer", "new request"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("resumed context missing %q: %q", want, joined)
+		}
+	}
+	if strings.Contains(joined, "old raw user") || strings.Contains(joined, "old raw answer") {
+		t.Fatalf("resumed context replayed raw compacted prefix: %q", joined)
+	}
+	if messages := resumed.Messages(session.ID); len(messages) != 6 || messages[0].Content != "old raw user" || messages[1].Content != "old raw answer" {
+		t.Fatalf("raw transcript was not retained: %#v", messages)
+	}
+}
+
 func TestCoordinatorMessagesReturnsTranscript(t *testing.T) {
 	fixture := &coordinatorModel{messages: []*schema.Message{schema.AssistantMessage("完成", nil)}}
 	coordinator := New(config.Default(), t.TempDir(), Dependencies{NewModel: func(context.Context, config.AgentConfig) (model.ToolCallingChatModel, error) {

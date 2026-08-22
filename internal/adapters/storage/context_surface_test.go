@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -108,6 +109,30 @@ func TestContextSurfaceAppendsNewRawTranscriptCoverage(t *testing.T) {
 	}
 }
 
+func TestContextSurfacePruneToolsRollsBackAllNodesWhenAnySourceIsInvalid(t *testing.T) {
+	store, session := surfaceTranscript(t)
+	defer store.Close()
+	surface, err := store.OpenContextSurface(session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer surface.Close()
+	before, err := surface.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := surface.PruneTools(before.Generation, map[int]string{3: "short tool result", 1: "invalid user result"}); !errors.Is(err, ErrInvalidSurfaceRange) {
+		t.Fatalf("prune error = %v", err)
+	}
+	after, err := surface.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("surface changed after batch prune rejection: %#v", after)
+	}
+}
+
 func TestContextSurfaceRejectsRangeThatSplitsToolPair(t *testing.T) {
 	store, session := surfaceTranscript(t)
 	defer store.Close()
@@ -201,6 +226,43 @@ func TestContextSurfaceRejectsStaleGeneration(t *testing.T) {
 	}
 	if _, err := surface.ReplaceRange(0, 3, 4, agent.SurfaceNode{Kind: agent.SurfaceNodeCheckpoint, SourceStartSeq: 3, SourceEndSeq: 4, Content: "stale"}); err == nil {
 		t.Fatal("stale generation replacement succeeded")
+	}
+}
+
+func TestContextSurfaceStaleMutationDoesNotSynchronizeNewSourceNodes(t *testing.T) {
+	store, session := surfaceTranscript(t)
+	defer store.Close()
+	surface, err := store.OpenContextSurface(session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer surface.Close()
+	if _, err := surface.StartCompaction(0, 1, 3); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := surface.ReplaceRange(0, 1, 3, agent.SurfaceNode{Kind: agent.SurfaceNodeCheckpoint, SourceStartSeq: 1, SourceEndSeq: 3, Content: "checkpoint"}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := surface.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	transcript, err := store.OpenTranscript(session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := transcript.Append(agent.Message{Role: agent.RoleUser, Content: "new raw source"}); err != nil {
+		_ = transcript.Close()
+		t.Fatal(err)
+	}
+	if err := transcript.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := surface.PruneTool(0, 5, "pruned"); !errors.Is(err, ErrStaleSurfaceGeneration) {
+		t.Fatalf("stale prune error = %v", err)
+	}
+	if got, err := loadContextSurface(surface.db, session.ID); err != nil || !reflect.DeepEqual(got, before) {
+		t.Fatalf("surface after stale prune = %#v/%v, want %#v", got, err, before)
 	}
 }
 

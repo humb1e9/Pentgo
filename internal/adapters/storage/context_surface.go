@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -89,6 +90,11 @@ func (store *ContextSurfaceStore) StartCompaction(generation int64, startSeq, en
 	if startSeq <= 0 || endSeq < startSeq {
 		return agent.CompactionLifecycle{}, ErrInvalidSurfaceRange
 	}
+	if current, err := currentSurfaceGeneration(store.db, store.sessionID); err != nil {
+		return agent.CompactionLifecycle{}, err
+	} else if current != generation {
+		return agent.CompactionLifecycle{}, ErrStaleSurfaceGeneration
+	}
 	if err := store.syncSourceNodes(); err != nil {
 		return agent.CompactionLifecycle{}, err
 	}
@@ -150,6 +156,11 @@ func (store *ContextSurfaceStore) ReplaceRange(expectedGeneration int64, startSe
 	}
 	if startSeq <= 0 || endSeq < startSeq || replacement.Kind == agent.SurfaceNodeSource || replacement.SourceStartSeq != startSeq || replacement.SourceEndSeq != endSeq || strings.TrimSpace(replacement.Content) == "" {
 		return agent.ContextSurface{}, ErrInvalidSurfaceRange
+	}
+	if current, err := currentSurfaceGeneration(store.db, store.sessionID); err != nil {
+		return agent.ContextSurface{}, err
+	} else if current != expectedGeneration {
+		return agent.ContextSurface{}, ErrStaleSurfaceGeneration
 	}
 	if err := store.syncSourceNodes(); err != nil {
 		return agent.ContextSurface{}, err
@@ -216,6 +227,106 @@ WHERE session_id = ? AND generation = ? AND source_start_seq = ? AND source_end_
 	}
 	if err := tx.Commit(); err != nil {
 		return agent.ContextSurface{}, fmt.Errorf("commit context surface replacement: %w", err)
+	}
+	return loadContextSurface(store.db, store.sessionID)
+}
+
+// PruneTool replaces exactly one raw tool-result source node without altering
+// its source range. Tool-call pairing remains visible through the untouched
+// assistant node, so this operation does not create a checkpoint lifecycle.
+func (store *ContextSurfaceStore) PruneTool(expectedGeneration int64, sourceSeq int, content string) (agent.ContextSurface, error) {
+	return store.PruneTools(expectedGeneration, map[int]string{sourceSeq: content})
+}
+
+// PruneTools atomically replaces raw tool-result nodes. Any stale generation,
+// invalid node, or storage failure leaves all selected nodes unchanged.
+func (store *ContextSurfaceStore) PruneTools(expectedGeneration int64, replacements map[int]string) (agent.ContextSurface, error) {
+	if store == nil || store.db == nil {
+		return agent.ContextSurface{}, fmt.Errorf("context surface store is nil")
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := store.ensureOpen(); err != nil {
+		return agent.ContextSurface{}, err
+	}
+	if len(replacements) == 0 {
+		return agent.ContextSurface{}, ErrInvalidSurfaceRange
+	}
+	sequences := make([]int, 0, len(replacements))
+	for sourceSeq, content := range replacements {
+		if sourceSeq <= 0 || strings.TrimSpace(content) == "" {
+			return agent.ContextSurface{}, ErrInvalidSurfaceRange
+		}
+		sequences = append(sequences, sourceSeq)
+	}
+	sort.Ints(sequences)
+	if current, err := currentSurfaceGeneration(store.db, store.sessionID); err != nil {
+		return agent.ContextSurface{}, err
+	} else if current != expectedGeneration {
+		return agent.ContextSurface{}, ErrStaleSurfaceGeneration
+	}
+	if err := store.syncSourceNodes(); err != nil {
+		return agent.ContextSurface{}, err
+	}
+	tx, err := store.db.Begin()
+	if err != nil {
+		return agent.ContextSurface{}, fmt.Errorf("begin context tool prune: %w", err)
+	}
+	rollback := func(cause error) (agent.ContextSurface, error) {
+		_ = tx.Rollback()
+		return agent.ContextSurface{}, cause
+	}
+	generation, err := currentSurfaceGenerationTx(tx, store.sessionID)
+	if err != nil {
+		return rollback(err)
+	}
+	if generation != expectedGeneration {
+		return rollback(ErrStaleSurfaceGeneration)
+	}
+	nodeIDs := make(map[int]string, len(sequences))
+	for _, sourceSeq := range sequences {
+		var nodeID string
+		var kind agent.SurfaceNodeKind
+		if err := tx.QueryRow(`
+SELECT id, kind FROM context_surface_nodes
+WHERE session_id = ? AND source_start_seq = ? AND source_end_seq = ?`, store.sessionID, sourceSeq, sourceSeq).Scan(&nodeID, &kind); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return rollback(ErrInvalidSurfaceRange)
+			}
+			return rollback(fmt.Errorf("read context tool prune node: %w", err))
+		}
+		if kind != agent.SurfaceNodeSource {
+			return rollback(ErrInvalidSurfaceRange)
+		}
+		var role string
+		if err := tx.QueryRow(`SELECT role FROM transcript_messages WHERE session_id = ? AND seq = ?`, store.sessionID, sourceSeq).Scan(&role); err != nil {
+			return rollback(fmt.Errorf("read context tool prune source: %w", err))
+		}
+		if role != agent.RoleTool {
+			return rollback(ErrInvalidSurfaceRange)
+		}
+		nodeIDs[sourceSeq] = nodeID
+	}
+	nextGeneration := generation + 1
+	for _, sourceSeq := range sequences {
+		result, err := tx.Exec(`
+UPDATE context_surface_nodes
+SET kind = ?, content = ?, generation = ?
+WHERE session_id = ? AND id = ? AND kind = ?`, agent.SurfaceNodePrunedTool, replacements[sourceSeq], nextGeneration, store.sessionID, nodeIDs[sourceSeq], agent.SurfaceNodeSource)
+		if err != nil {
+			return rollback(fmt.Errorf("write context tool prune: %w", err))
+		}
+		if changed, err := result.RowsAffected(); err != nil {
+			return rollback(fmt.Errorf("write context tool prune rows: %w", err))
+		} else if changed != 1 {
+			return rollback(ErrInvalidSurfaceRange)
+		}
+	}
+	if _, err := tx.Exec(`UPDATE context_surface_state SET generation = ? WHERE session_id = ?`, nextGeneration, store.sessionID); err != nil {
+		return rollback(fmt.Errorf("advance context tool prune generation: %w", err))
+	}
+	if err := tx.Commit(); err != nil {
+		return agent.ContextSurface{}, fmt.Errorf("commit context tool prune: %w", err)
 	}
 	return loadContextSurface(store.db, store.sessionID)
 }

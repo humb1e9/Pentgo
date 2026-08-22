@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -341,25 +342,27 @@ func (runtime *ProjectRuntime) DeleteSession(sessionID string) error {
 
 	session.worker.Stop()
 	<-session.worker.Done()
+	var closeErr error
 	if err := session.surface.Close(); err != nil {
-		return err
+		closeErr = errors.Join(closeErr, err)
 	}
 	if err := session.transcript.Close(); err != nil {
-		return err
+		closeErr = errors.Join(closeErr, err)
 	}
 	runtime.commitMu.Lock()
-	defer runtime.commitMu.Unlock()
-	if err := runtime.store.DeleteSession(sessionID); err != nil {
-		return err
+	deleteErr := runtime.store.DeleteSession(sessionID)
+	var loadErr error
+	if deleteErr == nil {
+		var project *domain.Project
+		project, loadErr = runtime.store.LoadProject()
+		if loadErr == nil {
+			runtime.mu.Lock()
+			runtime.project = project
+			runtime.mu.Unlock()
+		}
 	}
-	project, err := runtime.store.LoadProject()
-	if err != nil {
-		return err
-	}
-	runtime.mu.Lock()
-	runtime.project = project
-	runtime.mu.Unlock()
-	return nil
+	runtime.commitMu.Unlock()
+	return errors.Join(closeErr, deleteErr, loadErr)
 }
 
 // Snapshot 返回一个会话已发布状态的安全副本。

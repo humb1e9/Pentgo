@@ -415,6 +415,29 @@ func TestTerminalModelShowsAndClearsGeneratingPlaceholder(t *testing.T) {
 	}
 }
 
+func TestTerminalShowsContextActivitiesOutsideTranscript(t *testing.T) {
+	model := newTerminalModel(context.Background(), nil, "")
+	model.recordEvent(app.Event{Kind: app.EventContextActivity, Message: "已裁剪工具结果 #3 以释放上下文。", Data: agent.ContextActivity{Kind: agent.ContextToolPruned, Message: "已裁剪工具结果 #3 以释放上下文。"}})
+	if len(model.activity) != 1 || model.activity[0].level != activityStatus || !strings.Contains(model.activity[0].text, "裁剪工具结果") {
+		t.Fatalf("context activity = %#v", model.activity)
+	}
+	if len(model.sessions) != 0 {
+		t.Fatalf("context activity changed session state: %#v", model.sessions)
+	}
+}
+
+func TestTerminalClearsStreamActivityWhenToolStarts(t *testing.T) {
+	model := newTerminalModel(context.Background(), nil, "")
+	model.recordEvent(app.Event{Kind: app.EventAssistantDelta, Message: "正在检查目标"})
+	if len(model.streamActivity) != 1 {
+		t.Fatalf("stream activity = %#v", model.streamActivity)
+	}
+	model.recordEvent(app.Event{Kind: app.EventToolStarted, Message: "fixture_probe"})
+	if len(model.streamActivity) != 0 {
+		t.Fatalf("tool start did not clear stream activity: %#v", model.streamActivity)
+	}
+}
+
 func TestTerminalModelTracksOnlyInFlightToolProgress(t *testing.T) {
 	model := newTerminalModel(context.Background(), nil, "")
 	model.recordEvent(app.Event{Kind: app.EventToolStarted, Message: "http_probe"})

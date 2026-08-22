@@ -81,6 +81,7 @@ type terminalModel struct {
 	focused         string
 	eventCancel     context.CancelFunc
 	activity        []activityEntry
+	streamActivity  []activityEntry
 	runningTools    map[string]int
 	turnRunning     bool
 	generating      bool
@@ -312,8 +313,11 @@ func (model *terminalModel) renderConversation() {
 	if model.generating {
 		lines = append(lines, renderGeneratingPlaceholder())
 	}
-	if len(lines) == 0 && len(model.activity) == 0 {
+	if len(lines) == 0 && len(model.activity) == 0 && len(model.streamActivity) == 0 {
 		lines = append(lines, model.renderWelcome())
+	}
+	for _, activity := range model.streamActivity {
+		lines = append(lines, ansi.Hardwrap(renderActivity(activity), model.contentWidth(), true))
 	}
 	for _, activity := range model.activity {
 		lines = append(lines, ansi.Hardwrap(renderActivity(activity), model.contentWidth(), true))
@@ -542,10 +546,28 @@ func (model *terminalModel) recordEvent(event app.Event) {
 	case app.EventTurnStarted:
 		model.turnRunning = true
 		model.generating = true
+	case app.EventAssistantDelta:
+		model.generating = true
+		if name != "" {
+			model.addStreamActivity(name)
+		}
+	case app.EventContextActivity:
+		level := activityInfo
+		if activity, ok := event.Data.(agent.ContextActivity); ok {
+			switch activity.Kind {
+			case agent.ContextRequestRejected:
+				level = activityError
+			case agent.ContextCheckpointCreated, agent.ContextToolPruned, agent.ContextOverflowRetry:
+				level = activityStatus
+			}
+		}
+		model.addActivity(level, name)
 	case app.EventAssistantMessage:
 		model.generating = false
+		model.streamActivity = nil
 	case app.EventToolStarted:
 		model.generating = false
+		model.streamActivity = nil
 		if name == "" {
 			name = "工具"
 		}
@@ -584,12 +606,24 @@ func (model *terminalModel) finishRunningTool(name string) {
 // clearTransientState isolates command feedback and live execution state to the current focused session.
 func (model *terminalModel) clearTransientState() {
 	model.activity = nil
+	model.streamActivity = nil
 	model.runningTools = make(map[string]int)
 	model.turnRunning = false
 	model.generating = false
 }
 
 // addActivity 独立于持久化 transcript 限制临时 UI 输出的长度，并且只保存安全纯文本。
+func (model *terminalModel) addStreamActivity(value string) {
+	value = safeTerminalText(value)
+	if value == "" {
+		return
+	}
+	model.streamActivity = append(model.streamActivity, activityEntry{level: activityInfo, text: value})
+	if len(model.streamActivity) > 4 {
+		model.streamActivity = append([]activityEntry(nil), model.streamActivity[len(model.streamActivity)-4:]...)
+	}
+}
+
 func (model *terminalModel) addActivity(level activityLevel, value string) {
 	value = safeTerminalText(value)
 	if value == "" {

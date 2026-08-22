@@ -92,12 +92,28 @@ func (store *ContextSurfaceStore) StartCompaction(generation int64, startSeq, en
 	if err := store.syncSourceNodes(); err != nil {
 		return agent.CompactionLifecycle{}, err
 	}
-	current, err := currentSurfaceGeneration(store.db, store.sessionID)
+	tx, err := store.db.Begin()
 	if err != nil {
-		return agent.CompactionLifecycle{}, err
+		return agent.CompactionLifecycle{}, fmt.Errorf("begin context compaction: %w", err)
+	}
+	rollback := func(cause error) (agent.CompactionLifecycle, error) {
+		_ = tx.Rollback()
+		return agent.CompactionLifecycle{}, cause
+	}
+	current, err := currentSurfaceGenerationTx(tx, store.sessionID)
+	if err != nil {
+		return rollback(err)
 	}
 	if current != generation {
-		return agent.CompactionLifecycle{}, ErrStaleSurfaceGeneration
+		return rollback(ErrStaleSurfaceGeneration)
+	}
+	nodes, err := loadContextSurfaceNodesTx(tx, store.sessionID)
+	if err != nil {
+		return rollback(err)
+	}
+	first, last := selectedSurfaceRange(nodes, startSeq, endSeq)
+	if first < 0 || last < first {
+		return rollback(ErrInvalidSurfaceRange)
 	}
 	lifecycle := agent.CompactionLifecycle{
 		ID:         newSurfaceID(),
@@ -107,10 +123,13 @@ func (store *ContextSurfaceStore) StartCompaction(generation int64, startSeq, en
 		EndSeq:     endSeq,
 		Status:     agent.CompactionStarted,
 	}
-	if _, err := store.db.Exec(`
+	if _, err := tx.Exec(`
 INSERT INTO context_compactions(id, session_id, generation, source_start_seq, source_end_seq, status, created_at)
 VALUES (?, ?, ?, ?, ?, ?, ?)`, lifecycle.ID, lifecycle.SessionID, lifecycle.Generation, lifecycle.StartSeq, lifecycle.EndSeq, lifecycle.Status, timeValue(time.Now().UTC())); err != nil {
-		return agent.CompactionLifecycle{}, fmt.Errorf("start context compaction: %w", err)
+		return rollback(fmt.Errorf("start context compaction: %w", err))
+	}
+	if err := tx.Commit(); err != nil {
+		return agent.CompactionLifecycle{}, fmt.Errorf("commit context compaction start: %w", err)
 	}
 	return lifecycle, nil
 }
@@ -175,11 +194,19 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, store.sessionID, replacement.ID, replacement.P
 	if _, err := tx.Exec(`UPDATE context_surface_state SET generation = ? WHERE session_id = ?`, nextGeneration, store.sessionID); err != nil {
 		return rollback(fmt.Errorf("advance context surface generation: %w", err))
 	}
-	if _, err := tx.Exec(`
+	result, err := tx.Exec(`
 UPDATE context_compactions
 SET status = ?, error = '', finished_at = ?
-WHERE session_id = ? AND generation = ? AND source_start_seq = ? AND source_end_seq = ? AND status = ?`, agent.CompactionCommitted, timeValue(time.Now().UTC()), store.sessionID, expectedGeneration, startSeq, endSeq, agent.CompactionStarted); err != nil {
+WHERE session_id = ? AND generation = ? AND source_start_seq = ? AND source_end_seq = ? AND status = ?`, agent.CompactionCommitted, timeValue(time.Now().UTC()), store.sessionID, expectedGeneration, startSeq, endSeq, agent.CompactionStarted)
+	if err != nil {
 		return rollback(fmt.Errorf("commit context compaction lifecycle: %w", err))
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return rollback(fmt.Errorf("commit context compaction lifecycle rows: %w", err))
+	}
+	if changed != 1 {
+		return rollback(fmt.Errorf("context compaction lifecycle is missing or ambiguous"))
 	}
 	if err := tx.Commit(); err != nil {
 		return agent.ContextSurface{}, fmt.Errorf("commit context surface replacement: %w", err)
@@ -314,6 +341,11 @@ func (store *ContextSurfaceStore) syncSourceNodes() error {
 		_ = tx.Rollback()
 		return fmt.Errorf("initialize context surface state: %w", err)
 	}
+	var generation int64
+	if err := tx.QueryRow(`SELECT generation FROM context_surface_state WHERE session_id = ?`, store.sessionID).Scan(&generation); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("read context surface generation: %w", err)
+	}
 	var nodeCount int
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM context_surface_nodes WHERE session_id = ?`, store.sessionID).Scan(&nodeCount); err != nil {
 		_ = tx.Rollback()
@@ -335,7 +367,7 @@ func (store *ContextSurfaceStore) syncSourceNodes() error {
 			}
 			if _, err := tx.Exec(`
 INSERT INTO context_surface_nodes(session_id, id, position, kind, source_start_seq, source_end_seq, content, generation)
-VALUES (?, ?, ?, ?, ?, ?, '', 0)`, store.sessionID, newSurfaceID(), position, agent.SurfaceNodeSource, sequence, sequence); err != nil {
+VALUES (?, ?, ?, ?, ?, ?, '', ?)`, store.sessionID, newSurfaceID(), position, agent.SurfaceNodeSource, sequence, sequence, generation); err != nil {
 				_ = rows.Close()
 				_ = tx.Rollback()
 				return fmt.Errorf("seed context surface source node: %w", err)
@@ -376,7 +408,7 @@ VALUES (?, ?, ?, ?, ?, ?, '', 0)`, store.sessionID, newSurfaceID(), position, ag
 			}
 			if _, err := tx.Exec(`
 INSERT INTO context_surface_nodes(session_id, id, position, kind, source_start_seq, source_end_seq, content, generation)
-VALUES (?, ?, ?, ?, ?, ?, '', 0)`, store.sessionID, newSurfaceID(), position, agent.SurfaceNodeSource, sequence, sequence); err != nil {
+VALUES (?, ?, ?, ?, ?, ?, '', ?)`, store.sessionID, newSurfaceID(), position, agent.SurfaceNodeSource, sequence, sequence, generation); err != nil {
 				_ = rows.Close()
 				_ = tx.Rollback()
 				return fmt.Errorf("append context surface source node: %w", err)

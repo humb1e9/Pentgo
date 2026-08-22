@@ -130,6 +130,9 @@ CREATE TABLE IF NOT EXISTS context_compactions (
     created_at INTEGER NOT NULL,
     finished_at INTEGER
 );
+CREATE UNIQUE INDEX IF NOT EXISTS context_compactions_one_started_range
+    ON context_compactions(session_id, generation, source_start_seq, source_end_seq)
+    WHERE status = 'started';
 `
 
 // openSQLite 为项目数据库配置 WAL 持久性、外键和私有所有者权限，

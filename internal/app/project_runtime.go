@@ -341,6 +341,9 @@ func (runtime *ProjectRuntime) DeleteSession(sessionID string) error {
 
 	session.worker.Stop()
 	<-session.worker.Done()
+	if err := session.surface.Close(); err != nil {
+		return err
+	}
 	if err := session.transcript.Close(); err != nil {
 		return err
 	}

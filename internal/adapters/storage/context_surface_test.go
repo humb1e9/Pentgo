@@ -108,6 +108,65 @@ func TestContextSurfaceAppendsNewRawTranscriptCoverage(t *testing.T) {
 	}
 }
 
+func TestContextSurfaceReplaceRequiresStartedLifecycle(t *testing.T) {
+	store, session := surfaceTranscript(t)
+	defer store.Close()
+	surface, err := store.OpenContextSurface(session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer surface.Close()
+	before, err := surface.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := surface.ReplaceRange(before.Generation, 1, 2, agent.SurfaceNode{Kind: agent.SurfaceNodeCheckpoint, SourceStartSeq: 1, SourceEndSeq: 2, Content: "checkpoint"}); err == nil {
+		t.Fatal("replacement without started lifecycle succeeded")
+	}
+	after, err := surface.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("surface changed without lifecycle: %#v", after)
+	}
+}
+
+func TestContextSurfaceAppendedSourceUsesCurrentGeneration(t *testing.T) {
+	store, session := surfaceTranscript(t)
+	defer store.Close()
+	surface, err := store.OpenContextSurface(session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer surface.Close()
+	if _, err := surface.StartCompaction(0, 1, 2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := surface.ReplaceRange(0, 1, 2, agent.SurfaceNode{Kind: agent.SurfaceNodeCheckpoint, SourceStartSeq: 1, SourceEndSeq: 2, Content: "checkpoint"}); err != nil {
+		t.Fatal(err)
+	}
+	transcript, err := store.OpenTranscript(session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := transcript.Append(agent.Message{Role: agent.RoleUser, Content: "later"}); err != nil {
+		_ = transcript.Close()
+		t.Fatal(err)
+	}
+	if err := transcript.Close(); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := surface.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := snapshot.Nodes[len(snapshot.Nodes)-1]
+	if last.Kind != agent.SurfaceNodeSource || last.SourceStartSeq != 5 || last.Generation != snapshot.Generation {
+		t.Fatalf("appended node = %#v; surface generation = %d", last, snapshot.Generation)
+	}
+}
+
 func TestContextSurfaceRejectsStaleGeneration(t *testing.T) {
 	store, session := surfaceTranscript(t)
 	defer store.Close()

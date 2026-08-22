@@ -48,6 +48,18 @@ type TurnInput struct {
 	MaxIterations int
 }
 
+// ModelStepInput is one fully assembled, provider-visible request. Context
+// management materializes persistent Surface nodes into Messages before this
+// boundary; adapters must not read transcript or project state themselves.
+type ModelStepInput struct {
+	SessionID     string
+	Messages      []Message
+	SystemPrompt  string
+	ProjectFacts  string
+	Tools         []Tool
+	ContextWindow int
+}
+
 // TurnEvent 将模型输出流式传递给应用层。Message 事件保留 transcript 顺序，
 // Error 和 Done 事件标记一次执行的终止状态。
 type TurnEvent struct {

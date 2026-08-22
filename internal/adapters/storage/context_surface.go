@@ -90,7 +90,7 @@ func (store *ContextSurfaceStore) StartCompaction(generation int64, startSeq, en
 	if startSeq <= 0 || endSeq < startSeq {
 		return agent.CompactionLifecycle{}, ErrInvalidSurfaceRange
 	}
-	if current, err := currentSurfaceGeneration(store.db, store.sessionID); err != nil {
+	if current, err := currentSurfaceGenerationOrZero(store.db, store.sessionID); err != nil {
 		return agent.CompactionLifecycle{}, err
 	} else if current != generation {
 		return agent.CompactionLifecycle{}, ErrStaleSurfaceGeneration
@@ -157,7 +157,7 @@ func (store *ContextSurfaceStore) ReplaceRange(expectedGeneration int64, startSe
 	if startSeq <= 0 || endSeq < startSeq || replacement.Kind == agent.SurfaceNodeSource || replacement.SourceStartSeq != startSeq || replacement.SourceEndSeq != endSeq || strings.TrimSpace(replacement.Content) == "" {
 		return agent.ContextSurface{}, ErrInvalidSurfaceRange
 	}
-	if current, err := currentSurfaceGeneration(store.db, store.sessionID); err != nil {
+	if current, err := currentSurfaceGenerationOrZero(store.db, store.sessionID); err != nil {
 		return agent.ContextSurface{}, err
 	} else if current != expectedGeneration {
 		return agent.ContextSurface{}, ErrStaleSurfaceGeneration
@@ -260,7 +260,7 @@ func (store *ContextSurfaceStore) PruneTools(expectedGeneration int64, replaceme
 		sequences = append(sequences, sourceSeq)
 	}
 	sort.Ints(sequences)
-	if current, err := currentSurfaceGeneration(store.db, store.sessionID); err != nil {
+	if current, err := currentSurfaceGenerationOrZero(store.db, store.sessionID); err != nil {
 		return agent.ContextSurface{}, err
 	} else if current != expectedGeneration {
 		return agent.ContextSurface{}, ErrStaleSurfaceGeneration
@@ -602,6 +602,14 @@ func currentSurfaceGeneration(db *sql.DB, sessionID string) (int64, error) {
 		return 0, fmt.Errorf("read context surface generation: %w", err)
 	}
 	return generation, nil
+}
+
+func currentSurfaceGenerationOrZero(db *sql.DB, sessionID string) (int64, error) {
+	generation, err := currentSurfaceGeneration(db, sessionID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	return generation, err
 }
 
 func currentSurfaceGenerationTx(tx *sql.Tx, sessionID string) (int64, error) {

@@ -27,12 +27,13 @@ type ToolCall struct {
 // Message 是应用层和模型适配层共用的持久化消息格式。ToolCalls 使用切片，
 // 因为 Provider 可能在一条助手消息中请求多个工具。
 type Message struct {
-	Role          string         `json:"role"`
-	Content       string         `json:"content,omitempty"`
-	ToolCallID    string         `json:"tool_call_id,omitempty"`
-	ToolName      string         `json:"tool_name,omitempty"`
-	ToolArguments map[string]any `json:"tool_arguments,omitempty"`
-	ToolCalls     []ToolCall     `json:"tool_calls,omitempty"`
+	Role             string         `json:"role"`
+	Content          string         `json:"content,omitempty"`
+	ReasoningContent string         `json:"reasoning_content,omitempty"`
+	ToolCallID       string         `json:"tool_call_id,omitempty"`
+	ToolName         string         `json:"tool_name,omitempty"`
+	ToolArguments    map[string]any `json:"tool_arguments,omitempty"`
+	ToolCalls        []ToolCall     `json:"tool_calls,omitempty"`
 }
 
 // TurnInput 是单次模型执行的不可变输入。Messages 来自持久化 transcript 回放；

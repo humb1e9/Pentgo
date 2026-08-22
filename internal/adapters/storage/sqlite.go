@@ -11,7 +11,7 @@ import (
 )
 
 // schemaVersion 记录每个项目数据库应使用的 SQLite 布局版本。
-const schemaVersion = 2
+const schemaVersion = 3
 
 // schema 由 openSQLite 在单个事务中应用于新数据库。
 // 表使用规范化关系持久化事实，而非序列化状态块。
@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS transcript_messages (
     seq INTEGER NOT NULL CHECK (seq > 0),
     role TEXT NOT NULL,
     content TEXT NOT NULL DEFAULT '',
+    reasoning_content TEXT NOT NULL DEFAULT '',
     tool_call_id TEXT NOT NULL DEFAULT '',
     tool_name TEXT NOT NULL DEFAULT '',
     tool_arguments_json TEXT,
@@ -167,6 +168,11 @@ func migrateSQLite(db *sql.DB, version int) error {
 		}
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("commit sqlite schema v1 to v2 migration: %w", err)
+		}
+	}
+	if version >= 1 && version <= 2 {
+		if _, err := db.Exec("ALTER TABLE transcript_messages ADD COLUMN reasoning_content TEXT NOT NULL DEFAULT ''"); err != nil {
+			return fmt.Errorf("migrate sqlite schema v2 to v3: %w", err)
 		}
 	}
 	return nil

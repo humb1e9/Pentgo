@@ -295,7 +295,9 @@ func toSchemaMessages(messages []agent.Message) []*schema.Message {
 				}
 				calls = append(calls, schema.ToolCall{ID: call.ID, Function: schema.FunctionCall{Name: call.Name, Arguments: arguments}})
 			}
-			result = append(result, schema.AssistantMessage(message.Content, calls))
+			assistant := schema.AssistantMessage(message.Content, calls)
+			assistant.ReasoningContent = message.ReasoningContent
+			result = append(result, assistant)
 		default:
 			result = append(result, &schema.Message{Role: schema.RoleType(message.Role), Content: message.Content})
 		}
@@ -306,7 +308,7 @@ func toSchemaMessages(messages []agent.Message) []*schema.Message {
 // fromSchemaMessage 保留工具调用 ID 和格式错误的原始参数，
 // 使 transcript 如实记录 Provider 的请求内容。
 func fromSchemaMessage(message *schema.Message) agent.Message {
-	converted := agent.Message{Role: string(message.Role), Content: message.Content, ToolCallID: message.ToolCallID, ToolName: message.ToolName}
+	converted := agent.Message{Role: string(message.Role), Content: message.Content, ReasoningContent: message.ReasoningContent, ToolCallID: message.ToolCallID, ToolName: message.ToolName}
 	converted.ToolArguments = cloneMap(message.Extra)
 	for _, call := range message.ToolCalls {
 		arguments := make(map[string]any)

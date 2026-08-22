@@ -50,6 +50,34 @@ func (*engineFixtureTool) Invoke(context.Context, map[string]any) (string, error
 	return "RESULT", nil
 }
 
+func TestEinoEnginePreservesReasoningContentAcrossMessageBoundary(t *testing.T) {
+	model := &scriptedModel{messages: []*schema.Message{{
+		Role: schema.Assistant, Content: "ok", ReasoningContent: "reason first",
+	}}}
+	engine, err := NewEngine(context.Background(), model, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := engine.Run(context.Background(), agent.TurnInput{Messages: []agent.Message{{Role: agent.RoleUser, Content: "hello"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got agent.Message
+	for event := range events {
+		if event.Message.Role == agent.RoleAssistant {
+			got = event.Message
+		}
+	}
+	if got.ReasoningContent != "reason first" {
+		t.Fatalf("reasoning content = %q", got.ReasoningContent)
+	}
+
+	replayed := toSchemaMessages([]agent.Message{{Role: agent.RoleAssistant, ReasoningContent: "reason replay"}})
+	if len(replayed) != 1 || replayed[0].ReasoningContent != "reason replay" {
+		t.Fatalf("replayed messages = %#v", replayed)
+	}
+}
+
 func TestEinoEngineMapsToolCallAndResult(t *testing.T) {
 	model := &scriptedModel{messages: []*schema.Message{
 		schema.AssistantMessage("", []schema.ToolCall{{ID: "call-1", Function: schema.FunctionCall{Name: "fixture_probe", Arguments: `{"value":"TARGET"}`}}}),

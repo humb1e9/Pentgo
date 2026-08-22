@@ -224,6 +224,48 @@ func TestCoordinatorRetainsStartupSkillDiagnostics(t *testing.T) {
 	}
 }
 
+func TestCoordinatorBuildsLocalRegistryFromAgentConfiguration(t *testing.T) {
+	fixture := &coordinatorModel{messages: []*schema.Message{schema.AssistantMessage("完成", nil)}}
+	local := namedTool{name: "httpx"}
+	cfg := config.Default()
+	cfg.Agent.LocalTools = config.LocalTools{"httpx": {Command: "configured-httpx"}}
+	var received config.LocalTools
+	coordinator := New(cfg, t.TempDir(), Dependencies{
+		SkillsFS: fstest.MapFS{},
+		NewModel: func(context.Context, config.AgentConfig) (model.ToolCallingChatModel, error) {
+			return fixture, nil
+		},
+		DiscoverLocalTools: func(tools config.LocalTools, _ int) agent.ToolProvider {
+			received = tools
+			return &providerFixture{tools: []agent.Tool{local}}
+		},
+	})
+	defer coordinator.CloseProject()
+	if received["httpx"].Command != "configured-httpx" {
+		t.Fatalf("received local tools = %#v", received)
+	}
+	if _, _, err := coordinator.OpenOrCreateWorkspace(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	session, err := coordinator.NewSession("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-coordinator.Submit(context.Background(), session.ID, "检查目标"); err != nil {
+		t.Fatal(err)
+	}
+	available, err := coordinator.runtime.Tools(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names := namesOfTools(available); !containsToolName(names, "httpx") {
+		t.Fatalf("project tools = %v", names)
+	}
+	if messages := coordinator.Messages(session.ID); len(messages) != 2 || messages[0].Role != agent.RoleUser {
+		t.Fatalf("local diagnostics entered transcript: %#v", messages)
+	}
+}
+
 func TestCoordinatorRegistersFilesystemToolsForEachAgent(t *testing.T) {
 	root := t.TempDir()
 	fixture := &coordinatorModel{messages: []*schema.Message{
@@ -327,6 +369,15 @@ func TestCoordinatorUsesRuntimeAndTranscriptReplay(t *testing.T) {
 	if err := reopened.CloseProject(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func containsToolName(names []string, expected string) bool {
+	for _, name := range names {
+		if name == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func hasEinoContent(messages []*schema.Message, expected string) bool {

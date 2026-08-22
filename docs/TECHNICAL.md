@@ -18,7 +18,7 @@ PentGo 是一个以终端为入口的中文 Agent 运行时。它将模型调用
 
 ```text
 cmd/
-└── pentgo/                         进程入口、信号和依赖装配
+└── main.go                         进程入口、信号和依赖装配
 internal/
 ├── app/                            用例、项目运行时、会话 worker 和事件
 ├── agent/                          厂商无关的消息、工具和模型协议
@@ -26,7 +26,7 @@ internal/
 ├── adapters/
 │   ├── builtins/                   工作区文件与命令后端
 │   ├── llm/                        Eino ADK 与模型 provider 适配
-│   ├── mcp/                        MCP stdio、HTTP、SSE 与 Tool 适配
+│   ├── mcp/                        外部 MCP stdio、HTTP、SSE、LocalRegistry 与 Tool 适配
 │   ├── skillfs/                    Markdown 技能文件加载
 │   └── storage/                    SQLite 持久化
 ├── cli/                            Bubble Tea 终端界面和命令处理
@@ -60,7 +60,7 @@ cmd ──→ config
 └── app.ProjectRuntime
     └── <cwd>/.pentgo/
         ├── pentgo.db
-        ├── 共享 Local Backend、多个 MCP client 和工具 provider
+        ├── 共享 Local Backend、LocalRegistry、多个外部 MCP client 和组合工具 provider
         └── 多个 app.SessionWorker
             ├── SQLite transcript/session rows
             └── turn 事件
@@ -106,9 +106,10 @@ type Tool interface {
 - Eino Local Backend 提供 `ls`、`read_file`、`write_file`、`edit_file`、`glob`、`grep` 和 `execute`。
 - 应用层提供 `write_project_fact`，用于写入项目级共享记录。
 - 应用层在启动时发现至少一个有效技能后，向模型提供 `load_skill`。
-- MCP 服务发现到的工具通过同一协议加入本轮集合。
+- `mcp.LocalRegistry` 读取 `agent.local_tools` 中用户声明的普通 CLI；不维护固定工具列表，也不执行 PATH 身份探测。每个配置项都通过同一协议加入本轮集合。
+- 用户配置的 MCP 服务发现到的工具与 LocalRegistry 工具在项目级 provider 中聚合；名称冲突会在会话恢复前拒绝打开项目。
 
-工作区后端拒绝绝对路径、目录跳转和解析后离开根目录的符号链接路径。命令执行会显式切换到工作区目录后再运行。
+工作区后端拒绝绝对路径、目录跳转和解析后离开根目录的符号链接路径。命令执行会显式切换到工作区目录后再运行。LocalRegistry 只接受 JSON 数组形式的独立 argv，禁止 shell 解析；Unix 上每次 CLI 调用使用独立进程组，取消 turn 时连同后代进程一并终止。
 
 ## 6. MCP 连接与工具聚合
 
@@ -118,7 +119,7 @@ type Tool interface {
 - Streamable HTTP，使用 `type: "http"` 和 `url`。
 - SSE，使用 `type: "sse"` 和 `url`。
 
-项目运行时在打开项目时连接全部具名服务、读取其工具目录，并将工具聚合到统一 provider。服务名和工具名需满足 `[A-Za-z0-9_-]`；不同服务提供的工具名必须全局唯一。
+项目运行时在打开项目时连接全部具名外部服务、读取其工具目录，并与 `agent.local_tools` 声明的 LocalRegistry 工具聚合到统一 provider。每个本机 CLI 统一接受 `{"args": ["..."]}`，并使用 `exec.CommandContext` 的 argv 调用，不经过 shell；命令的安装、版本和身份由用户负责。服务名和工具名需满足 `[A-Za-z0-9_-]`；不同来源提供的工具名必须全局唯一。
 
 MCP 工具保留服务声明的描述与 JSON Schema。调用完成后，应用层装饰器会记录参数、状态和输出，再将带记录编号的输出返回给模型。配置中的环境变量值和 HTTP Header 值会在输出中被替换为脱敏标记。
 

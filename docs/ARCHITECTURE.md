@@ -11,14 +11,14 @@ PentGo 是一个中文交互的 Agent 终端工作台。目录只按稳定职责
 
 ```text
 cmd/
-└── pentgo/                         进程入口、信号和依赖装配
+└── main.go                         进程入口、信号和依赖装配
 internal/
 ├── app/                            用例、项目运行时、会话 worker 和事件
 ├── agent/                          厂商无关的消息、工具和模型协议
 ├── domain/                         Project、Session、Turn、Fact 纯状态
 ├── adapters/
 │   ├── llm/                        Eino ADK 与模型 provider 适配
-│   ├── mcp/                        MCP stdio/HTTP/SSE 与 Tool 适配
+│   ├── mcp/                        外部 MCP stdio/HTTP/SSE、LocalRegistry 与 Tool 适配
 │   ├── storage/                    SQLite 持久化
 │   └── skillfs/                    Markdown 技能文件加载
 ├── cli/                            REPL 命令和事件渲染
@@ -64,13 +64,13 @@ cmd ──→ config
 └── 一个 app.ProjectRuntime
     └── <cwd>/.pentgo/
         ├── pentgo.db
-        ├── 共享 Local Backend、多个 MCP client 和工具 provider
+        ├── 共享 Local Backend、LocalRegistry、多个外部 MCP client 和组合工具 provider
         └── 多个 app.SessionWorker
             ├── SQLite transcript/session rows
             └── turn 事件
 ```
 
-- `ProjectRuntime` 拥有项目 context、evidence、blackboard、Local Backend、MCP provider、transcript handle 和 worker。每个新建的 Eino Agent 都用该 Local Backend 注册 `ls`、`read_file`、`write_file`、`edit_file`、`glob`、`grep` 和 `execute`。每个具名 MCP Server 维护独立的 stdio、Streamable HTTP 或 SSE 连接；工具以其原始全局唯一名称暴露。
+- `ProjectRuntime` 拥有项目 context、evidence、blackboard、Local Backend、LocalRegistry、组合 MCP provider、transcript handle 和 worker。每个新建的 Eino Agent 都用该 Local Backend 注册 `ls`、`read_file`、`write_file`、`edit_file`、`glob`、`grep` 和 `execute`。LocalRegistry 读取 `agent.local_tools` 中用户声明的普通 CLI；每个具名外部 MCP Server 维护独立的 stdio、Streamable HTTP 或 SSE 连接；所有工具以全局唯一名称暴露。
 - `SessionWorker` 自己的 goroutine 才能修改 `domain.Session`；`Snapshot` 返回原子发布的深拷贝。
 - 一个 session 同时只运行一个 turn；同一项目内不同 session 可以并发运行。
 - `pentgo` 打开 `<cwd>/.pentgo/` 并创建新会话；目录不存在时同时创建工作区。`pentgo resume` 在进入 TUI 前列出会话并恢复用户选择的历史会话。
@@ -110,7 +110,7 @@ project 的 session summaries 从 `sessions` 查询派生。`CommitSession` 原�
 
 `agent.Tool` 只有名称、描述和 `Invoke(context.Context, map[string]any)`。需要保留 provider schema 的工具额外实现 `agent.ToolSchemaProvider`。`adapters/llm` 将其转换为 ADK tool；`adapters/mcp` 将 MCP schema 转为同一协议。
 
-应用层提供 `write_project_fact` 和按需启用的 `load_skill`。Eino Local Backend 工具随 Agent 初始化注册，路径锚定在工作目录；外部 MCP 工具先执行，再由应用层的 evidence decorator 写入证据。两类执行工具都返回带有 `[evidence_ref: N]` 的持久化结果。
+应用层提供 `write_project_fact` 和按需启用的 `load_skill`。Eino Local Backend 工具随 Agent 初始化注册，路径锚定在工作目录；LocalRegistry 的用户声明本机 CLI 与外部 MCP 工具都先执行，再由应用层的 evidence decorator 写入证据。两类执行工具都返回带有 `[evidence_ref: N]` 的持久化结果。
 
 ## Skills
 

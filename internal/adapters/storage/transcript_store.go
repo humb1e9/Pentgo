@@ -94,12 +94,12 @@ func insertNextMessageTx(tx *sql.Tx, sessionID string, message agent.Message) (i
 	var sequence int
 	if err := tx.QueryRow(`
 		INSERT INTO transcript_messages(
-			session_id, seq, role, content, tool_call_id, tool_name, tool_arguments_json
+			session_id, seq, role, content, reasoning_content, tool_call_id, tool_name, tool_arguments_json
 		)
-		SELECT ?, COALESCE(MAX(seq), 0) + 1, ?, ?, ?, ?, ?
+		SELECT ?, COALESCE(MAX(seq), 0) + 1, ?, ?, ?, ?, ?, ?
 		FROM transcript_messages WHERE session_id = ?
 		RETURNING seq`,
-		sessionID, message.Role, message.Content, message.ToolCallID,
+		sessionID, message.Role, message.Content, message.ReasoningContent, message.ToolCallID,
 		message.ToolName, argumentsJSON, sessionID,
 	).Scan(&sequence); err != nil {
 		return 0, err
@@ -219,7 +219,7 @@ func (store *TranscriptStore) Close() error {
 // 回放期间绝不调用历史工具。
 func loadTranscriptDB(db *sql.DB, sessionID string) ([]agent.Message, error) {
 	rows, err := db.Query(`
-		SELECT seq, role, content, tool_call_id, tool_name, tool_arguments_json
+		SELECT seq, role, content, reasoning_content, tool_call_id, tool_name, tool_arguments_json
 		FROM transcript_messages WHERE session_id = ? ORDER BY seq`, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("read transcript: %w", err)
@@ -230,7 +230,7 @@ func loadTranscriptDB(db *sql.DB, sessionID string) ([]agent.Message, error) {
 		var sequence int
 		var message agent.Message
 		var argumentsJSON sql.NullString
-		if err := rows.Scan(&sequence, &message.Role, &message.Content, &message.ToolCallID, &message.ToolName, &argumentsJSON); err != nil {
+		if err := rows.Scan(&sequence, &message.Role, &message.Content, &message.ReasoningContent, &message.ToolCallID, &message.ToolName, &argumentsJSON); err != nil {
 			return nil, fmt.Errorf("read transcript message: %w", err)
 		}
 		if argumentsJSON.Valid {

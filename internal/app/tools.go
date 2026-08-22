@@ -20,19 +20,19 @@ type SkillLoader func(string) (string, error)
 type runtimeToolProvider struct {
 	runtime         *ProjectRuntime
 	session         *domain.Session
-	external        []agent.Tool
+	projectTools    []agent.Tool
 	loadSkill       SkillLoader
 	skillsAvailable bool
 }
 
-// newRuntimeToolProvider copies external tools so later Provider changes cannot
-// affect the turn being configured.
-func newRuntimeToolProvider(runtime *ProjectRuntime, session *domain.Session, external []agent.Tool, loadSkill SkillLoader, skillsAvailable bool) *runtimeToolProvider {
-	return &runtimeToolProvider{runtime: runtime, session: session, external: append([]agent.Tool(nil), external...), loadSkill: loadSkill, skillsAvailable: skillsAvailable}
+// newRuntimeToolProvider copies project-level tools so later Provider changes
+// cannot affect the turn being configured.
+func newRuntimeToolProvider(runtime *ProjectRuntime, session *domain.Session, projectTools []agent.Tool, loadSkill SkillLoader, skillsAvailable bool) *runtimeToolProvider {
+	return &runtimeToolProvider{runtime: runtime, session: session, projectTools: append([]agent.Tool(nil), projectTools...), loadSkill: loadSkill, skillsAvailable: skillsAvailable}
 }
 
-// Tools 合并会话级内置工具和项目级远端工具，并拒绝可能遮蔽 Eino Local Backend
-// 能力的同名工具。
+// Tools 合并会话级内置工具和项目级 LocalRegistry / 外部 MCP 工具，并拒绝
+// 可能遮蔽 Eino Local Backend 能力的同名工具。
 func (provider *runtimeToolProvider) Tools(context.Context) ([]agent.Tool, error) {
 	if provider == nil || provider.runtime == nil || provider.session == nil {
 		return nil, fmt.Errorf("runtime tool provider is incomplete")
@@ -43,22 +43,22 @@ func (provider *runtimeToolProvider) Tools(context.Context) ([]agent.Tool, error
 	if provider.loadSkill != nil && provider.skillsAvailable {
 		tools = append(tools, &loadSkillTool{load: provider.loadSkill})
 	}
-	seen := make(map[string]bool, len(tools)+len(provider.external))
+	seen := make(map[string]bool, len(tools)+len(provider.projectTools))
 	for _, tool := range tools {
 		seen[tool.Name()] = true
 	}
-	for _, external := range provider.external {
-		if external == nil {
-			return nil, fmt.Errorf("external tool is nil")
+	for _, projectTool := range provider.projectTools {
+		if projectTool == nil {
+			return nil, fmt.Errorf("project tool is nil")
 		}
-		if builtins.IsName(external.Name()) {
-			return nil, fmt.Errorf("tool name collision: %s", external.Name())
+		if builtins.IsName(projectTool.Name()) {
+			return nil, fmt.Errorf("tool name collision: %s", projectTool.Name())
 		}
-		if seen[external.Name()] {
-			return nil, fmt.Errorf("tool name collision: %s", external.Name())
+		if seen[projectTool.Name()] {
+			return nil, fmt.Errorf("tool name collision: %s", projectTool.Name())
 		}
-		seen[external.Name()] = true
-		tools = append(tools, &evidenceTool{runtime: provider.runtime, inner: external})
+		seen[projectTool.Name()] = true
+		tools = append(tools, &evidenceTool{runtime: provider.runtime, inner: projectTool})
 	}
 	return tools, nil
 }
@@ -149,7 +149,11 @@ func (tool *evidenceTool) Invoke(ctx context.Context, arguments map[string]any) 
 	output, invokeErr := tool.inner.Invoke(ctx, arguments)
 	success := invokeErr == nil
 	if invokeErr != nil {
-		output = "工具调用失败：" + invokeErr.Error()
+		if strings.TrimSpace(output) == "" {
+			output = "工具调用失败：" + invokeErr.Error()
+		} else {
+			output = "工具调用失败：" + invokeErr.Error() + "\n" + output
+		}
 	}
 	// 即使底层工具返回后请求 context 被取消，仍要持久化结果；证据 journal 是持久化审计链路。
 	record, recordErr := tool.runtime.Evidence().RecordResult(context.Background(), tool.inner.Name(), arguments, success, output)

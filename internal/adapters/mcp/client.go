@@ -394,10 +394,16 @@ func renderMCPResult(result *sdk.CallToolResult) string {
 
 // boundText 按字节上限截断文本，并为模型上下文标记截断结果。
 func boundText(value string, maximum int) string {
-	if maximum <= 0 || len(value) <= maximum {
+	if maximum <= 0 {
+		return value
+	}
+	if len(value) <= maximum && utf8.ValidString(value) {
 		return value
 	}
 	end := maximum
+	if end > len(value) {
+		end = len(value)
+	}
 	for end > 0 && !utf8.ValidString(value[:end]) {
 		end--
 	}

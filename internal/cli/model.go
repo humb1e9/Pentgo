@@ -312,11 +312,11 @@ func (model *terminalModel) renderConversation() {
 	if model.generating {
 		lines = append(lines, renderGeneratingPlaceholder())
 	}
+	if len(lines) == 0 && len(model.activity) == 0 {
+		lines = append(lines, model.renderWelcome())
+	}
 	for _, activity := range model.activity {
 		lines = append(lines, ansi.Hardwrap(renderActivity(activity), model.contentWidth(), true))
-	}
-	if len(lines) == 0 {
-		lines = append(lines, model.renderWelcome())
 	}
 	model.viewport.SetContent(strings.Join(lines, "\n\n"))
 	model.viewport.GotoBottom()

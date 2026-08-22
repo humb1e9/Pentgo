@@ -25,7 +25,8 @@ func TestTranscriptStoreRoundTripsNormalizedMessages(t *testing.T) {
 	want := []agent.Message{
 		{Role: agent.RoleUser, Content: "inspect TARGET"},
 		{
-			Role: agent.RoleAssistant,
+			Role:             agent.RoleAssistant,
+			ReasoningContent: "先确认目标再调用工具",
 			ToolCalls: []agent.ToolCall{{
 				ID: "call-1", Name: "fixture_tool",
 				Arguments: map[string]any{"target": "TARGET", "ports": []any{80.0, 443.0}},

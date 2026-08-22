@@ -36,9 +36,10 @@ var ErrProjectNotFound = errors.New("current directory is not a PentGo project")
 // Dependencies 包含 Coordinator 使用的可替换进程级依赖。
 // 测试中可注入时钟、模型工厂或技能文件系统。
 type Dependencies struct {
-	Clock    func() time.Time
-	NewModel func(context.Context, config.AgentConfig) (model.ToolCallingChatModel, error)
-	SkillsFS fs.FS
+	Clock              func() time.Time
+	NewModel           func(context.Context, config.AgentConfig) (model.ToolCallingChatModel, error)
+	SkillsFS           fs.FS
+	DiscoverLocalTools func(config.LocalTools, int) agent.ToolProvider
 }
 
 // Coordinator 负责打开和关闭一个目录的 ProjectRuntime。它是 CLI 使用的门面，
@@ -53,6 +54,7 @@ type Coordinator struct {
 	runtime          *ProjectRuntime
 	service          *TurnService
 	skills           *skillsadapter.Registry
+	localTools       agent.ToolProvider
 	skillDiagnostics []skillsadapter.Diagnostic
 	skillAvailable   bool
 }
@@ -65,6 +67,11 @@ func New(cfg config.Config, outputRoot string, deps Dependencies) *Coordinator {
 	if deps.NewModel == nil {
 		deps.NewModel = llm.NewModel
 	}
+	if deps.DiscoverLocalTools == nil {
+		deps.DiscoverLocalTools = func(configurations config.LocalTools, maximumOutputBytes int) agent.ToolProvider {
+			return mcpadapter.NewLocalRegistry(configurations, maximumOutputBytes)
+		}
+	}
 	registry := skillsadapter.NewRegistry(deps.SkillsFS)
 	result := registry.Scan()
 	return &Coordinator{
@@ -72,6 +79,7 @@ func New(cfg config.Config, outputRoot string, deps Dependencies) *Coordinator {
 		root:             strings.TrimSpace(outputRoot),
 		deps:             deps,
 		skills:           registry,
+		localTools:       deps.DiscoverLocalTools(cfg.Agent.LocalTools, cfg.Agent.MaxOutputBytes),
 		skillDiagnostics: append([]skillsadapter.Diagnostic(nil), result.Diagnostics...),
 		skillAvailable:   registry.HasSkills(),
 	}
@@ -184,17 +192,30 @@ func (coordinator *Coordinator) openStore(ctx context.Context, store *storage.Pr
 	if err != nil {
 		return err
 	}
+	var externalTools agent.ToolProvider
 	if len(coordinator.cfg.Agent.MCP) != 0 {
 		mcpClients, connectErr := mcpadapter.ConnectAll(ctx, coordinator.cfg.Agent.MCP, projectRuntime.Evidence(), coordinator.cfg.Agent.MaxOutputBytes, store.Root(), store.TmpDir())
 		if connectErr != nil {
 			_ = projectRuntime.Close()
 			return connectErr
 		}
-		if err := projectRuntime.SetToolProvider(mcpClients); err != nil {
-			_ = mcpClients.Close()
-			_ = projectRuntime.Close()
-			return err
-		}
+		externalTools = mcpClients
+	}
+	projectTools := combineToolProviders(coordinator.localTools, externalTools)
+	if err := validateProjectTools(ctx, projectTools, coordinator.skillAvailable); err != nil {
+		_ = projectTools.Close()
+		_ = projectRuntime.Close()
+		return err
+	}
+	if _, err := projectTools.Tools(ctx); err != nil {
+		_ = projectTools.Close()
+		_ = projectRuntime.Close()
+		return err
+	}
+	if err := projectRuntime.SetToolProvider(projectTools); err != nil {
+		_ = projectTools.Close()
+		_ = projectRuntime.Close()
+		return err
 	}
 	service := NewTurnService(nil, store, nil)
 	service.SetClock(coordinator.deps.Clock)

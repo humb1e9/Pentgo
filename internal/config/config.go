@@ -3,21 +3,33 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 )
 
 // appConfigDirName 是用户配置根目录下使用的操作系统专属目录名。
 const appConfigDirName = "pentgo"
 
+var (
+	localToolNamePattern   = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+	localToolReservedNames = map[string]bool{
+		"ls": true, "read_file": true, "write_file": true, "edit_file": true,
+		"glob": true, "grep": true, "execute": true,
+		"write_project_fact": true,
+	}
+)
+
 // Config 保存终端 Agent 的用户级运行配置。
 type Config struct {
 	Agent AgentConfig `json:"agent"`
 }
 
-// AgentConfig 描述 Eino 工具调用模型与外部 MCP 连接。
+// AgentConfig 描述 Eino 工具调用模型、本机 CLI 工具与外部 MCP 连接。
 type AgentConfig struct {
 	Provider              string              `json:"provider"`
 	MaxTurns              int                 `json:"max_turns"`
@@ -26,7 +38,18 @@ type AgentConfig struct {
 	OpenAI                ModelProviderConfig `json:"openai"`
 	Anthropic             ModelProviderConfig `json:"anthropic"`
 	MCP                   MCPServers          `json:"mcp,omitempty"`
+	LocalTools            LocalTools          `json:"local_tools,omitempty"`
 }
+
+// LocalToolConfig declares one user-managed local CLI that LocalRegistry
+// exposes to the model. command is executed directly without a shell.
+type LocalToolConfig struct {
+	Command     string `json:"command"`
+	Description string `json:"description,omitempty"`
+}
+
+// LocalTools maps the model-visible name to its user-managed CLI command.
+type LocalTools map[string]LocalToolConfig
 
 // MCPConfig 配置一个标准输入输出、Streamable HTTP 或旧版 SSE MCP 服务。
 type MCPConfig struct {
@@ -84,11 +107,22 @@ func (servers *MCPServers) UnmarshalJSON(data []byte) error {
 
 // ModelProviderConfig 描述一个模型提供商的连接信息。
 type ModelProviderConfig struct {
-	BaseURL      string `json:"base_url"`
-	Model        string `json:"model"`
-	APIKey       string `json:"api_key,omitempty"`
-	APIKeyEnv    string `json:"api_key_env"`
+	BaseURL   string `json:"base_url"`
+	Model     string `json:"model"`
+	APIKey    string `json:"api_key,omitempty"`
+	APIKeyEnv string `json:"api_key_env"`
+	// ThinkingMode is intentionally deprecated. It is retained only so the
+	// runtime can return a migration error instead of silently ignoring it.
 	ThinkingMode string `json:"thinking_mode,omitempty"`
+	// RequestExtra is passed verbatim as top-level fields in an OpenAI Chat
+	// Completions request. It is for provider extensions such as reasoning.
+	RequestExtra map[string]any `json:"request_extra,omitempty"`
+	// ResponseReasoningJSONPointer identifies a non-standard reasoning string
+	// in a non-streaming JSON response, using RFC 6901 JSON Pointer syntax.
+	ResponseReasoningJSONPointer string `json:"response_reasoning_json_pointer,omitempty"`
+	// StreamResponseReasoningJSONPointer is the equivalent pointer for each
+	// streaming response chunk.
+	StreamResponseReasoningJSONPointer string `json:"stream_response_reasoning_json_pointer,omitempty"`
 }
 
 // Default 返回单一终端 Agent Runtime 的默认配置。
@@ -115,6 +149,28 @@ func defaultAgentConfig() AgentConfig {
 }
 
 // normalizeAgentConfig 仅补充缺失或无效的运行默认值。
+// validateLocalTools rejects configuration that cannot become stable model tool
+// definitions. It deliberately does not inspect or execute user commands.
+func validateLocalTools(tools LocalTools) error {
+	names := make([]string, 0, len(tools))
+	for name := range tools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if !localToolNamePattern.MatchString(name) {
+			return fmt.Errorf("invalid local tool name: %q", name)
+		}
+		if localToolReservedNames[name] {
+			return fmt.Errorf("local tool name is reserved: %q", name)
+		}
+		if strings.TrimSpace(tools[name].Command) == "" {
+			return fmt.Errorf("local tool %q command is empty", name)
+		}
+	}
+	return nil
+}
+
 func normalizeAgentConfig(agent *AgentConfig) {
 	defaults := defaultAgentConfig()
 	if agent.Provider == "" {
@@ -183,6 +239,9 @@ func Load() (Config, error) {
 	}
 	cfg := Default()
 	if err := json.Unmarshal(data, &cfg); err != nil {
+		return Default(), err
+	}
+	if err := validateLocalTools(cfg.Agent.LocalTools); err != nil {
 		return Default(), err
 	}
 	normalizeAgentConfig(&cfg.Agent)

@@ -38,6 +38,9 @@ func NewModel(ctx context.Context, configuration config.AgentConfig) (model.Tool
 	if strings.TrimSpace(provider.BaseURL) == "" {
 		return nil, fmt.Errorf("agent %s base URL is empty", providerName)
 	}
+	if legacyThinking := strings.ToLower(strings.TrimSpace(provider.ThinkingMode)); legacyThinking != "" && legacyThinking != "disabled" {
+		return nil, fmt.Errorf("agent %s thinking_mode is deprecated; configure provider-specific request_extra instead", providerName)
+	}
 	key, err := providerKey(provider)
 	if err != nil {
 		return nil, err
@@ -51,7 +54,17 @@ func NewModel(ctx context.Context, configuration config.AgentConfig) (model.Tool
 	if providerName == "anthropic" {
 		return einoclaude.NewChatModel(ctxOrBackground(ctx), &einoclaude.Config{APIKey: key, BaseURL: &baseURL, Model: provider.Model, MaxTokens: anthropicMaxTokens, HTTPClient: client})
 	}
-	return einoopenai.NewChatModel(ctxOrBackground(ctx), &einoopenai.ChatModelConfig{APIKey: key, BaseURL: baseURL, Model: provider.Model, HTTPClient: client})
+	chatModel, err := einoopenai.NewChatModel(ctxOrBackground(ctx), &einoopenai.ChatModelConfig{
+		APIKey:      key,
+		BaseURL:     baseURL,
+		Model:       provider.Model,
+		HTTPClient:  client,
+		ExtraFields: provider.RequestExtra,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return newConfiguredChatModel(chatModel, provider.ResponseReasoningJSONPointer, provider.StreamResponseReasoningJSONPointer), nil
 }
 
 // providerKey 优先使用显式密钥，否则读取配置的环境变量，避免将凭据写入项目持久化数据。

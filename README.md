@@ -1,165 +1,168 @@
 # PentGo
 
-> 基于 Go、Eino ADK 和 MCP 的中文 AI Agent 终端工作台。
+PentGo 是一个运行在终端里的持久化 AI Agent 工作台。它让你在一个目录中与模型连续协作：模型可以读写工作区文件、运行命令、调用你接入的工具，并在退出后恢复会话和项目记录。
 
-PentGo 在终端中提供连续对话、工具调用、会话管理、共享上下文和本地持久化能力。它将工作状态保存在当前目录，关闭进程后仍可继续处理历史任务。
+> **仅限已获得明确授权的目标、数据和环境。** 请在开始前确认测试范围、账户权限和数据处理要求。
 
-## 功能
+## 你可以做什么
 
-- 通过终端对话驱动模型分析任务、调用工具并持续处理结果。
-- 支持新建、重命名、删除和恢复多个独立会话。
-- 支持本地文件、文本检索、文件编辑和命令执行等工作区工具。
-- 支持通过 MCP 扩展远程工具，并聚合多个 stdio、HTTP 或 SSE 服务。
-- 持久化对话、工具结果和共享事实，进程退出后可恢复历史工作状态。
-- 支持从技能目录发现摘要，并按需加载单份 Markdown 技能正文。
+- 在终端中创建、切换和恢复多个会话。
+- 让模型使用工作区内的文件工具和命令执行工具完成任务。
+- 为模型接入本机 CLI，或接入标准 MCP 服务。
+- 将对话、工具结果和项目共享记录保存在当前工作目录，之后继续工作。
+- 将常用流程写成 Markdown skills，让模型按需加载。
 
-## 运行环境
+## 快速开始
 
-- Go `1.25` 或更高版本，必须安装在本机并可通过 `go version` 使用。
-- Linux、WSL 或 macOS。
-- 支持工具调用的 OpenAI 兼容模型或 Anthropic 模型。
-- MCP 服务可选，用于扩展远程工具能力。
+### 1. 准备环境
 
-## 安装
-
-### 安装 Go
-
-请先安装 Go `1.25` 或更新版本，并确认命令可用：
-
-```bash
-go version
-```
-
-Go 官方安装说明见 <https://go.dev/doc/install>。Linux、WSL 或 macOS 用户完成安装后，应重新打开终端，确保 `go` 已加入 `PATH`。
-
-### 构建并启动
+- 安装 Go **1.25 或更高版本**，并确认 `go version` 可运行。
+- 准备支持工具调用的 OpenAI 兼容模型或 Anthropic 模型。
 
 ```bash
 git clone https://github.com/humb1e9/Pentgo.git
 cd Pentgo
 go build -o pentgo ./cmd
-./pentgo
 ```
 
-首次启动会在当前目录创建 `.pentgo/` 工作区。源码仓库中的 `skills/` 目录需要保留在启动目录下；PentGo 会在每次进程启动时本地扫描其中的技能元数据。
+### 2. 配置模型
 
-## 配置模型
+配置文件位置：
 
-配置文件路径：
-
-| 系统 | 路径 |
+| 系统 | 配置文件 |
 | --- | --- |
 | Linux / WSL | `${XDG_CONFIG_HOME:-$HOME/.config}/pentgo/config.json` |
 | macOS | `$HOME/Library/Application Support/pentgo/config.json` |
 
-推荐使用环境变量保存 API Key：
+以 OpenAI 兼容接口为例：
 
 ```bash
-export OPENAI_API_KEY="TOKEN"
+export OPENAI_API_KEY="你的密钥"
 mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/pentgo"
 ```
 
-最小 OpenAI 兼容配置：
+创建 `config.json`：
 
 ```json
 {
   "agent": {
     "provider": "openai",
     "max_turns": 20,
-    "request_timeout_seconds": 60,
-    "max_output_bytes": 65536,
     "openai": {
       "base_url": "https://api.openai.com/v1",
-      "model": "MODEL",
+      "model": "你的模型名",
       "api_key_env": "OPENAI_API_KEY"
     }
   }
 }
 ```
 
-使用 Anthropic 时，将 `provider` 改为 `anthropic`，并在 `agent.anthropic` 中填写对应的 `base_url`、`model` 和 `api_key_env`。其他 OpenAI 兼容服务只需替换 `base_url` 与 `model`。
+使用 Anthropic 时，将 `provider` 改为 `anthropic`，并在 `agent.anthropic` 中填写 `base_url`、`model` 与 `api_key_env`。其他兼容 OpenAI 的服务通常只需替换 `base_url` 和 `model`。
 
-## 启动与会话
+### 3. 启动
 
-```text
-pentgo
-pentgo resume
+在你要作为项目工作区的目录中运行：
+
+```bash
+/path/to/pentgo
 ```
 
-`pentgo` 会打开当前目录并创建一个新会话；首次运行时会创建 `.pentgo/` 工作区。`pentgo resume` 只打开已有工作区，在进入终端前列出现有会话供选择，不会创建新会话。
+首次运行会创建新会话和 `.pentgo/` 数据目录。恢复已有项目并在启动时选择会话：
 
-## 交互命令
+```bash
+/path/to/pentgo resume
+```
 
-| 命令 | 说明 |
+## 常用终端命令
+
+| 命令 | 作用 |
 | --- | --- |
-| `/new` | 创建并进入新的空白会话。 |
-| `/session rename NAME` | 重命名当前会话。 |
-| `/session list` | 列出当前项目的会话。 |
-| `/session delete [SESSION_ID]` | 删除指定会话；省略 ID 时删除当前会话。 |
-| `/status` | 显示当前会话状态。 |
-| `/blackboard` | 显示项目级共享记录。 |
-| `/clear` | 清除当前终端的临时显示内容。 |
-| `/help` | 显示命令摘要。 |
-| `/exit` | 退出终端。 |
+| `/new` | 新建会话。 |
+| `/session list` | 查看会话。 |
+| `/session rename 名称` | 重命名当前会话。 |
+| `/session delete [会话 ID]` | 删除指定会话；不填 ID 时删除当前会话。 |
+| `/status` | 查看当前会话状态。 |
+| `/blackboard` | 查看项目共享记录。 |
+| `/clear` | 清除当前终端显示。 |
+| `/help` | 查看命令帮助。 |
+| `/exit` | 退出。 |
 
-## 工作区数据
+## 添加工具
 
-PentGo 以启动目录作为工作区边界，并在其中创建 `.pentgo/`：
+### 本机 CLI
 
-```text
-<working-directory>/
-└── .pentgo/
-    ├── pentgo.db
-    └── tmp/
-```
-
-`pentgo.db` 保存项目、会话、对话、共享记录和工具执行记录。请将 `.pentgo/` 视为工作数据目录；删除该目录会删除当前目录对应的历史状态。
-
-## MCP 工具服务
-
-在 `agent.mcp` 下添加具名服务即可扩展远程工具。每个服务使用 `command` 时默认采用 stdio；也可使用 `type: "http"` 或 `type: "sse"` 配置远程端点。
+把希望模型调用的普通命令放到 `agent.local_tools`。键名是模型看到的工具名；`command` 可以是 `PATH` 中的命令名，也可以是绝对路径。
 
 ```json
 {
   "agent": {
-    "mcp": {
-      "files": {
-        "command": "/absolute/path/to/tool-server",
-        "args": ["--stdio"]
+    "local_tools": {
+      "amass": {
+        "command": "amass",
+        "description": "对已获授权的域名运行 Amass。"
       },
-      "catalog": {
-        "type": "http",
-        "url": "http://127.0.0.1:8080/mcp",
-        "headers": {
-          "Authorization": "Bearer TOKEN"
-        }
+      "custom_recon": {
+        "command": "/opt/tools/custom-recon",
+        "description": "运行团队自定义的授权资产收集命令。"
       }
     }
   }
 }
 ```
 
-启动时会发现各服务公开的工具及参数定义。不同服务中的工具名称必须唯一。
+PentGo 在模型调用时直接运行该命令。每个工具接收一个原生参数数组，例如 `{"args":["-d","example.com"]}`。请自行确保命令已安装、在 `PATH` 中可用或使用正确的绝对路径；若修改了 `PATH`，请重启 PentGo。工具名需唯一，且不能使用 PentGo 内置工具名称。
 
-## Skills
+### MCP 服务
 
-PentGo 在每次启动时本地扫描启动目录中的 `skills/*.md`，从每份有效技能的 YAML frontmatter 读取 `description`，并建立当前进程的轻量名称/路径目录；此过程不调用模型或网络服务。每个新建或恢复的会话会自动获得一条精简技能目录上下文。任务明确匹配目录项时，模型会使用准确名称调用 `load_skill(name)`，按需读取单份正文。
+实际提供 MCP 协议的服务配置在 `agent.mcp`，而不是 `local_tools`：
 
-同一会话的后续 turn 复用已持久化的目录上下文，不会重新扫描或重复注入。修改、增删或修复技能后，请重启 PentGo；恢复会话时，新目录会明确替换该会话此前的 PentGo 技能目录。
+```json
+{
+  "agent": {
+    "mcp": {
+      "scanner": {
+        "command": "my-mcp-server",
+        "args": ["--stdio"]
+      },
+      "catalog": {
+        "type": "http",
+        "url": "http://127.0.0.1:8080/mcp"
+      }
+    }
+  }
+}
+```
 
-格式错误或无法读取的技能会被跳过，并在启动后的终端活动中显示文件名和原因；其余有效技能保持可用。
+支持 stdio、HTTP 和 SSE MCP 服务。所有来源的工具名称必须唯一。
+
+## 工作区与 Skills
+
+PentGo 将项目数据保存在启动目录中：
+
+```text
+你的工作目录/
+└── .pentgo/
+    ├── pentgo.db
+    └── tmp/
+```
+
+请保留 `.pentgo/`，否则会丢失该目录的会话和项目记录。若要添加可复用的操作说明，在启动目录创建 `skills/` 并放入带 YAML frontmatter `description` 的 Markdown 文件；修改 skills 后重启 PentGo。
 
 ## 常见问题
 
-### 找不到 `go` 命令
+### 找不到命令或本机工具无法运行
 
-请安装 Go `1.25` 或更新版本，并重新打开终端后执行 `go version` 确认安装和 `PATH` 配置正确。
+确认该 CLI 已安装且 `PATH` 正确，或在 `local_tools` 中改用绝对路径。修改环境变量后请重新启动 PentGo。
 
 ### 模型连接失败
 
-检查 `provider`、`base_url`、`model` 和 API Key 环境变量名称是否与所使用的服务一致。
+检查 `provider`、`base_url`、`model` 与 API Key 环境变量是否匹配所使用的服务。
 
-## 技术文档
+### 想传递服务商专属模型参数
 
-- [技术文档](docs/TECHNICAL.md) 说明模块职责、运行时模型和持久化实现。
-- [架构地图](docs/ARCHITECTURE.md) 说明目录结构与依赖方向。
+使用 `agent.openai.request_extra` 原样传递服务商要求的字段；高级模型响应字段映射请参阅技术文档。
+
+## 更多文档
+
+- [技术文档](docs/TECHNICAL.md)：实现边界、运行时模型、工具协议和开发验证。
+- [架构地图](docs/ARCHITECTURE.md)：目录结构与依赖方向。

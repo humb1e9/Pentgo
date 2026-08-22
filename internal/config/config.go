@@ -252,6 +252,13 @@ func validateAgentContextConfig(policy AgentContextConfig) error {
 	if providerSet != modelSet {
 		return fmt.Errorf("checkpoint_provider and checkpoint_model must be configured together")
 	}
+	if providerSet {
+		switch strings.ToLower(strings.TrimSpace(policy.CheckpointProvider)) {
+		case "openai", "anthropic":
+		default:
+			return fmt.Errorf("checkpoint_provider must be openai or anthropic")
+		}
+	}
 	return nil
 }
 

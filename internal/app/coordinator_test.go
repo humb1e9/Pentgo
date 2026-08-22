@@ -319,8 +319,12 @@ func (fixture *coordinatorModel) Generate(_ context.Context, input []*schema.Mes
 	fixture.messages = fixture.messages[1:]
 	return message, nil
 }
-func (*coordinatorModel) Stream(context.Context, []*schema.Message, ...model.Option) (*schema.StreamReader[*schema.Message], error) {
-	return nil, fmt.Errorf("streaming unsupported")
+func (fixture *coordinatorModel) Stream(ctx context.Context, input []*schema.Message, options ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+	message, err := fixture.Generate(ctx, input, options...)
+	if err != nil {
+		return nil, err
+	}
+	return schema.StreamReaderFromArray([]*schema.Message{message}), nil
 }
 func (fixture *coordinatorModel) WithTools([]*schema.ToolInfo) (model.ToolCallingChatModel, error) {
 	return fixture, nil

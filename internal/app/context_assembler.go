@@ -13,6 +13,13 @@ import (
 // context still exceeds its configured model-context threshold.
 var ErrContextPreflight = errors.New("context request exceeds configured budget")
 
+// ContextPreparer is the host-loop seam for normal and overflow-recovery
+// requests. Implementations must return a meaningfully compacted retry input.
+type ContextPreparer interface {
+	Prepare(context.Context, string, string, []agent.Tool) (agent.ModelStepInput, []agent.ContextActivity, error)
+	PrepareOverflowRecovery(context.Context, string, string, []agent.Tool) (agent.ModelStepInput, []agent.ContextActivity, error)
+}
+
 // ContextAssembler materializes the persistent Context Surface immediately
 // before each provider request. It never modifies the raw transcript ledger.
 type ContextAssembler struct {
@@ -30,6 +37,61 @@ func NewContextAssembler(runtime *ProjectRuntime, policy config.AgentContextConf
 
 // Prepare returns one model-visible request and any non-transcript context
 // activities. The enabled path always measures a freshly materialized Surface.
+func (assembler *ContextAssembler) PrepareOverflowRecovery(ctx context.Context, sessionID, systemPrompt string, tools []agent.Tool) (agent.ModelStepInput, []agent.ContextActivity, error) {
+	if assembler == nil || assembler.runtime == nil {
+		return agent.ModelStepInput{}, nil, fmt.Errorf("context assembler dependencies are incomplete")
+	}
+	if !assembler.policy.Enabled() {
+		return agent.ModelStepInput{}, []agent.ContextActivity{{Kind: agent.ContextOverflowRetry, Message: "模型报告上下文超限，但当前上下文策略未启用压缩。"}}, ErrContextPreflight
+	}
+	if assembler.meter == nil {
+		return agent.ModelStepInput{}, nil, fmt.Errorf("context assembler meter is nil")
+	}
+	surfaceStore := assembler.runtime.ContextSurface(sessionID)
+	if surfaceStore == nil {
+		return agent.ModelStepInput{}, nil, fmt.Errorf("session context surface is unavailable")
+	}
+	surface, transcriptMessages, err := surfaceStore.SnapshotWithTranscript()
+	if err != nil {
+		return agent.ModelStepInput{}, nil, err
+	}
+	messages := numberedMessages(transcriptMessages)
+	facts := RenderBoundedBlackboard(assembler.runtime.Blackboard(), int(float64(assembler.policy.ContextWindow)*assembler.policy.BlackboardRatio))
+	compactor := NewContextCompactor(assembler.policy, surfaceStore, assembler.meter, assembler.summarizer)
+	pruned, prunes, activities, err := compactor.PreviewPrune(ctx, CompactionRequest{Surface: surface, Messages: messages, SystemPrompt: systemPrompt, Blackboard: facts.Text, Tools: tools})
+	if err != nil {
+		return agent.ModelStepInput{}, activities, err
+	}
+	if len(prunes) != 0 {
+		updated, err := surfaceStore.PruneTools(surface.Generation, prunes)
+		if err != nil {
+			return agent.ModelStepInput{}, activities, err
+		}
+		pruned = updated
+		activities = append(activities, agent.ContextActivity{Kind: agent.ContextOverflowRetry, Message: "Provider 报告上下文超限，已裁剪工具结果后继续压缩。"})
+	}
+	if assembler.summarizer == nil {
+		return agent.ModelStepInput{}, append(activities, agent.ContextActivity{Kind: agent.ContextOverflowRetry, Message: "Provider 报告上下文超限，但没有可用 checkpoint summarizer。"}), ErrContextPreflight
+	}
+	checkpointed, checkpointActivities, err := compactor.CheckpointWithValidator(ctx, CompactionRequest{Surface: pruned, Messages: messages, SystemPrompt: systemPrompt, Blackboard: facts.Text, Tools: tools}, func(candidate agent.ContextSurface) error {
+		candidateInput, materializeErr := assembler.materialize(sessionID, systemPrompt, tools, facts.Text, candidate, messages)
+		if materializeErr != nil {
+			return materializeErr
+		}
+		if measurement := assembler.meter.Measure(contextRequestFromInput(candidateInput)); measurement.TotalTokens >= contextThreshold(assembler.policy) {
+			return ErrContextPreflight
+		}
+		return nil
+	})
+	activities = append(activities, checkpointActivities...)
+	if err != nil {
+		return agent.ModelStepInput{}, append(activities, rejectedContextActivity(err.Error())), err
+	}
+	activities = append(activities, agent.ContextActivity{Kind: agent.ContextOverflowRetry, Message: "Provider 报告上下文超限，已创建 checkpoint 后重试。"})
+	input, err := assembler.materialize(sessionID, systemPrompt, tools, facts.Text, checkpointed, messages)
+	return input, activities, err
+}
+
 func (assembler *ContextAssembler) Prepare(ctx context.Context, sessionID, systemPrompt string, tools []agent.Tool) (agent.ModelStepInput, []agent.ContextActivity, error) {
 	if assembler == nil || assembler.runtime == nil {
 		return agent.ModelStepInput{}, nil, fmt.Errorf("context assembler dependencies are incomplete")

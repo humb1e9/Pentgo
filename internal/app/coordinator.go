@@ -219,27 +219,17 @@ func (coordinator *Coordinator) openStore(ctx context.Context, store *storage.Pr
 	}
 	service := NewTurnService(nil, store, nil)
 	service.SetClock(coordinator.deps.Clock)
-	service.SetEngineFactory(func(runContext context.Context, _ *domain.Session, runtime *ProjectRuntime) (agent.ModelEngine, error) {
+	service.SetMaxRequests(coordinator.cfg.Agent.MaxTurns)
+	service.SetSystemPrompt(llm.BaseSystemPrompt())
+	service.SetEngineFactory(func(runContext context.Context, _ *domain.Session, runtime *ProjectRuntime) (agent.ModelStepper, error) {
 		chatModel, err := coordinator.deps.NewModel(runContext, coordinator.cfg.Agent)
 		if err != nil {
 			return nil, err
 		}
-		engine, err := llm.NewEngine(runContext, chatModel, nil, runtime.Workspace(), func(_ context.Context, name string, arguments map[string]any, success bool, output string) (string, error) {
-			if !success {
-				output = "工具调用失败：" + output
-			}
-			record, recordErr := runtime.Evidence().RecordResult(context.Background(), name, arguments, success, output)
-			if recordErr != nil {
-				return "", recordErr
-			}
-			return record.Output, nil
-		})
-		if err != nil {
-			return nil, err
-		}
-		engine.SetMaxIterations(coordinator.cfg.Agent.MaxTurns)
-		return engine, nil
+		return llm.NewEngine(runContext, chatModel, nil)
 	})
+	checkpointSummarizer := NewModelCheckpointSummarizer(coordinator.deps.NewModel, coordinator.cfg.Agent)
+	service.SetContextAssembler(NewContextAssembler(projectRuntime, coordinator.cfg.Agent.Context, NewContextMeter(), checkpointSummarizer))
 	var loadSkill SkillLoader
 	if coordinator.skillAvailable && coordinator.skills != nil {
 		loadSkill = coordinator.skills.Load

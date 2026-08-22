@@ -57,7 +57,7 @@ func (provider *runtimeToolProvider) Tools(context.Context) ([]agent.Tool, error
 			return nil, fmt.Errorf("tool name collision: %s", projectTool.Name())
 		}
 		seen[projectTool.Name()] = true
-		tools = append(tools, &evidenceTool{runtime: provider.runtime, inner: projectTool})
+		tools = append(tools, projectTool)
 	}
 	return tools, nil
 }
@@ -119,47 +119,6 @@ func (tool *loadSkillTool) Invoke(_ context.Context, arguments map[string]any) (
 		return "skill rejected: " + err.Error(), nil
 	}
 	return "=== 技能正文开始 ===\n技能：" + name + "\n" + content + "\n=== 技能正文结束 ===", nil
-}
-
-// evidenceTool 在将 Provider 输出返回给模型前记录证据。
-// 通过项目持有的统一装饰器维护证据顺序。
-type evidenceTool struct {
-	runtime *ProjectRuntime
-	inner   agent.Tool
-}
-
-// Name 保留底层外部工具标识。
-func (tool *evidenceTool) Name() string { return tool.inner.Name() }
-
-// Description 保留底层外部工具描述。
-func (tool *evidenceTool) Description() string { return tool.inner.Description() }
-
-// InputSchema 保留外部工具可选的 Provider 专属 Schema。
-func (tool *evidenceTool) InputSchema() map[string]any {
-	if provider, ok := tool.inner.(agent.ToolSchemaProvider); ok {
-		return provider.InputSchema()
-	}
-	return nil
-}
-
-// Invoke 执行被包装的工具，并在模型看到结果前持久化成功或失败信息。工具调用结束后，
-// journal 使用后台 context 写入，避免取消请求抹除已完成的证据。
-func (tool *evidenceTool) Invoke(ctx context.Context, arguments map[string]any) (string, error) {
-	output, invokeErr := tool.inner.Invoke(ctx, arguments)
-	success := invokeErr == nil
-	if invokeErr != nil {
-		if strings.TrimSpace(output) == "" {
-			output = "工具调用失败：" + invokeErr.Error()
-		} else {
-			output = "工具调用失败：" + invokeErr.Error() + "\n" + output
-		}
-	}
-	// 即使底层工具返回后请求 context 被取消，仍要持久化结果；证据 journal 是持久化审计链路。
-	record, recordErr := tool.runtime.Evidence().RecordResult(context.Background(), tool.inner.Name(), arguments, success, output)
-	if recordErr != nil {
-		return "", recordErr
-	}
-	return record.Output, nil
 }
 
 // stringValue 从工具参数中安全读取经 Trim 的字符串属性。

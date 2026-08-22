@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,65 +11,86 @@ import (
 
 	"pentgo/internal/adapters/storage"
 	"pentgo/internal/agent"
+	"pentgo/internal/config"
 	"pentgo/internal/domain"
 )
 
-// EngineFactory 为一个会话 turn 创建新的模型引擎。运行时提供全部项目级依赖，
-// 因此引擎本身保持无状态。
-type EngineFactory func(context.Context, *domain.Session, *ProjectRuntime) (agent.ModelEngine, error)
+// StepperFactory creates a stateless single-request model stepper for a turn.
+type StepperFactory func(context.Context, *domain.Session, *ProjectRuntime) (agent.ModelStepper, error)
 
-// TurnService 编排一次可持久化的模型 turn：写入用户消息、执行模型、追加每条输出消息，
-// 最后发布进度事件。
+// EngineFactory is retained as the public construction seam while the host
+// owns iteration, tool invocation, persistence, and retry behavior.
+type EngineFactory = StepperFactory
+
 type TurnService struct {
 	configMu        sync.RWMutex
-	engine          agent.ModelEngine
-	engineFactory   EngineFactory
+	stepper         agent.ModelStepper
+	stepperFactory  StepperFactory
 	store           *storage.ProjectStore
 	tools           agent.ToolProvider
 	loadSkill       SkillLoader
 	skillsAvailable bool
 	now             func() time.Time
+	maxRequests     int
+	systemPrompt    string
+	assembler       ContextPreparer
 }
 
-// NewTurnService 使用可选的固定测试依赖创建服务。生产环境通常由 EngineFactory
-// 为每次 turn 构造新的引擎。
-func NewTurnService(engine agent.ModelEngine, store *storage.ProjectStore, tools agent.ToolProvider) *TurnService {
-	return &TurnService{engine: engine, store: store, tools: tools, now: func() time.Time { return time.Now().UTC() }}
+func NewTurnService(stepper agent.ModelStepper, store *storage.ProjectStore, tools agent.ToolProvider) *TurnService {
+	return &TurnService{stepper: stepper, store: store, tools: tools, now: func() time.Time { return time.Now().UTC() }, maxRequests: 20}
 }
 
-// SetEngineFactory 配置按 turn 延迟构造模型引擎的工厂。
-func (service *TurnService) SetEngineFactory(factory EngineFactory) {
+func (service *TurnService) SetEngineFactory(factory StepperFactory) {
 	if service != nil {
 		service.configMu.Lock()
-		defer service.configMu.Unlock()
-		service.engineFactory = factory
+		service.stepperFactory = factory
+		service.configMu.Unlock()
 	}
 }
-
-// SetSkillCatalog configures the process-start discovered skill loader for later turns.
 func (service *TurnService) SetSkillCatalog(load SkillLoader, available bool) {
 	if service == nil {
 		return
 	}
 	service.configMu.Lock()
-	defer service.configMu.Unlock()
 	service.loadSkill = load
 	service.skillsAvailable = available
+	service.configMu.Unlock()
 }
-
-// SetClock 替换时钟，供编排逻辑进行确定性测试。
 func (service *TurnService) SetClock(clock func() time.Time) {
 	if service != nil && clock != nil {
 		service.configMu.Lock()
-		defer service.configMu.Unlock()
 		service.now = clock
+		service.configMu.Unlock()
+	}
+}
+func (service *TurnService) SetMaxRequests(max int) {
+	if service != nil && max > 0 {
+		service.configMu.Lock()
+		service.maxRequests = max
+		service.configMu.Unlock()
 	}
 }
 
-// RunTurn 从持久化输入执行一次用户请求，直至得到最终模型响应。它会在发布 UI 事件前
-// 持久化每条 transcript 消息，确保中断和回放看到完全一致的消息顺序。
-func (service *TurnService) RunTurn(ctx context.Context, projectRuntime *ProjectRuntime, session *domain.Session, message string) error {
-	if service == nil || projectRuntime == nil || session == nil {
+// SetSystemPrompt installs the fixed provider system envelope used for every
+// request and included in ContextAssembler preflight measurements.
+func (service *TurnService) SetSystemPrompt(prompt string) {
+	if service != nil {
+		service.configMu.Lock()
+		service.systemPrompt = strings.TrimSpace(prompt)
+		service.configMu.Unlock()
+	}
+}
+
+func (service *TurnService) SetContextAssembler(assembler ContextPreparer) {
+	if service != nil {
+		service.configMu.Lock()
+		service.assembler = assembler
+		service.configMu.Unlock()
+	}
+}
+
+func (service *TurnService) RunTurn(ctx context.Context, runtime *ProjectRuntime, session *domain.Session, message string) error {
+	if service == nil || runtime == nil || session == nil {
 		return fmt.Errorf("turn service dependencies are incomplete")
 	}
 	if ctx == nil {
@@ -78,12 +100,11 @@ func (service *TurnService) RunTurn(ctx context.Context, projectRuntime *Project
 	if message == "" {
 		return fmt.Errorf("user message is empty")
 	}
-	transcript := projectRuntime.Transcript(session.ID)
+	transcript := runtime.Transcript(session.ID)
 	if transcript == nil {
 		return fmt.Errorf("session transcript is unavailable")
 	}
-	now := service.currentTime()
-	turn, err := session.BeginTurn("", message, now)
+	turn, err := session.BeginTurn("", message, service.currentTime())
 	if err != nil {
 		return err
 	}
@@ -91,117 +112,318 @@ func (service *TurnService) RunTurn(ctx context.Context, projectRuntime *Project
 		session.AddTargets(targets...)
 	}
 	if err := transcript.Append(agent.Message{Role: agent.RoleUser, Content: message}); err != nil {
-		return service.finishError(projectRuntime, session, turn.ID, err, now)
+		return service.finishError(runtime, session, turn.ID, err, service.currentTime())
 	}
-	if err := service.persist(projectRuntime, session); err != nil {
-		return service.finishError(projectRuntime, session, turn.ID, err, now)
+	if err := service.persist(runtime, session); err != nil {
+		return service.finishError(runtime, session, turn.ID, err, service.currentTime())
 	}
-	projectRuntime.PublishSnapshot(session.ID)
-	projectRuntime.Emit(session.ID, Event{TurnID: turn.ID, Kind: EventTurnStarted, Message: message})
-
-	engine, err := service.resolveEngine(ctx, session, projectRuntime)
+	runtime.PublishSnapshot(session.ID)
+	runtime.Emit(session.ID, Event{TurnID: turn.ID, Kind: EventTurnStarted, Message: message})
+	stepper, err := service.resolveStepper(ctx, session, runtime)
 	if err != nil {
-		return service.finishError(projectRuntime, session, turn.ID, err, service.currentTime())
+		return service.finishError(runtime, session, turn.ID, err, service.currentTime())
 	}
-	externalTools, err := service.resolveTools(ctx, projectRuntime)
+	externalTools, err := service.resolveTools(ctx, runtime)
 	if err != nil {
-		return service.finishError(projectRuntime, session, turn.ID, err, service.currentTime())
+		return service.finishError(runtime, session, turn.ID, err, service.currentTime())
 	}
 	loadSkill, skillsAvailable := service.skillConfig()
-	toolProvider := newRuntimeToolProvider(projectRuntime, session, externalTools, loadSkill, skillsAvailable)
-	tools, err := toolProvider.Tools(ctx)
+	tools, err := newRuntimeToolProvider(runtime, session, externalTools, loadSkill, skillsAvailable).Tools(ctx)
 	if err != nil {
-		return service.finishError(projectRuntime, session, turn.ID, err, service.currentTime())
+		return service.finishError(runtime, session, turn.ID, err, service.currentTime())
 	}
-	events, err := engine.Run(ctx, agent.TurnInput{SessionID: session.ID, Messages: transcript.Messages(), Tools: tools, ProjectFacts: blackboardText(projectRuntime.Blackboard())})
-	if err != nil {
-		return service.finishError(projectRuntime, session, turn.ID, err, service.currentTime())
-	}
-	if events == nil {
-		return service.finishError(projectRuntime, session, turn.ID, fmt.Errorf("model engine returned nil event stream"), service.currentTime())
-	}
-	finalSummary := ""
-	for event := range events {
-		if ctx.Err() != nil {
-			return service.finishError(projectRuntime, session, turn.ID, ctx.Err(), service.currentTime())
+	assembler := service.contextAssembler(runtime)
+	systemPrompt := service.currentSystemPrompt()
+	maxRequests := service.requestLimit()
+	for request := 0; request < maxRequests; request++ {
+		input, activities, err := assembler.Prepare(ctx, session.ID, systemPrompt, tools)
+		for _, activity := range activities {
+			runtime.Emit(session.ID, Event{TurnID: turn.ID, Kind: EventContextActivity, Message: activity.Message, Data: activity})
 		}
-		if event.Err != nil || event.Kind == agent.TurnEventError {
-			if event.Err == nil {
-				event.Err = errors.New(event.Output)
+		if err != nil {
+			return service.finishError(runtime, session, turn.ID, err, service.currentTime())
+		}
+		var final *agent.Message
+		overflowRecovered := false
+		for {
+			stream, stepErr := stepper.StreamStep(ctx, input)
+			if stepErr != nil {
+				if errors.Is(stepErr, agent.ErrContextWindowExceeded) && !overflowRecovered {
+					overflowRecovered = true
+					input, activities, stepErr = assembler.PrepareOverflowRecovery(ctx, session.ID, systemPrompt, tools)
+					for _, activity := range activities {
+						runtime.Emit(session.ID, Event{TurnID: turn.ID, Kind: EventContextActivity, Message: activity.Message, Data: activity})
+					}
+					if stepErr == nil {
+						continue
+					}
+				}
+				if errors.Is(stepErr, agent.ErrContextWindowExceeded) && overflowRecovered {
+					return service.finishError(runtime, session, turn.ID, stepErr, service.currentTime())
+				}
+				return service.finishError(runtime, session, turn.ID, stepErr, service.currentTime())
 			}
-			return service.finishError(projectRuntime, session, turn.ID, event.Err, service.currentTime())
+			if stream == nil {
+				return service.finishError(runtime, session, turn.ID, fmt.Errorf("model step returned nil stream"), service.currentTime())
+			}
+			final, err = consumeModelStream(ctx, runtime, session.ID, turn.ID, stream)
+			if errors.Is(err, agent.ErrContextWindowExceeded) && !overflowRecovered {
+				overflowRecovered = true
+				input, activities, err = assembler.PrepareOverflowRecovery(ctx, session.ID, systemPrompt, tools)
+				for _, activity := range activities {
+					runtime.Emit(session.ID, Event{TurnID: turn.ID, Kind: EventContextActivity, Message: activity.Message, Data: activity})
+				}
+				if err == nil {
+					continue
+				}
+			}
+			if err != nil {
+				return service.finishError(runtime, session, turn.ID, err, service.currentTime())
+			}
+			break
 		}
-		if event.Message.Role == "" {
+		if final == nil {
+			return service.finishError(runtime, session, turn.ID, fmt.Errorf("model step ended without final message"), service.currentTime())
+		}
+		if len(final.ToolCalls) == 0 {
+			if strings.TrimSpace(final.Content) == "" {
+				return service.finishError(runtime, session, turn.ID, fmt.Errorf("model step ended without final assistant text"), service.currentTime())
+			}
+			if err := transcript.Append(*final); err != nil {
+				return service.finishError(runtime, session, turn.ID, err, service.currentTime())
+			}
+			if err := service.persist(runtime, session); err != nil {
+				return service.finishError(runtime, session, turn.ID, err, service.currentTime())
+			}
+			runtime.Emit(session.ID, Event{TurnID: turn.ID, Kind: EventAssistantMessage, Message: strings.TrimSpace(final.Content)})
+			if err := session.FinishTurn(turn.ID, strings.TrimSpace(final.Content), service.currentTime()); err != nil {
+				return err
+			}
+			if err := service.persist(runtime, session); err != nil {
+				return err
+			}
+			runtime.PublishSnapshot(session.ID)
+			runtime.Emit(session.ID, Event{TurnID: turn.ID, Kind: EventTurnFinished, Message: strings.TrimSpace(final.Content)})
+			return nil
+		}
+		if err := validateToolCalls(*final, tools); err != nil {
+			return service.finishError(runtime, session, turn.ID, err, service.currentTime())
+		}
+		if err := transcript.Append(*final); err != nil {
+			return service.finishError(runtime, session, turn.ID, err, service.currentTime())
+		}
+		if err := service.persist(runtime, session); err != nil {
+			return service.finishError(runtime, session, turn.ID, err, service.currentTime())
+		}
+		for _, call := range final.ToolCalls {
+			runtime.Emit(session.ID, Event{TurnID: turn.ID, Kind: EventToolStarted, Message: call.Name, Data: call})
+		}
+		results := invokeToolCalls(ctx, runtime, tools, final.ToolCalls)
+		for _, result := range results {
+			if err := transcript.Append(result.message); err != nil {
+				return service.finishError(runtime, session, turn.ID, err, service.currentTime())
+			}
+			if err := service.persist(runtime, session); err != nil {
+				return service.finishError(runtime, session, turn.ID, err, service.currentTime())
+			}
+			runtime.Emit(session.ID, Event{TurnID: turn.ID, Kind: EventToolFinished, Message: result.message.ToolName, Output: result.message.Content})
+			if result.err != nil && runtime.Evidence() == nil {
+				return service.finishError(runtime, session, turn.ID, result.err, service.currentTime())
+			}
+		}
+	}
+	return service.finishError(runtime, session, turn.ID, fmt.Errorf("maximum model requests exceeded"), service.currentTime())
+}
+
+func consumeModelStream(ctx context.Context, runtime *ProjectRuntime, sessionID, turnID string, stream <-chan agent.ModelStreamEvent) (*agent.Message, error) {
+	var final *agent.Message
+	for event := range stream {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if final != nil {
+			if event.Err != nil {
+				return nil, fmt.Errorf("model step emitted error after final message: %w", event.Err)
+			}
+			if event.Final != nil {
+				return nil, fmt.Errorf("model step emitted multiple final messages")
+			}
+			if event.Delta.Role != "" || event.Delta.Content != "" || len(event.Delta.ToolCalls) != 0 {
+				return nil, fmt.Errorf("model step emitted output after final message")
+			}
 			continue
 		}
-		if err := transcript.Append(event.Message); err != nil {
-			return service.finishError(projectRuntime, session, turn.ID, err, service.currentTime())
+		if event.Err != nil {
+			return nil, event.Err
 		}
-		if event.Message.Role == agent.RoleAssistant {
-			for _, call := range event.Message.ToolCalls {
-				projectRuntime.Emit(session.ID, Event{TurnID: turn.ID, Kind: EventToolStarted, Message: call.Name, Data: call})
+		if event.Delta.Role != "" || event.Delta.Content != "" || len(event.Delta.ToolCalls) != 0 {
+			runtime.Emit(sessionID, Event{TurnID: turnID, Kind: EventAssistantDelta, Message: event.Delta.Content, Data: event.Delta})
+		}
+		if event.Final != nil {
+			copy := *event.Final
+			final = &copy
+		}
+	}
+	return final, nil
+}
+
+type toolResult struct {
+	message agent.Message
+	err     error
+}
+
+func invokeToolCalls(ctx context.Context, runtime *ProjectRuntime, tools []agent.Tool, calls []agent.ToolCall) []toolResult {
+	lookup := make(map[string]agent.Tool, len(tools))
+	for _, tool := range tools {
+		lookup[tool.Name()] = tool
+	}
+	results := make([]toolResult, len(calls))
+	var wg sync.WaitGroup
+	for index, call := range calls {
+		index, call := index, call
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			tool := lookup[call.Name]
+			if tool == nil {
+				results[index] = toolResult{message: agent.Message{Role: agent.RoleTool, ToolCallID: call.ID, ToolName: call.Name, Content: "tool not found"}, err: fmt.Errorf("tool %q is not available", call.Name)}
+				return
 			}
-			if len(event.Message.ToolCalls) == 0 {
-				finalSummary = strings.TrimSpace(event.Message.Content)
-				projectRuntime.Emit(session.ID, Event{TurnID: turn.ID, Kind: EventAssistantMessage, Message: finalSummary})
+			arguments := cloneToolArguments(call.Arguments)
+			if strings.TrimSpace(call.RawArguments) != "" {
+				var parsed map[string]any
+				if err := json.Unmarshal([]byte(call.RawArguments), &parsed); err == nil {
+					arguments = parsed
+				}
 			}
-		} else if event.Message.Role == agent.RoleTool {
-			projectRuntime.Emit(session.ID, Event{TurnID: turn.ID, Kind: EventToolFinished, Message: event.Message.ToolName, Output: event.Message.Content})
+			output, invokeErr := tool.Invoke(ctx, arguments)
+			decorated, recordErr := recordToolResult(runtime, call.Name, arguments, output, invokeErr)
+			if recordErr != nil {
+				results[index] = toolResult{message: agent.Message{Role: agent.RoleTool, ToolCallID: call.ID, ToolName: call.Name, ToolArguments: arguments, Content: decorated}, err: recordErr}
+				return
+			}
+			results[index] = toolResult{message: agent.Message{Role: agent.RoleTool, ToolCallID: call.ID, ToolName: call.Name, ToolArguments: arguments, Content: decorated}, err: nil}
+		}()
+	}
+	wg.Wait()
+	return results
+}
+
+func recordToolResult(runtime *ProjectRuntime, name string, arguments map[string]any, output string, invokeErr error) (string, error) {
+	if invokeErr != nil {
+		if strings.TrimSpace(output) == "" {
+			output = "工具调用失败：" + invokeErr.Error()
+		} else {
+			output = "工具调用失败：" + invokeErr.Error() + "\n" + output
 		}
-		if err := service.persist(projectRuntime, session); err != nil {
-			return service.finishError(projectRuntime, session, turn.ID, err, service.currentTime())
+	}
+	if runtime == nil || runtime.Evidence() == nil {
+		return output, invokeErr
+	}
+	record, err := runtime.Evidence().RecordResult(context.Background(), name, arguments, invokeErr == nil, output)
+	if err != nil {
+		return "", err
+	}
+	return record.Output, nil
+}
+
+func cloneToolArguments(arguments map[string]any) map[string]any {
+	if arguments == nil {
+		return nil
+	}
+	cloned := make(map[string]any, len(arguments))
+	for key, value := range arguments {
+		cloned[key] = cloneToolValue(value)
+	}
+	return cloned
+}
+
+func cloneToolValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return cloneToolArguments(typed)
+	case []any:
+		items := make([]any, len(typed))
+		for index, item := range typed {
+			items[index] = cloneToolValue(item)
 		}
-		projectRuntime.PublishSnapshot(session.ID)
+		return items
+	default:
+		return value
 	}
-	if strings.TrimSpace(finalSummary) == "" {
-		if ctx.Err() != nil {
-			return service.finishError(projectRuntime, session, turn.ID, ctx.Err(), service.currentTime())
+}
+func validateToolCalls(message agent.Message, tools []agent.Tool) error {
+	names := make(map[string]bool, len(tools))
+	for _, tool := range tools {
+		names[tool.Name()] = true
+	}
+	ids := make(map[string]bool, len(message.ToolCalls))
+	for _, call := range message.ToolCalls {
+		if strings.TrimSpace(call.ID) == "" || ids[call.ID] {
+			return fmt.Errorf("invalid model tool call id: %s", call.ID)
 		}
-		return service.finishError(projectRuntime, session, turn.ID, fmt.Errorf("model engine ended without a final assistant message"), service.currentTime())
+		if strings.TrimSpace(call.Name) == "" || !names[call.Name] {
+			return fmt.Errorf("invalid model tool call: %s", call.Name)
+		}
+		if strings.TrimSpace(call.RawArguments) != "" {
+			var object map[string]any
+			if err := json.Unmarshal([]byte(call.RawArguments), &object); err != nil || object == nil {
+				return fmt.Errorf("invalid arguments for tool %s", call.Name)
+			}
+		}
+		ids[call.ID] = true
 	}
-	if err := session.FinishTurn(turn.ID, finalSummary, service.currentTime()); err != nil {
-		return err
-	}
-	if err := service.persist(projectRuntime, session); err != nil {
-		return err
-	}
-	projectRuntime.PublishSnapshot(session.ID)
-	projectRuntime.Emit(session.ID, Event{TurnID: turn.ID, Kind: EventTurnFinished, Message: finalSummary})
 	return nil
 }
 
-// resolveEngine 测试时优先使用固定引擎，否则创建不保留历史会话状态的新适配器。
-func (service *TurnService) resolveEngine(ctx context.Context, session *domain.Session, projectRuntime *ProjectRuntime) (agent.ModelEngine, error) {
+func (service *TurnService) resolveStepper(ctx context.Context, session *domain.Session, runtime *ProjectRuntime) (agent.ModelStepper, error) {
 	service.configMu.RLock()
-	engine, factory := service.engine, service.engineFactory
+	stepper, factory := service.stepper, service.stepperFactory
 	service.configMu.RUnlock()
-	if engine != nil {
-		return engine, nil
+	if stepper != nil {
+		return stepper, nil
 	}
 	if factory == nil {
-		return nil, fmt.Errorf("model engine is not configured")
+		return nil, fmt.Errorf("model stepper is not configured")
 	}
-	return factory(ctx, session, projectRuntime)
+	return factory(ctx, session, runtime)
 }
-
-// resolveTools 允许测试注入工具；生产环境使用项目运行时持有的 MCP 工具。
-func (service *TurnService) resolveTools(ctx context.Context, projectRuntime *ProjectRuntime) ([]agent.Tool, error) {
+func (service *TurnService) resolveTools(ctx context.Context, runtime *ProjectRuntime) ([]agent.Tool, error) {
 	if service.tools != nil {
 		return service.tools.Tools(ctx)
 	}
-	return projectRuntime.Tools(ctx)
+	return runtime.Tools(ctx)
+}
+func (service *TurnService) contextAssembler(runtime *ProjectRuntime) ContextPreparer {
+	service.configMu.RLock()
+	configured := service.assembler
+	service.configMu.RUnlock()
+	if configured != nil {
+		return configured
+	}
+	return NewContextAssembler(runtime, config.AgentContextConfig{}, NewContextMeter(), nil)
+}
+func (service *TurnService) currentSystemPrompt() string {
+	service.configMu.RLock()
+	defer service.configMu.RUnlock()
+	return service.systemPrompt
 }
 
-// persist 优先使用项目事务；未构造完整运行时的单元测试仍可走独立存储路径。
-func (service *TurnService) persist(projectRuntime *ProjectRuntime, session *domain.Session) error {
-	if projectRuntime.Store() == nil && service.store != nil {
+func (service *TurnService) requestLimit() int {
+	service.configMu.RLock()
+	defer service.configMu.RUnlock()
+	if service.maxRequests > 0 {
+		return service.maxRequests
+	}
+	return 20
+}
+func (service *TurnService) persist(runtime *ProjectRuntime, session *domain.Session) error {
+	if runtime.Store() == nil && service.store != nil {
 		return service.store.SaveSession(session)
 	}
-	return projectRuntime.PersistState(session)
+	return runtime.PersistState(session)
 }
-
-// finishError 在向 SessionWorker 返回原始执行错误前，先持久化中断或失败的 turn。
-func (service *TurnService) finishError(projectRuntime *ProjectRuntime, session *domain.Session, turnID string, turnErr error, finishedAt time.Time) error {
+func (service *TurnService) finishError(runtime *ProjectRuntime, session *domain.Session, turnID string, turnErr error, finishedAt time.Time) error {
 	if session.ActiveTurn != nil && session.ActiveTurn.ID == turnID && session.ActiveTurn.Status == domain.TurnRunning {
 		if errors.Is(turnErr, context.Canceled) || errors.Is(turnErr, context.DeadlineExceeded) {
 			_ = session.InterruptTurn(turnID, turnErr.Error(), finishedAt)
@@ -209,23 +431,18 @@ func (service *TurnService) finishError(projectRuntime *ProjectRuntime, session 
 			_ = session.FailTurn(turnID, turnErr.Error(), finishedAt)
 		}
 	}
-	if persistErr := service.persist(projectRuntime, session); persistErr != nil {
+	if persistErr := service.persist(runtime, session); persistErr != nil {
 		return fmt.Errorf("%v; persist turn: %w", turnErr, persistErr)
 	}
-	projectRuntime.PublishSnapshot(session.ID)
+	runtime.PublishSnapshot(session.ID)
 	if errors.Is(turnErr, context.Canceled) || errors.Is(turnErr, context.DeadlineExceeded) {
-		projectRuntime.Emit(session.ID, Event{TurnID: turnID, Kind: EventTurnFinished, Message: "turn interrupted"})
+		runtime.Emit(session.ID, Event{TurnID: turnID, Kind: EventTurnFinished, Message: "turn interrupted"})
 	} else {
-		projectRuntime.Emit(session.ID, Event{TurnID: turnID, Kind: EventTurnFailed, Message: turnErr.Error()})
+		runtime.Emit(session.ID, Event{TurnID: turnID, Kind: EventTurnFailed, Message: turnErr.Error()})
 	}
 	return turnErr
 }
-
-// currentTime 从配置时钟获取规范化的 UTC 时间。
 func (service *TurnService) currentTime() time.Time {
-	if service == nil {
-		return time.Now().UTC()
-	}
 	service.configMu.RLock()
 	clock := service.now
 	service.configMu.RUnlock()
@@ -234,12 +451,7 @@ func (service *TurnService) currentTime() time.Time {
 	}
 	return clock().UTC()
 }
-
-// skillConfig returns a consistent snapshot of startup-discovered skill availability.
 func (service *TurnService) skillConfig() (SkillLoader, bool) {
-	if service == nil {
-		return nil, false
-	}
 	service.configMu.RLock()
 	defer service.configMu.RUnlock()
 	return service.loadSkill, service.skillsAvailable

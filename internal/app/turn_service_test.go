@@ -2,9 +2,10 @@ package app
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,41 +14,44 @@ import (
 	"pentgo/internal/domain"
 )
 
-// scriptedEngine 在不依赖模型 Provider 的情况下输出确定性事件序列。
-type scriptedEngine struct {
-	run func(context.Context, agent.TurnInput) []agent.TurnEvent
+// scriptedStepper emits deterministic events for host-controlled model steps
+// without depending on a model provider.
+type scriptedStepper struct {
+	stream func(context.Context, agent.ModelStepInput) []agent.ModelStreamEvent
 }
 
-func (engine scriptedEngine) Run(ctx context.Context, input agent.TurnInput) (<-chan agent.TurnEvent, error) {
-	events := make(chan agent.TurnEvent, 16)
+func (stepper scriptedStepper) StreamStep(ctx context.Context, input agent.ModelStepInput) (<-chan agent.ModelStreamEvent, error) {
+	events := make(chan agent.ModelStreamEvent, 16)
 	go func() {
 		defer close(events)
-		for _, event := range engine.run(ctx, input) {
-			select {
-			case events <- event:
-			case <-ctx.Done():
-				return
-			}
+		for _, event := range stepper.stream(ctx, input) {
+			events <- event
 		}
 	}()
 	return events, nil
 }
 
-// fixtureTool 表示一个外部工具，其应用层包装器必须在脚本化模型接收输出前记录证据。
-type fixtureTool struct{}
+// fixtureTool represents an external tool whose application wrapper must record
+// evidence when the host loop invokes it.
+type fixtureTool struct {
+	onInvoke func()
+}
 
 func (*fixtureTool) Name() string        { return "fixture_probe" }
 func (*fixtureTool) Description() string { return "执行一个本地 fixture 检查。" }
 func (*fixtureTool) InputSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{"value": map[string]any{"type": "string"}}}
 }
-func (*fixtureTool) Invoke(context.Context, map[string]any) (string, error) {
+func (tool *fixtureTool) Invoke(context.Context, map[string]any) (string, error) {
+	if tool.onInvoke != nil {
+		tool.onInvoke()
+	}
 	return "fixture result", nil
 }
 
-// newApplicationFixture 装配与生产环境相同的运行时、transcript 和工具边界，
-// 仅将模型替换为脚本化引擎。
-func newApplicationFixture(t *testing.T, engine agent.ModelEngine, external ...agent.Tool) (*ProjectRuntime, *domain.Session, *TurnService) {
+// newApplicationFixture assembles the same runtime, transcript, and tool
+// boundaries as production while replacing only the model stepper.
+func newApplicationFixture(t *testing.T, stepper agent.ModelStepper, external ...agent.Tool) (*ProjectRuntime, *domain.Session, *TurnService) {
 	t.Helper()
 	store, err := storage.CreateProjectStore(t.TempDir(), "fixture", time.Now().UTC())
 	if err != nil {
@@ -57,7 +61,7 @@ func newApplicationFixture(t *testing.T, engine agent.ModelEngine, external ...a
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := NewTurnService(engine, store, nil)
+	service := NewTurnService(stepper, store, nil)
 	if err := projectRuntime.SetTurnHandler(func(ctx context.Context, session *domain.Session, message string) error {
 		return service.RunTurn(ctx, projectRuntime, session, message)
 	}); err != nil {
@@ -75,26 +79,57 @@ type staticTools []agent.Tool
 
 func (tools staticTools) Tools(context.Context) ([]agent.Tool, error) { return tools, nil }
 
+type countingContextPreparer struct {
+	runtime         *ProjectRuntime
+	prepareCalls    int
+	overflowRetries int
+}
+
+func (preparer *countingContextPreparer) Prepare(_ context.Context, sessionID, systemPrompt string, tools []agent.Tool) (agent.ModelStepInput, []agent.ContextActivity, error) {
+	preparer.prepareCalls++
+	return agent.ModelStepInput{SessionID: sessionID, Messages: preparer.runtime.Transcript(sessionID).Messages(), SystemPrompt: systemPrompt, Tools: append([]agent.Tool(nil), tools...)}, nil, nil
+}
+
+func (preparer *countingContextPreparer) PrepareOverflowRecovery(_ context.Context, sessionID, systemPrompt string, tools []agent.Tool) (agent.ModelStepInput, []agent.ContextActivity, error) {
+	preparer.overflowRetries++
+	return agent.ModelStepInput{SessionID: sessionID, Messages: preparer.runtime.Transcript(sessionID).Messages(), SystemPrompt: systemPrompt, Tools: append([]agent.Tool(nil), tools...)}, []agent.ContextActivity{{Kind: agent.ContextOverflowRetry, Message: "recovered"}}, nil
+}
+
 func TestTurnPersistsUserToolAssistantMessages(t *testing.T) {
-	engine := scriptedEngine{run: func(_ context.Context, input agent.TurnInput) []agent.TurnEvent {
-		if len(input.Messages) != 1 || input.Messages[0].Role != agent.RoleUser {
-			return []agent.TurnEvent{{Kind: agent.TurnEventError, Err: fmt.Errorf("user message was not persisted first")}}
-		}
-		var output string
-		for _, tool := range input.Tools {
-			if tool.Name() == "fixture_probe" {
-				output, _ = tool.Invoke(context.Background(), map[string]any{"value": "TARGET"})
+	var mu sync.Mutex
+	var inputs []agent.ModelStepInput
+	stepper := scriptedStepper{stream: func(_ context.Context, input agent.ModelStepInput) []agent.ModelStreamEvent {
+		mu.Lock()
+		inputs = append(inputs, input)
+		step := len(inputs)
+		mu.Unlock()
+
+		switch step {
+		case 1:
+			if len(input.Messages) != 1 || input.Messages[0].Role != agent.RoleUser {
+				return []agent.ModelStreamEvent{{Err: context.Canceled}}
 			}
-		}
-		return []agent.TurnEvent{
-			{Kind: agent.TurnEventMessage, Message: agent.Message{Role: agent.RoleAssistant, ToolCalls: []agent.ToolCall{{ID: "call-1", Name: "fixture_probe", RawArguments: `{"value":"TARGET"}`}}}},
-			{Kind: agent.TurnEventMessage, Message: agent.Message{Role: agent.RoleTool, ToolCallID: "call-1", ToolName: "fixture_probe", Content: output}},
-			{Kind: agent.TurnEventMessage, Message: agent.Message{Role: agent.RoleAssistant, Content: "已完成检查"}},
+			return []agent.ModelStreamEvent{{
+				Delta: agent.Message{Role: agent.RoleAssistant, Content: "检查中"},
+				Final: &agent.Message{Role: agent.RoleAssistant, ToolCalls: []agent.ToolCall{{ID: "call-1", Name: "fixture_probe", Arguments: map[string]any{"value": "TARGET"}}}},
+			}}
+		case 2:
+			if len(input.Messages) != 3 || input.Messages[1].Role != agent.RoleAssistant || input.Messages[2].Role != agent.RoleTool || !strings.Contains(input.Messages[2].Content, "fixture result") {
+				return []agent.ModelStreamEvent{{Err: context.Canceled}}
+			}
+			return []agent.ModelStreamEvent{{Final: &agent.Message{Role: agent.RoleAssistant, Content: "已完成检查"}}}
+		default:
+			return []agent.ModelStreamEvent{{Err: context.Canceled}}
 		}
 	}}
-	projectRuntime, session, _ := newApplicationFixture(t, engine, &fixtureTool{})
+	projectRuntime, session, _ := newApplicationFixture(t, stepper, &fixtureTool{})
 	if err := <-projectRuntime.Submit(context.Background(), session.ID, "检查 TARGET"); err != nil {
 		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(inputs) != 2 {
+		t.Fatalf("model steps = %d, want 2", len(inputs))
 	}
 	messages := projectRuntime.Transcript(session.ID).Messages()
 	if len(messages) != 4 || messages[0].Role != agent.RoleUser || len(messages[1].ToolCalls) != 1 || messages[2].Role != agent.RoleTool || messages[3].Content != "已完成检查" {
@@ -118,11 +153,79 @@ func TestTurnPersistsUserToolAssistantMessages(t *testing.T) {
 	}
 }
 
-func TestTurnDoneLeavesSessionReusable(t *testing.T) {
-	engine := scriptedEngine{run: func(context.Context, agent.TurnInput) []agent.TurnEvent {
-		return []agent.TurnEvent{{Kind: agent.TurnEventMessage, Message: agent.Message{Role: agent.RoleAssistant, Content: "继续对话"}}}
+func TestOverflowRecoveryRetriesFailedRequestWithoutRepeatingTool(t *testing.T) {
+	var stepCalls, toolCalls int
+	stepper := scriptedStepper{stream: func(_ context.Context, input agent.ModelStepInput) []agent.ModelStreamEvent {
+		stepCalls++
+		switch stepCalls {
+		case 1:
+			return []agent.ModelStreamEvent{{Final: &agent.Message{Role: agent.RoleAssistant, ToolCalls: []agent.ToolCall{{ID: "call-1", Name: "fixture_probe", Arguments: map[string]any{"value": "once"}}}}}}
+		case 2:
+			return []agent.ModelStreamEvent{{Err: agent.ErrContextWindowExceeded}}
+		case 3:
+			return []agent.ModelStreamEvent{{Final: &agent.Message{Role: agent.RoleAssistant, Content: "recovered"}}}
+		default:
+			return []agent.ModelStreamEvent{{Err: errors.New("unexpected model request")}}
+		}
 	}}
-	projectRuntime, session, _ := newApplicationFixture(t, engine)
+	projectRuntime, session, service := newApplicationFixture(t, stepper, &fixtureTool{onInvoke: func() { toolCalls++ }})
+	preparer := &countingContextPreparer{runtime: projectRuntime}
+	service.SetContextAssembler(preparer)
+	if err := <-projectRuntime.Submit(context.Background(), session.ID, "recover once"); err != nil {
+		t.Fatal(err)
+	}
+	if stepCalls != 3 || toolCalls != 1 || preparer.prepareCalls != 2 || preparer.overflowRetries != 1 {
+		t.Fatalf("steps/tools/prepares/retries = %d/%d/%d/%d", stepCalls, toolCalls, preparer.prepareCalls, preparer.overflowRetries)
+	}
+	messages := projectRuntime.Transcript(session.ID).Messages()
+	if len(messages) != 4 || messages[1].Role != agent.RoleAssistant || messages[2].Role != agent.RoleTool || messages[3].Content != "recovered" {
+		t.Fatalf("transcript = %#v", messages)
+	}
+}
+
+func TestTurnRejectsMalformedRawToolArgumentsBeforePersistenceOrInvocation(t *testing.T) {
+	var invocations int
+	stepper := scriptedStepper{stream: func(context.Context, agent.ModelStepInput) []agent.ModelStreamEvent {
+		return []agent.ModelStreamEvent{{Final: &agent.Message{Role: agent.RoleAssistant, ToolCalls: []agent.ToolCall{{ID: "call-1", Name: "fixture_probe", RawArguments: `{"value":`}}}}}
+	}}
+	projectRuntime, session, _ := newApplicationFixture(t, stepper, &fixtureTool{onInvoke: func() { invocations++ }})
+	if err := <-projectRuntime.Submit(context.Background(), session.ID, "检查 malformed arguments"); err == nil {
+		t.Fatal("malformed tool arguments returned nil")
+	}
+	if invocations != 0 {
+		t.Fatalf("tool invocations = %d, want 0", invocations)
+	}
+	messages := projectRuntime.Transcript(session.ID).Messages()
+	if len(messages) != 1 || messages[0].Role != agent.RoleUser {
+		t.Fatalf("transcript = %#v, want only user message", messages)
+	}
+}
+
+func TestConsumeModelStreamRejectsOutputAfterFinal(t *testing.T) {
+	stream := make(chan agent.ModelStreamEvent, 2)
+	stream <- agent.ModelStreamEvent{Final: &agent.Message{Role: agent.RoleAssistant, Content: "complete"}}
+	stream <- agent.ModelStreamEvent{Delta: agent.Message{Role: agent.RoleAssistant, Content: "late"}}
+	close(stream)
+	if _, err := consumeModelStream(context.Background(), nil, "session", "turn", stream); err == nil || !strings.Contains(err.Error(), "after final") {
+		t.Fatalf("post-final output error = %v", err)
+	}
+}
+
+func TestConsumeModelStreamRejectsErrorAfterFinal(t *testing.T) {
+	stream := make(chan agent.ModelStreamEvent, 2)
+	stream <- agent.ModelStreamEvent{Final: &agent.Message{Role: agent.RoleAssistant, Content: "complete"}}
+	stream <- agent.ModelStreamEvent{Err: errors.New("late stream failure")}
+	close(stream)
+	if _, err := consumeModelStream(context.Background(), nil, "session", "turn", stream); err == nil || !strings.Contains(err.Error(), "after final") {
+		t.Fatalf("post-final error = %v", err)
+	}
+}
+
+func TestTurnDoneLeavesSessionReusable(t *testing.T) {
+	stepper := scriptedStepper{stream: func(context.Context, agent.ModelStepInput) []agent.ModelStreamEvent {
+		return []agent.ModelStreamEvent{{Final: &agent.Message{Role: agent.RoleAssistant, Content: "继续对话"}}}
+	}}
+	projectRuntime, session, _ := newApplicationFixture(t, stepper)
 	if err := <-projectRuntime.Submit(context.Background(), session.ID, "第一轮"); err != nil {
 		t.Fatal(err)
 	}
@@ -133,9 +236,7 @@ func TestTurnDoneLeavesSessionReusable(t *testing.T) {
 }
 
 func TestRuntimeToolsExposeAutomaticSkillLoaderWhenCatalogExists(t *testing.T) {
-	projectRuntime, session, _ := newApplicationFixture(t, scriptedEngine{run: func(context.Context, agent.TurnInput) []agent.TurnEvent {
-		return nil
-	}})
+	projectRuntime, session, _ := newApplicationFixture(t, scriptedStepper{})
 	loader := func(string) (string, error) { return "body", nil }
 	tools, err := newRuntimeToolProvider(projectRuntime, session, nil, loader, true).Tools(context.Background())
 	if err != nil {
@@ -153,9 +254,7 @@ func TestRuntimeToolsExposeAutomaticSkillLoaderWhenCatalogExists(t *testing.T) {
 }
 
 func TestRuntimeToolsExposeOnlyWriteProjectFact(t *testing.T) {
-	projectRuntime, session, _ := newApplicationFixture(t, scriptedEngine{run: func(context.Context, agent.TurnInput) []agent.TurnEvent {
-		return nil
-	}})
+	projectRuntime, session, _ := newApplicationFixture(t, scriptedStepper{})
 	tools, err := newRuntimeToolProvider(projectRuntime, session, nil, nil, false).Tools(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -181,18 +280,17 @@ func TestRuntimeToolsExposeOnlyWriteProjectFact(t *testing.T) {
 func TestCancelledTurnLeavesDurableEvidence(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
-	engine := scriptedEngine{run: func(ctx context.Context, input agent.TurnInput) []agent.TurnEvent {
-		for _, tool := range input.Tools {
-			if tool.Name() == "fixture_probe" {
-				_, _ = tool.Invoke(context.Background(), map[string]any{"value": "before-cancel"})
-			}
+	var once sync.Once
+	stepper := scriptedStepper{stream: func(ctx context.Context, input agent.ModelStepInput) []agent.ModelStreamEvent {
+		if len(input.Messages) == 1 {
+			return []agent.ModelStreamEvent{{Final: &agent.Message{Role: agent.RoleAssistant, ToolCalls: []agent.ToolCall{{ID: "call-1", Name: "fixture_probe", Arguments: map[string]any{"value": "before-cancel"}}}}}}
 		}
-		close(started)
 		<-release
-		return []agent.TurnEvent{{Kind: agent.TurnEventMessage, Message: agent.Message{Role: agent.RoleAssistant, Content: "不应成为完成消息"}}}
+		return []agent.ModelStreamEvent{{Final: &agent.Message{Role: agent.RoleAssistant, Content: "不应成为完成消息"}}}
 	}}
-	projectRuntime, session, _ := newApplicationFixture(t, engine, &fixtureTool{})
-	// 在工具返回后取消，验证证据能在后续 turn 中止后继续保留。
+	projectRuntime, session, _ := newApplicationFixture(t, stepper, &fixtureTool{onInvoke: func() { once.Do(func() { close(started) }) }})
+	// Cancel after the host has invoked the tool, so persisted evidence survives
+	// the subsequent interrupted model step.
 	requestContext, cancel := context.WithCancel(context.Background())
 	done := projectRuntime.Submit(requestContext, session.ID, "开始检查")
 	select {

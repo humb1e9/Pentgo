@@ -59,6 +59,7 @@ func TestLoadRejectsInvalidContextPolicy(t *testing.T) {
 		{name: "negative window", data: `{"agent":{"context":{"context_window":-1}}}`, want: "context_window"},
 		{name: "retain beyond threshold", data: `{"agent":{"context":{"context_window":1000,"threshold_ratio":0.8,"retain_ratio":0.8}}}`, want: "retain_ratio"},
 		{name: "unpaired checkpoint route", data: `{"agent":{"context":{"context_window":1000,"checkpoint_provider":"openai"}}}`, want: "checkpoint_provider and checkpoint_model"},
+		{name: "unsupported checkpoint provider", data: `{"agent":{"context":{"context_window":1000,"checkpoint_provider":"other","checkpoint_model":"summary"}}}`, want: "checkpoint_provider must be"},
 		{name: "tool result shape", data: `{"agent":{"context":{"context_window":1000,"tool_result_threshold_chars":10,"tool_result_head_chars":8,"tool_result_tail_chars":8}}}`, want: "tool result"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

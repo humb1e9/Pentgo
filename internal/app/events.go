@@ -17,6 +17,8 @@ const (
 	EventToolStarted      = "tool_started"
 	EventToolFinished     = "tool_finished"
 	EventAssistantMessage = "assistant_message"
+	EventAssistantDelta   = "assistant_delta"
+	EventContextActivity  = "context_activity"
 	EventTurnFinished     = "turn_finished"
 	EventTurnFailed       = "turn_failed"
 )

@@ -288,10 +288,13 @@ func selectCheckpointRange(meter ContextMeter, policy config.AgentContextConfig,
 	// pair. Move the split back until every pair is wholly kept or compacted.
 	for {
 		adjusted := false
-		for callIndex, resultIndex := range pairedToolNodeIndexes(request.Surface.Nodes, request.Messages) {
+		for callIndex, resultIndexes := range pairedToolNodeIndexes(request.Surface.Nodes, request.Messages) {
 			callKept := callIndex >= tailStart
-			resultKept := resultIndex >= tailStart
-			if callKept != resultKept {
+			for _, resultIndex := range resultIndexes {
+				resultKept := resultIndex >= tailStart
+				if callKept == resultKept {
+					continue
+				}
 				if callIndex < tailStart {
 					tailStart = callIndex
 				}
@@ -319,7 +322,7 @@ func measureNode(meter ContextMeter, node agent.SurfaceNode, messages map[int]ag
 	return meter.Measure(ContextRequest{Nodes: []agent.SurfaceNode{node}, Messages: messages}).SurfaceTokens
 }
 
-func pairedToolNodeIndexes(nodes []agent.SurfaceNode, messages map[int]agent.Message) map[int]int {
+func pairedToolNodeIndexes(nodes []agent.SurfaceNode, messages map[int]agent.Message) map[int][]int {
 	callIndexes := make(map[string]int)
 	for index, node := range nodes {
 		for _, call := range messages[node.SourceStartSeq].ToolCalls {
@@ -328,14 +331,14 @@ func pairedToolNodeIndexes(nodes []agent.SurfaceNode, messages map[int]agent.Mes
 			}
 		}
 	}
-	pairs := make(map[int]int)
+	pairs := make(map[int][]int)
 	for index, node := range nodes {
 		message := messages[node.SourceStartSeq]
 		if message.Role != agent.RoleTool || message.ToolCallID == "" {
 			continue
 		}
 		if callIndex, found := callIndexes[message.ToolCallID]; found {
-			pairs[callIndex] = index
+			pairs[callIndex] = append(pairs[callIndex], index)
 		}
 	}
 	return pairs

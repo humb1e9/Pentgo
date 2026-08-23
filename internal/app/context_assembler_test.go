@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"pentgo/internal/adapters/llm"
 	"pentgo/internal/adapters/storage"
 	"pentgo/internal/agent"
 	"pentgo/internal/config"
@@ -68,6 +69,24 @@ func TestAssemblerMeasuresBeforeEveryPrepareCall(t *testing.T) {
 	}
 }
 
+func TestContextRequestMeasuresExactProviderSystemEnvelope(t *testing.T) {
+	input := agent.ModelStepInput{
+		SystemPrompt:    "extra instruction",
+		ProjectFacts:    "<project-facts>fact</project-facts>",
+		SurfaceNodes:    []agent.SurfaceNode{{Kind: agent.SurfaceNodeSource, SourceStartSeq: 1, SourceEndSeq: 1}},
+		SurfaceMessages: map[int]agent.Message{1: {Role: agent.RoleUser, Content: "request"}},
+	}
+	request := contextRequestFromInput(input)
+	wantSystem := llm.SystemInstructionPrefix(input.SystemPrompt)
+	wantFacts := llm.ProjectFactsEnvelope(input.ProjectFacts)
+	if request.SystemPrompt != wantSystem || request.Blackboard != wantFacts {
+		t.Fatalf("context envelope = %#v, want system=%q facts=%q", request, wantSystem, wantFacts)
+	}
+	if got := llm.SystemPrompt(input.SystemPrompt, input.ProjectFacts); got != request.SystemPrompt+request.Blackboard {
+		t.Fatalf("provider prompt = %q, measured prompt = %q", got, request.SystemPrompt+request.Blackboard)
+	}
+}
+
 func TestAssemblerPrunesBeforeCheckpoint(t *testing.T) {
 	fixture := newAssemblerFixture(t)
 	defer fixture.close()
@@ -102,6 +121,74 @@ func TestAssemblerRejectsRequestWhenFixedEnvelopeExceedsThreshold(t *testing.T) 
 	_, activities, err := assembler.Prepare(context.Background(), fixture.session.ID, strings.Repeat("system ", 100), nil)
 	if !errors.Is(err, ErrContextPreflight) || len(activities) != 1 || activities[0].Kind != agent.ContextRequestRejected {
 		t.Fatalf("error/activities = %v/%#v", err, activities)
+	}
+}
+
+func TestOverflowRecoveryCommitsPruneWithoutCheckpointWhenItNowFits(t *testing.T) {
+	fixture := newAssemblerFixture(t)
+	defer fixture.close()
+	appendAssemblerMessages(t, fixture, []agent.Message{
+		{Role: agent.RoleUser, Content: "inspect"},
+		{Role: agent.RoleAssistant, ToolCalls: []agent.ToolCall{{ID: "call-1", Name: "probe"}}},
+		{Role: agent.RoleTool, ToolCallID: "call-1", ToolName: "probe", Content: strings.Repeat("tool-output ", 500)},
+	})
+	policy := config.AgentContextConfig{
+		ContextWindow:            1000,
+		ToolResultThresholdChars: 100,
+		ToolResultHeadChars:      20,
+		ToolResultTailChars:      20,
+	}.Effective()
+	summarizer := &checkpointSummarizerFixture{output: agent.CheckpointOutput{Text: "must not run"}}
+	assembler := NewContextAssembler(fixture.runtime, policy, NewContextMeter(), summarizer)
+	input, activities, err := assembler.PrepareOverflowRecovery(context.Background(), fixture.session.ID, "system", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summarizer.calls != 0 || !strings.Contains(input.Messages[2].Content, toolResultMiddleMarker) {
+		t.Fatalf("summarizer/input = %d/%#v", summarizer.calls, input)
+	}
+	if len(activities) != 2 || activities[0].Kind != agent.ContextToolPruned || activities[1].Kind != agent.ContextOverflowRetry {
+		t.Fatalf("activities = %#v", activities)
+	}
+	snapshot, err := fixture.runtime.ContextSurface(fixture.session.ID).Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Nodes[2].Kind != agent.SurfaceNodePrunedTool {
+		t.Fatalf("surface = %#v", snapshot)
+	}
+}
+
+func TestOverflowRecoveryLeavesSurfaceUnchangedWhenCheckpointFails(t *testing.T) {
+	fixture := newAssemblerFixture(t)
+	defer fixture.close()
+	appendAssemblerMessages(t, fixture, []agent.Message{
+		{Role: agent.RoleUser, Content: strings.Repeat("old context ", 500)},
+		{Role: agent.RoleAssistant, ToolCalls: []agent.ToolCall{{ID: "call-1", Name: "probe"}}},
+		{Role: agent.RoleTool, ToolCallID: "call-1", ToolName: "probe", Content: strings.Repeat("tool-output ", 500)},
+		{Role: agent.RoleAssistant, Content: "recent"},
+	})
+	policy := config.AgentContextConfig{
+		ContextWindow:            1000,
+		ToolResultThresholdChars: 100,
+		ToolResultHeadChars:      20,
+		ToolResultTailChars:      20,
+	}.Effective()
+	surfaceStore := fixture.runtime.ContextSurface(fixture.session.ID)
+	before, err := surfaceStore.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assembler := NewContextAssembler(fixture.runtime, policy, NewContextMeter(), &checkpointSummarizerFixture{err: errors.New("summary failed")})
+	if _, _, err := assembler.PrepareOverflowRecovery(context.Background(), fixture.session.ID, "system", nil); err == nil {
+		t.Fatal("overflow recovery succeeded despite checkpoint failure")
+	}
+	after, err := surfaceStore.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sameSurface(before, after) {
+		t.Fatalf("surface changed after failed recovery checkpoint: before=%#v after=%#v", before, after)
 	}
 }
 

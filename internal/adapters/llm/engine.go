@@ -10,6 +10,7 @@ import (
 
 	"pentgo/internal/agent"
 
+	"github.com/anthropics/anthropic-sdk-go"
 	einoopenai "github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
@@ -65,11 +66,15 @@ func (engine *Engine) StreamStep(ctx context.Context, input agent.ModelStepInput
 		}
 	}
 
+	options := make([]model.Option, 0, 1)
+	if input.MaxOutputTokens > 0 {
+		options = append(options, model.WithMaxTokens(input.MaxOutputTokens))
+	}
 	instruction := SystemPrompt(input.SystemPrompt, input.ProjectFacts)
 	messages := make([]*schema.Message, 0, len(input.Messages)+1)
 	messages = append(messages, schema.SystemMessage(instruction))
 	messages = append(messages, toSchemaMessages(input.Messages)...)
-	reader, err := bound.Stream(ctx, messages)
+	reader, err := bound.Stream(ctx, messages, options...)
 	if err != nil {
 		return nil, normalizeContextWindowError(err)
 	}
@@ -114,7 +119,11 @@ func (engine *Engine) StreamStep(ctx context.Context, input agent.ModelStepInput
 			return
 		}
 		final := fromSchemaMessage(complete)
-		sendStreamEvent(ctx, output, agent.ModelStreamEvent{Final: &final})
+		finishReason := ""
+		if complete.ResponseMeta != nil {
+			finishReason = complete.ResponseMeta.FinishReason
+		}
+		sendStreamEvent(ctx, output, agent.ModelStreamEvent{Final: &final, FinishReason: finishReason})
 	}()
 	return output, nil
 }
@@ -139,7 +148,31 @@ func normalizeContextWindowError(err error) error {
 	if errors.As(err, &apiErr) && apiErr != nil && (isContextWindowCode(apiErr.Code) || isContextWindowCode(apiErr.Type)) {
 		return fmt.Errorf("%w: %v", agent.ErrContextWindowExceeded, err)
 	}
+	if isAnthropicContextWindowError(err) {
+		return fmt.Errorf("%w: %v", agent.ErrContextWindowExceeded, err)
+	}
 	return err
+}
+
+// isAnthropicContextWindowError recognizes only an error produced by the
+// Anthropic SDK, with its invalid-request type and documented prompt-limit
+// diagnostic. Arbitrary RawJSON providers and configuration errors never enter
+// the retry path.
+func isAnthropicContextWindowError(err error) bool {
+	var apiErr *anthropic.Error
+	if !errors.As(err, &apiErr) || apiErr == nil || apiErr.Type() != anthropic.ErrorTypeInvalidRequestError {
+		return false
+	}
+	var envelope struct {
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(apiErr.RawJSON()), &envelope) != nil || envelope.Error.Type != "invalid_request_error" {
+		return false
+	}
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(envelope.Error.Message)), "prompt is too long:")
 }
 
 func isContextWindowCode(value any) bool {

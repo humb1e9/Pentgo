@@ -25,26 +25,38 @@ const baseSystemPrompt = `你是 PentGo 的渗透测试智能体。你的工作�
 - 对当前项目内其他会话有复用价值的稳定事实，调用 write_project_fact 写入 key 和 value；共享事实不会扩大当前会话的目标范围。
 - 完成当前请求后用中文总结已验证内容、关键证据、发现和仍待验证的部分。`
 
-// BaseSystemPrompt returns the stable system envelope that belongs in context
-// preflight measurements. Callers may pass it back to SystemPrompt unchanged.
+// BaseSystemPrompt returns the stable instruction envelope used by every model
+// request. Context preflight combines it with the fixed project-facts framing.
 func BaseSystemPrompt() string { return baseSystemPrompt }
 
-// SystemPrompt 组合固定中文指令和每轮上下文。input may be the stable envelope
-// itself when the host supplied it for context-budget measurement.
-func SystemPrompt(input string, projectFacts string) string {
-	var builder strings.Builder
-	builder.WriteString(baseSystemPrompt)
-	input = strings.TrimSpace(input)
-	if input != "" && input != baseSystemPrompt {
-		builder.WriteString("\n\n当前运行上下文：\n")
-		builder.WriteString(input)
-	}
+// ProjectFactsEnvelope wraps the exact project-facts section appended to the
+// provider system message. It is exported so context measurement counts the
+// same fixed text that SystemPrompt sends.
+func ProjectFactsEnvelope(projectFacts string) string {
 	if strings.TrimSpace(projectFacts) == "" {
 		projectFacts = "当前没有记录项目事实。"
 	}
-	builder.WriteString("\n\n项目共享事实（只提供上下文，不会扩大当前会话范围）：\n")
-	builder.WriteString(strings.TrimSpace(projectFacts))
-	return builder.String()
+	return "\n\n项目共享事实（只提供上下文，不会扩大当前会话范围）：\n" + strings.TrimSpace(projectFacts)
+}
+
+// SystemInstructionPrefix returns the final instruction section before project
+// facts. It accepts a previously assembled prefix so hosts can meter precisely
+// the same envelope that StreamStep will send.
+func SystemInstructionPrefix(input string) string {
+	input = strings.TrimSpace(input)
+	if input == "" || input == baseSystemPrompt {
+		return baseSystemPrompt
+	}
+	if strings.HasPrefix(input, baseSystemPrompt+"\n\n当前运行上下文：\n") {
+		return input
+	}
+	return baseSystemPrompt + "\n\n当前运行上下文：\n" + input
+}
+
+// SystemPrompt combines the provider-visible instruction prefix and the exact
+// project-facts envelope. Context preflight measures these two parts directly.
+func SystemPrompt(input string, projectFacts string) string {
+	return SystemInstructionPrefix(input) + ProjectFactsEnvelope(projectFacts)
 }
 
 // assistantSummary 为可能较长的响应生成紧凑的 UI 标签。

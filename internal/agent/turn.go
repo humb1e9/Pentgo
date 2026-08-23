@@ -45,6 +45,7 @@ type ModelStepInput struct {
 	ProjectFacts    string
 	Tools           []Tool
 	ContextWindow   int
+	MaxOutputTokens int
 	SurfaceNodes    []SurfaceNode
 	SurfaceMessages map[int]Message
 }
@@ -52,11 +53,14 @@ type ModelStepInput struct {
 // ModelStreamEvent is one event from a single provider request. Delta events
 // are UI-only partial output. Exactly one event has Final set after the adapter
 // has assembled every provider chunk; callers must not persist or execute a
-// partial Delta. Err transports asynchronous stream failures.
+// partial Delta. FinishReason preserves the provider completion reason for
+// final-only consumers such as checkpoint summarizers. Err transports
+// asynchronous stream failures.
 type ModelStreamEvent struct {
-	Delta Message
-	Final *Message
-	Err   error
+	Delta        Message
+	Final        *Message
+	FinishReason string
+	Err          error
 }
 
 // ErrContextWindowExceeded identifies a provider-confirmed context-window

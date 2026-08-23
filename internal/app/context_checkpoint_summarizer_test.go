@@ -1,12 +1,42 @@
 package app
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"pentgo/internal/agent"
 	"pentgo/internal/config"
+
+	"github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/schema"
 )
+
+func TestModelCheckpointSummarizerPreservesProviderTruncation(t *testing.T) {
+	fixture := &coordinatorModel{messages: []*schema.Message{{Role: schema.Assistant, Content: "partial summary", ResponseMeta: &schema.ResponseMeta{FinishReason: "length"}}}}
+	configuration := config.Default().Agent
+	summarizer := NewModelCheckpointSummarizer(func(context.Context, config.AgentConfig) (model.ToolCallingChatModel, error) {
+		return fixture, nil
+	}, configuration)
+	output, err := summarizer.Summarize(context.Background(), agent.CheckpointInput{Prompt: "summarize", SystemPrompt: "system", OutputTokenCap: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !output.Truncated || output.Text != "partial summary" {
+		t.Fatalf("output = %#v", output)
+	}
+}
+
+func TestOutputWasTruncatedRecognizesProviderLimitReasons(t *testing.T) {
+	for _, reason := range []string{"length", "MAX_TOKENS", "max_output_tokens"} {
+		if !outputWasTruncated(reason) {
+			t.Fatalf("outputWasTruncated(%q) = false", reason)
+		}
+	}
+	if outputWasTruncated("stop") || outputWasTruncated("tool_calls") {
+		t.Fatal("non-limit finish reason marked truncated")
+	}
+}
 
 func TestCheckpointAgentConfigUsesConfiguredCheckpointRoute(t *testing.T) {
 	configuration := config.Default().Agent

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"pentgo/internal/adapters/llm"
 	"pentgo/internal/agent"
 	"pentgo/internal/config"
 )
@@ -47,6 +48,10 @@ func (assembler *ContextAssembler) PrepareOverflowRecovery(ctx context.Context, 
 	if assembler.meter == nil {
 		return agent.ModelStepInput{}, nil, fmt.Errorf("context assembler meter is nil")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	systemPrefix := llm.SystemInstructionPrefix(systemPrompt)
 	surfaceStore := assembler.runtime.ContextSurface(sessionID)
 	if surfaceStore == nil {
 		return agent.ModelStepInput{}, nil, fmt.Errorf("session context surface is unavailable")
@@ -57,23 +62,31 @@ func (assembler *ContextAssembler) PrepareOverflowRecovery(ctx context.Context, 
 	}
 	messages := numberedMessages(transcriptMessages)
 	facts := RenderBoundedBlackboard(assembler.runtime.Blackboard(), int(float64(assembler.policy.ContextWindow)*assembler.policy.BlackboardRatio))
+	factsEnvelope := llm.ProjectFactsEnvelope(facts.Text)
 	compactor := NewContextCompactor(assembler.policy, surfaceStore, assembler.meter, assembler.summarizer)
-	pruned, prunes, activities, err := compactor.PreviewPrune(ctx, CompactionRequest{Surface: surface, Messages: messages, SystemPrompt: systemPrompt, Blackboard: facts.Text, Tools: tools})
+	pruned, prunes, activities, err := compactor.PreviewPrune(ctx, CompactionRequest{Surface: surface, Messages: messages, SystemPrompt: systemPrefix, Blackboard: factsEnvelope, Tools: tools})
 	if err != nil {
 		return agent.ModelStepInput{}, activities, err
 	}
-	if len(prunes) != 0 {
+	prunedInput, err := assembler.materialize(sessionID, systemPrompt, tools, facts.Text, pruned, messages)
+	if err != nil {
+		return agent.ModelStepInput{}, activities, err
+	}
+	if measurement := assembler.meter.Measure(contextRequestFromInput(prunedInput)); measurement.TotalTokens < contextThreshold(assembler.policy) {
+		if len(prunes) == 0 {
+			return prunedInput, append(activities, agent.ContextActivity{Kind: agent.ContextOverflowRetry, Message: "Provider 报告上下文超限，但当前上下文已经在安全预算内。"}), nil
+		}
 		updated, err := surfaceStore.PruneTools(surface.Generation, prunes)
 		if err != nil {
 			return agent.ModelStepInput{}, activities, err
 		}
-		pruned = updated
-		activities = append(activities, agent.ContextActivity{Kind: agent.ContextOverflowRetry, Message: "Provider 报告上下文超限，已裁剪工具结果后继续压缩。"})
+		input, err := assembler.materialize(sessionID, systemPrompt, tools, facts.Text, updated, messages)
+		return input, append(activities, agent.ContextActivity{Kind: agent.ContextOverflowRetry, Message: "Provider 报告上下文超限，已裁剪工具结果后重试。"}), err
 	}
 	if assembler.summarizer == nil {
 		return agent.ModelStepInput{}, append(activities, agent.ContextActivity{Kind: agent.ContextOverflowRetry, Message: "Provider 报告上下文超限，但没有可用 checkpoint summarizer。"}), ErrContextPreflight
 	}
-	checkpointed, checkpointActivities, err := compactor.CheckpointWithValidator(ctx, CompactionRequest{Surface: pruned, Messages: messages, SystemPrompt: systemPrompt, Blackboard: facts.Text, Tools: tools}, func(candidate agent.ContextSurface) error {
+	checkpointed, checkpointActivities, err := compactor.CheckpointWithValidator(ctx, CompactionRequest{Surface: pruned, Messages: messages, SystemPrompt: systemPrefix, Blackboard: factsEnvelope, Tools: tools, Prunes: prunes}, func(candidate agent.ContextSurface) error {
 		candidateInput, materializeErr := assembler.materialize(sessionID, systemPrompt, tools, facts.Text, candidate, messages)
 		if materializeErr != nil {
 			return materializeErr
@@ -115,6 +128,10 @@ func (assembler *ContextAssembler) Prepare(ctx context.Context, sessionID, syste
 	if assembler.meter == nil {
 		return agent.ModelStepInput{}, nil, fmt.Errorf("context assembler meter is nil")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	systemPrefix := llm.SystemInstructionPrefix(systemPrompt)
 	surfaceStore := assembler.runtime.ContextSurface(sessionID)
 	if surfaceStore == nil {
 		return agent.ModelStepInput{}, nil, fmt.Errorf("session context surface is unavailable")
@@ -125,6 +142,7 @@ func (assembler *ContextAssembler) Prepare(ctx context.Context, sessionID, syste
 	}
 	messages := numberedMessages(transcriptMessages)
 	facts := RenderBoundedBlackboard(assembler.runtime.Blackboard(), int(float64(assembler.policy.ContextWindow)*assembler.policy.BlackboardRatio))
+	factsEnvelope := llm.ProjectFactsEnvelope(facts.Text)
 	activities := make([]agent.ContextActivity, 0, 3)
 	if facts.Truncated {
 		activities = append(activities, agent.ContextActivity{Kind: agent.ContextBlackboardLimited, Message: fmt.Sprintf("已限制项目事实注入（显示 %d，省略 %d）。", facts.Shown, facts.Omitted)})
@@ -137,12 +155,12 @@ func (assembler *ContextAssembler) Prepare(ctx context.Context, sessionID, syste
 	if measurement.TotalTokens < contextThreshold(assembler.policy) {
 		return input, activities, nil
 	}
-	fixed := assembler.meter.Measure(ContextRequest{SystemPrompt: systemPrompt, Blackboard: facts.Text, Tools: tools})
+	fixed := assembler.meter.Measure(ContextRequest{SystemPrompt: systemPrefix, Blackboard: factsEnvelope, Tools: tools})
 	if fixed.TotalTokens >= contextThreshold(assembler.policy) {
 		return agent.ModelStepInput{}, append(activities, rejectedContextActivity("系统提示词、工具或项目事实本身超过上下文预算。")), ErrContextPreflight
 	}
 	compactor := NewContextCompactor(assembler.policy, surfaceStore, assembler.meter, assembler.summarizer)
-	pruned, prunes, pruneActivities, err := compactor.PreviewPrune(ctx, CompactionRequest{Surface: surface, Messages: messages, SystemPrompt: systemPrompt, Blackboard: facts.Text, Tools: tools})
+	pruned, prunes, pruneActivities, err := compactor.PreviewPrune(ctx, CompactionRequest{Surface: surface, Messages: messages, SystemPrompt: systemPrefix, Blackboard: factsEnvelope, Tools: tools})
 	activities = append(activities, pruneActivities...)
 	if err != nil {
 		return agent.ModelStepInput{}, append(activities, rejectedContextActivity(err.Error())), err
@@ -163,7 +181,7 @@ func (assembler *ContextAssembler) Prepare(ctx context.Context, sessionID, syste
 	if assembler.summarizer == nil {
 		return agent.ModelStepInput{}, append(activities, rejectedContextActivity("无法在没有 checkpoint summarizer 的情况下压缩上下文。")), ErrContextPreflight
 	}
-	checkpointRequest := CompactionRequest{Surface: pruned, Messages: messages, SystemPrompt: systemPrompt, Blackboard: facts.Text, Tools: tools, Prunes: prunes}
+	checkpointRequest := CompactionRequest{Surface: pruned, Messages: messages, SystemPrompt: systemPrefix, Blackboard: factsEnvelope, Tools: tools, Prunes: prunes}
 	checkpointed, checkpointActivities, err := compactor.CheckpointWithValidator(ctx, checkpointRequest, func(candidate agent.ContextSurface) error {
 		candidateInput, err := assembler.materialize(sessionID, systemPrompt, tools, facts.Text, candidate, messages)
 		if err != nil {
@@ -238,7 +256,7 @@ func contextRequestFromInput(input agent.ModelStepInput) ContextRequest {
 			messages[sequence] = message
 		}
 	}
-	return ContextRequest{SystemPrompt: input.SystemPrompt, Blackboard: input.ProjectFacts, Tools: input.Tools, Nodes: nodes, Messages: messages}
+	return ContextRequest{SystemPrompt: llm.SystemInstructionPrefix(input.SystemPrompt), Blackboard: llm.ProjectFactsEnvelope(input.ProjectFacts), Tools: input.Tools, Nodes: nodes, Messages: messages}
 }
 
 func numberedMessages(messages []agent.Message) map[int]agent.Message {

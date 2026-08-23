@@ -88,6 +88,8 @@ app.SessionWorker
 
 模型适配器是短生命周期对象，不保存 session、project、共享记录或 checkpoint。启用 `agent.context.context_window` 时，host 在每个 provider request 前从持久化 Context Surface 物化请求；Surface 是模型可见投影，raw transcript、tool calls 与 evidence records 仍是不可变审计数据。默认阈值为窗口的 80%，保留近期尾部 16%，项目事实预算为 8%；超大的 tool result 使用 Unicode 安全的头尾裁剪，必要时生成 checkpoint。压缩活动只作为 terminal/UI activity，不写入 transcript。
 
+Phase 2 的方向是在不改变 raw ledger 或 host ownership 的前提下，将项目共享事实从当前兼容的 Blackboard 文本迁移为有来源、结构化且可预算的事实节点，并引入 provider-usage 校准与可观测的 compaction quality 指标；任何扩展仍必须保留 generation 检查、tool-call/result pair closure 和对不可信 checkpoint source 的隔离。
+
 ## 5. 工具接入模型
 
 工具协议位于 `internal/agent/tool.go`：

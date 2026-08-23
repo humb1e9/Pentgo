@@ -53,7 +53,8 @@ func (summarizer *modelCheckpointSummarizer) Summarize(ctx context.Context, inpu
 		return agent.CheckpointOutput{}, err
 	}
 	stream, err := stepper.StreamStep(ctx, agent.ModelStepInput{
-		SystemPrompt: input.SystemPrompt,
+		SystemPrompt:    input.SystemPrompt,
+		MaxOutputTokens: input.OutputTokenCap,
 		Messages: []agent.Message{{
 			Role:    agent.RoleUser,
 			Content: checkpointSourcePrompt(input),
@@ -63,6 +64,7 @@ func (summarizer *modelCheckpointSummarizer) Summarize(ctx context.Context, inpu
 		return agent.CheckpointOutput{}, err
 	}
 	var final *agent.Message
+	truncated := false
 	for event := range stream {
 		if final != nil {
 			if event.Err != nil {
@@ -84,11 +86,21 @@ func (summarizer *modelCheckpointSummarizer) Summarize(ctx context.Context, inpu
 		}
 		copy := *event.Final
 		final = &copy
+		truncated = outputWasTruncated(event.FinishReason)
 	}
 	if final == nil || strings.TrimSpace(final.Content) == "" || len(final.ToolCalls) != 0 {
 		return agent.CheckpointOutput{}, fmt.Errorf("checkpoint model returned no text-only summary")
 	}
-	return agent.CheckpointOutput{Text: strings.TrimSpace(final.Content)}, nil
+	return agent.CheckpointOutput{Text: strings.TrimSpace(final.Content), Truncated: truncated}, nil
+}
+
+func outputWasTruncated(reason string) bool {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "length", "max_tokens", "max_output_tokens", "token_limit", "max_tokens_reached":
+		return true
+	default:
+		return false
+	}
 }
 
 func checkpointAgentConfig(configuration config.AgentConfig) (config.AgentConfig, error) {

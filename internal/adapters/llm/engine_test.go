@@ -2,13 +2,17 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
 	"pentgo/internal/agent"
 
+	"github.com/anthropics/anthropic-sdk-go"
 	einoopenai "github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
@@ -19,6 +23,7 @@ type scriptedModel struct {
 	streamErr error
 	recvErr   error
 	inputs    [][]*schema.Message
+	options   [][]model.Option
 	toolInfos [][]*schema.ToolInfo
 }
 
@@ -26,8 +31,9 @@ func (*scriptedModel) Generate(context.Context, []*schema.Message, ...model.Opti
 	return nil, fmt.Errorf("Generate must not be called by StreamStep")
 }
 
-func (fixture *scriptedModel) Stream(_ context.Context, input []*schema.Message, _ ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+func (fixture *scriptedModel) Stream(_ context.Context, input []*schema.Message, options ...model.Option) (*schema.StreamReader[*schema.Message], error) {
 	fixture.inputs = append(fixture.inputs, append([]*schema.Message(nil), input...))
+	fixture.options = append(fixture.options, append([]model.Option(nil), options...))
 	if fixture.streamErr != nil {
 		return nil, fixture.streamErr
 	}
@@ -95,6 +101,44 @@ func TestStepStreamsTextThenReturnsOneCompleteAssistantMessage(t *testing.T) {
 	}
 	if len(finals) != 1 || finals[0].Role != agent.RoleAssistant || finals[0].Content != "你好，世界" || finals[0].ReasoningContent != "先思考" {
 		t.Fatalf("finals = %#v", finals)
+	}
+}
+
+func TestStepPreservesProviderFinishReason(t *testing.T) {
+	fixture := &scriptedModel{chunks: []*schema.Message{{Role: schema.Assistant, Content: "partial", ResponseMeta: &schema.ResponseMeta{FinishReason: "length"}}}}
+	engine, err := NewEngine(context.Background(), fixture, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := engine.StreamStep(context.Background(), agent.ModelStepInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for event := range stream {
+		if event.Final != nil && event.FinishReason != "length" {
+			t.Fatalf("finish reason = %q", event.FinishReason)
+		}
+	}
+}
+
+func TestStepRequestsConfiguredOutputTokenCap(t *testing.T) {
+	fixture := &scriptedModel{chunks: []*schema.Message{schema.AssistantMessage("summary", nil)}}
+	engine, err := NewEngine(context.Background(), fixture, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := engine.StreamStep(context.Background(), agent.ModelStepInput{MaxOutputTokens: 73})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range stream {
+	}
+	if len(fixture.options) != 1 {
+		t.Fatalf("stream options = %#v", fixture.options)
+	}
+	options := model.GetCommonOptions(nil, fixture.options[0]...)
+	if options.MaxTokens == nil || *options.MaxTokens != 73 {
+		t.Fatalf("max tokens = %#v", options.MaxTokens)
 	}
 }
 
@@ -223,6 +267,31 @@ func TestNormalizeContextWindowErrorLeavesUnstructuredOverflowTextUntouched(t *t
 	original := errors.New(`create new streaming message fail: {"error":{"type":"invalid_request_error","message":"prompt is too long: maximum context length exceeded"}}`)
 	if got := normalizeContextWindowError(original); got != original || errors.Is(got, agent.ErrContextWindowExceeded) {
 		t.Fatalf("normalized unstructured error = %v", got)
+	}
+}
+
+func newAnthropicAPIError(t *testing.T, message string) *anthropic.Error {
+	t.Helper()
+	var apiErr anthropic.Error
+	if err := json.Unmarshal([]byte(fmt.Sprintf(`{"error":{"type":"invalid_request_error","message":%q}}`, message)), &apiErr); err != nil {
+		t.Fatal(err)
+	}
+	apiErr.Request = &http.Request{Method: http.MethodPost, URL: &url.URL{Scheme: "https", Host: "api.anthropic.test"}}
+	apiErr.Response = &http.Response{StatusCode: http.StatusBadRequest}
+	return &apiErr
+}
+
+func TestNormalizeContextWindowErrorAcceptsStructuredAnthropicOverflow(t *testing.T) {
+	original := newAnthropicAPIError(t, "prompt is too long: maximum context length exceeded")
+	if got := normalizeContextWindowError(original); !errors.Is(got, agent.ErrContextWindowExceeded) {
+		t.Fatalf("structured Anthropic error = %v", got)
+	}
+}
+
+func TestNormalizeContextWindowErrorRejectsStructuredNonOverflow(t *testing.T) {
+	original := newAnthropicAPIError(t, "maximum context length parameter is invalid")
+	if got := normalizeContextWindowError(original); got != original || errors.Is(got, agent.ErrContextWindowExceeded) {
+		t.Fatalf("structured non-overflow error = %v", got)
 	}
 }
 

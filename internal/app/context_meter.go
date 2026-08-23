@@ -47,13 +47,18 @@ func NewContextMeter() *contextMeter {
 
 // Measure returns an independent value snapshot for the assembled request.
 func (meter *contextMeter) Measure(request ContextRequest) agent.ContextMeasurement {
+	// The provider receives system prompt and project facts as one system message.
+	// Split its single rounded estimate only for component reporting, so Total is
+	// never inflated by rounding each part independently.
+	systemTokens := estimateTextTokens(request.SystemPrompt)
+	systemAndBlackboardTokens := estimateTextTokens(providerSystemMessage(request))
 	measurement := agent.ContextMeasurement{
-		SystemTokens:     estimateTextTokens(request.SystemPrompt),
+		SystemTokens:     systemTokens,
 		ToolSchemaTokens: measureTools(request.Tools),
-		BlackboardTokens: estimateTextTokens(request.Blackboard),
+		BlackboardTokens: systemAndBlackboardTokens - systemTokens,
 		SurfaceTokens:    measureSurface(request.Nodes, request.Messages),
 	}
-	measurement.TotalTokens = measurement.SystemTokens + measurement.ToolSchemaTokens + measurement.BlackboardTokens + measurement.SurfaceTokens
+	measurement.TotalTokens = systemAndBlackboardTokens + measurement.ToolSchemaTokens + measurement.SurfaceTokens
 	if meter == nil {
 		return measurement
 	}
@@ -191,11 +196,13 @@ func RenderBoundedBlackboard(board *domain.Blackboard, tokenBudget int) Blackboa
 	return result
 }
 
+func providerSystemMessage(request ContextRequest) string {
+	return request.SystemPrompt + request.Blackboard
+}
+
 func normalizedEnvelope(request ContextRequest) string {
 	var builder strings.Builder
-	builder.WriteString(request.SystemPrompt)
-	builder.WriteByte('\n')
-	builder.WriteString(request.Blackboard)
+	builder.WriteString(providerSystemMessage(request))
 	for _, tool := range request.Tools {
 		if tool == nil {
 			continue

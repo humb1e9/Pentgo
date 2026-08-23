@@ -89,6 +89,30 @@ func TestSelectRangeKeepsMeasuredTailAndDoesNotSplitToolPair(t *testing.T) {
 	}
 }
 
+func TestSelectRangeKeepsEveryResultForMultiToolAssistant(t *testing.T) {
+	policy := config.AgentContextConfig{ContextWindow: 100, RetainRatio: 0.16}.Effective()
+	request := CompactionRequest{
+		Surface: agent.ContextSurface{Nodes: []agent.SurfaceNode{
+			{Kind: agent.SurfaceNodeSource, SourceStartSeq: 1, SourceEndSeq: 1},
+			{Kind: agent.SurfaceNodeSource, SourceStartSeq: 2, SourceEndSeq: 2},
+			{Kind: agent.SurfaceNodeSource, SourceStartSeq: 3, SourceEndSeq: 3},
+			{Kind: agent.SurfaceNodeSource, SourceStartSeq: 4, SourceEndSeq: 4},
+			{Kind: agent.SurfaceNodeSource, SourceStartSeq: 5, SourceEndSeq: 5},
+		}},
+		Messages: map[int]agent.Message{
+			1: {Role: agent.RoleUser, Content: strings.Repeat("old ", 30)},
+			2: {Role: agent.RoleAssistant, ToolCalls: []agent.ToolCall{{ID: "call-1", Name: "one"}, {ID: "call-2", Name: "two"}}},
+			3: {Role: agent.RoleTool, ToolCallID: "call-1", ToolName: "one", Content: strings.Repeat("one ", 100)},
+			4: {Role: agent.RoleTool, ToolCallID: "call-2", ToolName: "two", Content: "two result"},
+			5: {Role: agent.RoleAssistant, Content: "recent"},
+		},
+	}
+	start, end, ok := selectCheckpointRange(NewContextMeter(), policy, request)
+	if !ok || start != 1 || end != 4 {
+		t.Fatalf("range/ok = %d..%d/%v; a raw tail must retain call and both results", start, end, ok)
+	}
+}
+
 func TestCheckpointInputIncludesOnlySelectedSpanAndFramedSummary(t *testing.T) {
 	fixture := newCompactorFixture(t, []agent.Message{
 		{Role: agent.RoleUser, Content: strings.Repeat("old ", 160)},

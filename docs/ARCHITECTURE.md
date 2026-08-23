@@ -93,7 +93,7 @@ app.SessionWorker
   → app.ProjectRuntime.PersistState
 ```
 
-正常完成的 turn 不会关闭 session。模型适配器不保存 session、project、blackboard 或 checkpoint；host loop 拥有工具调用和最多一次 overflow recovery。启用 context window 时，raw transcript 是审计 ledger，Context Surface 是可压缩的模型投影；活动信息只进入 UI，不进入 transcript。重启后的继续从持久化 Surface 组装请求，历史 tool message 只回放，不再次调用工具。
+正常完成的 turn 不会关闭 session。模型适配器不保存 session、project、blackboard 或 checkpoint；host loop 拥有工具调用和最多一次 overflow recovery。启用 context window 时，raw transcript 是审计 ledger，Context Surface 是可压缩的模型投影；活动信息只进入 UI，不进入 transcript。重启后的继续从持久化 Surface 组装请求，历史 tool message 只回放，不再次调用工具。Phase 2 将把兼容 Blackboard 文本迁移为结构化、带来源且可预算的项目事实节点，但不会改变 raw ledger 或 host-owned loop。
 
 ## 持久化边界
 

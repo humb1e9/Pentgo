@@ -38,6 +38,17 @@ func TestContextMeterIncludesSystemToolsBlackboardAndSurface(t *testing.T) {
 	}
 }
 
+func TestContextMeterRoundsFinalSystemEnvelopeOnce(t *testing.T) {
+	request := ContextRequest{SystemPrompt: "abc", Blackboard: "d"}
+	measurement := NewContextMeter().Measure(request)
+	if measurement.TotalTokens != 1 || measurement.SystemTokens+measurement.BlackboardTokens != 1 {
+		t.Fatalf("measurement = %#v", measurement)
+	}
+	if normalizedEnvelope(request)[:4] != "abcd" {
+		t.Fatalf("normalized envelope = %q", normalizedEnvelope(request))
+	}
+}
+
 func TestRenderBoundedBlackboardKeepsMostRecentlyUpdatedFacts(t *testing.T) {
 	base := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
 	board := &domain.Blackboard{Facts: []domain.Fact{

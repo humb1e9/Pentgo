@@ -3,13 +3,11 @@ package app
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 	"unicode/utf8"
 
 	"pentgo/internal/agent"
-	"pentgo/internal/domain"
 )
 
 const (
@@ -131,69 +129,6 @@ func estimateTextTokens(value string) int {
 		return 0
 	}
 	return (utf8.RuneCountInString(value) + estimatedCharactersPerToken - 1) / estimatedCharactersPerToken
-}
-
-// BlackboardRender is a bounded, rendered project-facts block plus the exact
-// displayed and omitted counts used for activity reporting.
-type BlackboardRender struct {
-	Text      string
-	Shown     int
-	Omitted   int
-	Truncated bool
-}
-
-// RenderBoundedBlackboard renders most-recently-updated facts first while
-// preserving the persisted fact order for all legacy consumers.
-func RenderBoundedBlackboard(board *domain.Blackboard, tokenBudget int) BlackboardRender {
-	if board == nil || len(board.Facts) == 0 {
-		return BlackboardRender{Text: `<project-facts shown="0" omitted="0" truncated="false">当前没有记录项目事实。</project-facts>`}
-	}
-	type orderedFact struct {
-		fact  domain.Fact
-		index int
-	}
-	facts := make([]orderedFact, 0, len(board.Facts))
-	for index, fact := range board.Facts {
-		facts = append(facts, orderedFact{fact: fact, index: index})
-	}
-	sort.SliceStable(facts, func(left, right int) bool {
-		leftAt, rightAt := facts[left].fact.UpdatedAt, facts[right].fact.UpdatedAt
-		if leftAt.IsZero() {
-			leftAt = facts[left].fact.At
-		}
-		if rightAt.IsZero() {
-			rightAt = facts[right].fact.At
-		}
-		if !leftAt.Equal(rightAt) {
-			return leftAt.After(rightAt)
-		}
-		if facts[left].fact.Key != facts[right].fact.Key {
-			return facts[left].fact.Key < facts[right].fact.Key
-		}
-		return facts[left].index < facts[right].index
-	})
-	if tokenBudget < 0 {
-		tokenBudget = 0
-	}
-	lines := make([]string, 0, len(facts))
-	used := 0
-	for _, item := range facts {
-		line := "- " + item.fact.Key + "：" + item.fact.Value
-		cost := estimateTextTokens(line)
-		if used+cost > tokenBudget {
-			break
-		}
-		lines = append(lines, line)
-		used += cost
-	}
-	truncated := len(lines) < len(facts)
-	result := BlackboardRender{Shown: len(lines), Omitted: len(facts) - len(lines), Truncated: truncated}
-	result.Text = fmt.Sprintf(`<project-facts shown="%d" omitted="%d" truncated="%t">`, result.Shown, result.Omitted, result.Truncated)
-	if len(lines) != 0 {
-		result.Text += "\n" + strings.Join(lines, "\n") + "\n"
-	}
-	result.Text += "</project-facts>"
-	return result
 }
 
 func providerSystemMessage(request ContextRequest) string {

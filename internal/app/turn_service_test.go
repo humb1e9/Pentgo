@@ -298,7 +298,7 @@ func TestRuntimeToolsExposeAutomaticSkillLoaderWhenCatalogExists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"ls", "read_file", "write_file", "edit_file", "glob", "grep", "execute", "write_project_fact", "load_skill"}
+	want := []string{"ls", "read_file", "write_file", "edit_file", "glob", "grep", "execute", "upsert_project_fact", "get_project_fact", "list_project_facts", "search_project_facts", "deprecate_project_fact", "restore_project_fact", "load_skill"}
 	if len(tools) != len(want) {
 		t.Fatalf("tools = %#v", tools)
 	}
@@ -309,13 +309,13 @@ func TestRuntimeToolsExposeAutomaticSkillLoaderWhenCatalogExists(t *testing.T) {
 	}
 }
 
-func TestRuntimeToolsExposeOnlyWriteProjectFact(t *testing.T) {
+func TestRuntimeToolsExposeStructuredProjectFacts(t *testing.T) {
 	projectRuntime, session, _ := newApplicationFixture(t, scriptedStepper{})
 	tools, err := newRuntimeToolProvider(projectRuntime, session, nil, nil, false).Tools(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"ls", "read_file", "write_file", "edit_file", "glob", "grep", "execute", "write_project_fact"}
+	want := []string{"ls", "read_file", "write_file", "edit_file", "glob", "grep", "execute", "upsert_project_fact", "get_project_fact", "list_project_facts", "search_project_facts", "deprecate_project_fact", "restore_project_fact"}
 	if len(tools) != len(want) {
 		t.Fatalf("tools = %#v", tools)
 	}
@@ -324,12 +324,12 @@ func TestRuntimeToolsExposeOnlyWriteProjectFact(t *testing.T) {
 			t.Fatalf("tool %d = %q, want %q", index, tools[index].Name(), name)
 		}
 	}
-	if _, err := tools[7].Invoke(context.Background(), map[string]any{"key": "base_url", "value": "https://TARGET"}); err != nil {
+	if _, err := tools[7].Invoke(context.Background(), map[string]any{"key": "base_url", "category": "target", "summary": "target URL", "body": "https://TARGET", "confidence": "tentative"}); err != nil {
 		t.Fatal(err)
 	}
-	board := projectRuntime.Blackboard()
-	if len(board.Facts) != 1 || board.Facts[0].Key != "base_url" || board.Facts[0].Value != "https://TARGET" {
-		t.Fatalf("blackboard = %#v", board)
+	fact, found, err := projectRuntime.ProjectFacts().Get("base_url")
+	if err != nil || !found || fact.Body != "https://TARGET" {
+		t.Fatalf("fact = %#v found=%v err=%v", fact, found, err)
 	}
 }
 

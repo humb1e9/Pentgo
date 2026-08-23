@@ -49,7 +49,8 @@ mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/pentgo"
     "provider": "openai",
     "max_turns": 20,
     "context": {
-      "context_window": 128000
+      "context_window": 128000,
+      "fact_index_ratio": 0.08
     },
     "openai": {
       "base_url": "https://api.openai.com/v1",
@@ -62,7 +63,7 @@ mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/pentgo"
 
 使用 Anthropic 时，将 `provider` 改为 `anthropic`，并在 `agent.anthropic` 中填写 `base_url`、`model` 与 `api_key_env`。其他兼容 OpenAI 的服务通常只需替换 `base_url` 和 `model`。
 
-当配置 `agent.context.context_window` 后，PentGo 会自动管理长会话上下文，优先保留近期工作与项目事实；完整项目审计数据仍保存在本地。省略该配置则保持完整 transcript 回放兼容行为。
+当配置 `agent.context.context_window` 后，PentGo 会自动管理长会话上下文，优先保留近期工作与有界 Fact Index；`fact_index_ratio` 默认占窗口的 8%。Fact Index 仅包含结构化事实摘要和图提示，不包含正文；模型可通过项目事实工具读取完整内容。完整 raw transcript 与 Evidence 审计数据仍保存在本地。省略 context window 则保持完整 transcript 回放，且不注入 Fact Index。
 
 ### 3. 启动
 
@@ -87,10 +88,14 @@ mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/pentgo"
 | `/session rename 名称` | 重命名当前会话。 |
 | `/session delete [会话 ID]` | 删除指定会话；不填 ID 时删除当前会话。 |
 | `/status` | 查看当前会话状态。 |
-| `/blackboard` | 查看项目共享记录。 |
+| `/facts` | 查看有界的项目 Fact Index。 |
 | `/clear` | 清除当前终端显示。 |
 | `/help` | 查看命令帮助。 |
 | `/exit` | 退出。 |
+
+## 项目事实账本
+
+项目范围的事实由 host 执行的六个工具维护：`upsert_project_fact`、`get_project_fact`、`list_project_facts`、`search_project_facts`、`deprecate_project_fact` 与 `restore_project_fact`。写入包含 key、类别、摘要、可复现正文和置信度；`confirmed` 写入必须引用本项目中成功的 Evidence。`upsert_project_fact` 在同一个事务内写入事实、Evidence 引用和出边。弃用事实和边仍保留审计记录，但默认不进入 Fact Index。
 
 ## 添加工具
 

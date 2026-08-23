@@ -8,6 +8,12 @@ import (
 )
 
 const (
+	MaxProjectFactKeyRunes     = 256
+	MaxProjectFactSummaryRunes = 2048
+	MaxProjectFactBodyRunes    = 16 * 1024
+	MaxProjectFactEvidenceRefs = 64
+	MaxProjectFactEdges        = 64
+
 	FactCategoryTarget   = "target"
 	FactCategoryAuth     = "auth"
 	FactCategoryInfra    = "infra"
@@ -73,11 +79,17 @@ func ValidateProjectFact(fact ProjectFact) error {
 	if fact.FactKey == "" || fact.Category == "" || fact.Summary == "" || fact.Body == "" || fact.Confidence == "" {
 		return fmt.Errorf("fact key, category, summary, body, and confidence are required")
 	}
-	if !validFactCategory(fact.Category) {
+	if runeCount(fact.FactKey) > MaxProjectFactKeyRunes || runeCount(fact.Summary) > MaxProjectFactSummaryRunes || runeCount(fact.Body) > MaxProjectFactBodyRunes {
+		return fmt.Errorf("fact key, summary, or body exceeds its size limit")
+	}
+	if !IsFactCategory(fact.Category) {
 		return fmt.Errorf("invalid fact category: %s", fact.Category)
 	}
-	if !validFactConfidence(fact.Confidence) {
+	if !IsFactConfidence(fact.Confidence) {
 		return fmt.Errorf("invalid fact confidence: %s", fact.Confidence)
+	}
+	if len(fact.EvidenceRefs) > MaxProjectFactEvidenceRefs {
+		return fmt.Errorf("fact has too many evidence refs")
 	}
 	seen := make(map[int]bool, len(fact.EvidenceRefs))
 	for _, reference := range fact.EvidenceRefs {
@@ -100,10 +112,13 @@ func ValidateProjectFactEdge(edge ProjectFactEdge) error {
 	if edge.SourceFactKey == "" || edge.TargetFactKey == "" || edge.EdgeType == "" || edge.Confidence == "" {
 		return fmt.Errorf("edge source, target, type, and confidence are required")
 	}
-	if !validFactEdgeType(edge.EdgeType) {
+	if runeCount(edge.SourceFactKey) > MaxProjectFactKeyRunes || runeCount(edge.TargetFactKey) > MaxProjectFactKeyRunes {
+		return fmt.Errorf("edge source or target key exceeds its size limit")
+	}
+	if !IsFactEdgeType(edge.EdgeType) {
 		return fmt.Errorf("invalid fact edge type: %s", edge.EdgeType)
 	}
-	if !validFactConfidence(edge.Confidence) {
+	if !IsFactConfidence(edge.Confidence) {
 		return fmt.Errorf("invalid fact edge confidence: %s", edge.Confidence)
 	}
 	return nil
@@ -123,7 +138,9 @@ func NormalizeEvidenceRefs(references []int) []int {
 	return result
 }
 
-func validFactCategory(category string) bool {
+func runeCount(value string) int { return len([]rune(value)) }
+
+func IsFactCategory(category string) bool {
 	switch category {
 	case FactCategoryTarget, FactCategoryAuth, FactCategoryInfra, FactCategoryBusiness, FactCategoryFinding, FactCategoryChain, FactCategoryExploit, FactCategoryPOC, FactCategoryNote:
 		return true
@@ -132,7 +149,7 @@ func validFactCategory(category string) bool {
 	}
 }
 
-func validFactConfidence(confidence string) bool {
+func IsFactConfidence(confidence string) bool {
 	switch confidence {
 	case FactConfidenceConfirmed, FactConfidenceTentative, FactConfidenceDeprecated:
 		return true
@@ -141,7 +158,7 @@ func validFactConfidence(confidence string) bool {
 	}
 }
 
-func validFactEdgeType(kind string) bool {
+func IsFactEdgeType(kind string) bool {
 	switch kind {
 	case FactEdgeDependsOn, FactEdgeLeadsTo, FactEdgeEnables, FactEdgeExploits, FactEdgeDiscoveredOn, FactEdgeContains, FactEdgePartOf, FactEdgeSupports:
 		return true

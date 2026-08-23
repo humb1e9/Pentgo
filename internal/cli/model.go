@@ -404,8 +404,8 @@ func (model *terminalModel) handleLine(line string) tea.Cmd {
 		return tea.Quit
 	case "/status":
 		model.addActivity(activityInfo, model.sessionStatus())
-	case "/blackboard", "/board":
-		model.addActivity(activityInfo, model.coordinator.Blackboard())
+	case "/facts":
+		model.addActivity(activityInfo, model.coordinator.FactIndex())
 	case "/session":
 		return model.handleSessionCommand(argument)
 	case "/new":
@@ -420,7 +420,7 @@ func (model *terminalModel) handleLine(line string) tea.Cmd {
 		model.focused = ""
 		model.watchSession("")
 	case "/help":
-		model.addActivity(activityInfo, "/new  /session rename|list|delete  /status  /blackboard  /clear  /exit")
+		model.addActivity(activityInfo, "/new  /session rename|list|delete  /status  /facts  /clear  /exit")
 	case "/project":
 		verb, value, _ := strings.Cut(argument, " ")
 		if verb != "new" || strings.TrimSpace(value) == "" {
@@ -557,7 +557,7 @@ func (model *terminalModel) recordEvent(event app.Event) {
 			switch activity.Kind {
 			case agent.ContextRequestRejected:
 				level = activityError
-			case agent.ContextCheckpointCreated, agent.ContextToolPruned, agent.ContextOverflowRetry:
+			case agent.ContextCheckpointCreated, agent.ContextToolPruned, agent.ContextFactIndexLimited, agent.ContextOverflowRetry:
 				level = activityStatus
 			}
 		}

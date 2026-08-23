@@ -35,21 +35,6 @@ func TestNewSessionDerivesName(t *testing.T) {
 	}
 }
 
-func TestBlackboardReplacementRefreshesFactUpdatedAt(t *testing.T) {
-	first := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
-	board := &Blackboard{}
-	if err := board.NoteFact(Fact{Key: "target", Value: "first", At: first, UpdatedAt: first}); err != nil {
-		t.Fatal(err)
-	}
-	if err := board.NoteFact(Fact{Key: "target", Value: "replacement", At: first}); err != nil {
-		t.Fatal(err)
-	}
-	fact := board.Facts[0]
-	if fact.Value != "replacement" || !fact.UpdatedAt.After(first) {
-		t.Fatalf("fact = %#v", fact)
-	}
-}
-
 func TestProjectFactValidation(t *testing.T) {
 	for _, category := range []string{FactCategoryTarget, FactCategoryAuth, FactCategoryInfra, FactCategoryBusiness, FactCategoryFinding, FactCategoryChain, FactCategoryExploit, FactCategoryPOC, FactCategoryNote} {
 		fact := ProjectFact{FactKey: "key", Category: category, Summary: "summary", Body: "body", Confidence: FactConfidenceTentative}

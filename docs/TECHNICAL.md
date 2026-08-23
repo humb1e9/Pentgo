@@ -86,9 +86,9 @@ app.SessionWorker
 
 `TurnService` 在发布界面事件前先持久化每条 transcript 消息。模型适配器只执行一个 streamed provider request，绝不在 adapter 内调用工具；工具并发执行后仍按 provider 调用顺序持久化。失败、取消和中断会被映射为相应的 turn 状态，并在返回调用方前保存最后快照。上下文超限最多触发一次压缩恢复重试。
 
-模型适配器是短生命周期对象，不保存 session、project、共享记录或 checkpoint。启用 `agent.context.context_window` 时，host 在每个 provider request 前从持久化 Context Surface 物化请求；Surface 是模型可见投影，raw transcript、tool calls 与 evidence records 仍是不可变审计数据。默认阈值为窗口的 80%，保留近期尾部 16%，项目事实预算为 8%；超大的 tool result 使用 Unicode 安全的头尾裁剪，必要时生成 checkpoint。压缩活动只作为 terminal/UI activity，不写入 transcript。
+模型适配器是短生命周期对象，不保存 session、project、共享记录或 checkpoint。启用 `agent.context.context_window` 时，host 在每个 provider request 前从持久化 Context Surface 物化请求；Surface 是模型可见投影，raw transcript、tool calls 与 evidence records 仍是不可变审计数据。默认阈值为窗口的 80%，保留近期尾部 16%，`fact_index_ratio` 默认占窗口的 8%；超大的 tool result 使用 Unicode 安全的头尾裁剪，必要时生成 checkpoint。压缩活动只作为 terminal/UI activity，不写入 transcript。
 
-Phase 2 的方向是在不改变 raw ledger 或 host ownership 的前提下，将项目共享事实从当前兼容的 Blackboard 文本迁移为有来源、结构化且可预算的事实节点，并引入 provider-usage 校准与可观测的 compaction quality 指标；任何扩展仍必须保留 generation 检查、tool-call/result pair closure 和对不可信 checkpoint source 的隔离。
+项目共享事实是 `project_facts`、`project_fact_evidence` 和 `project_fact_edges` 构成的结构化账本。每轮 enabled context 都以确定性顺序注入独立预算的 Fact Index：pinned 优先，然后 target、finding/chain、exploit/poc、auth/infra/business 与 note，再按最近更新时间和 key 排序。Index 绝不包含正文；它标示省略数量并要求模型用事实工具读取细节。`confirmed` 事实必须引用成功 Evidence，`tentative` 保持显式暂定状态，弃用事实和边仍可审计但默认从 Index 排除。raw ledger、generation 检查、tool-call/result pair closure 和不可信 checkpoint source 的隔离不变。
 
 ## 5. 工具接入模型
 
@@ -107,7 +107,7 @@ type Tool interface {
 工具集合由以下部分组成：
 
 - Host workspace tools 提供 `ls`、`read_file`、`write_file`、`edit_file`、`glob`、`grep` 和 `execute`；它们通过受约束的 Workspace backend 执行。
-- 应用层提供 `write_project_fact`，用于写入项目级共享记录。
+- 应用层提供 `upsert_project_fact`、`get_project_fact`、`list_project_facts`、`search_project_facts`、`deprecate_project_fact` 和 `restore_project_fact`；写入事实、Evidence refs 与出边通过同一 storage transaction 验证和提交。
 - 应用层在启动时发现至少一个有效技能后，向模型提供 `load_skill`。
 - `mcp.LocalRegistry` 读取 `agent.local_tools` 中用户声明的普通 CLI；不维护固定工具列表，也不执行 PATH 身份探测。每个配置项都通过同一协议加入本轮集合。
 - 用户配置的 MCP 服务发现到的工具与 LocalRegistry 工具在项目级 provider 中聚合；名称冲突会在会话恢复前拒绝打开项目。
@@ -155,13 +155,15 @@ projects
 sessions
 session_targets
 turns
-facts
+project_facts
+project_fact_evidence
+project_fact_edges
 evidence_records
 transcript_messages
 transcript_tool_calls
 ```
 
-`CommitSession` 在同一事务中保存 session、当前 turn、目标和项目元数据；`SaveBlackboard` 原子替换共享事实。内存状态仅在事务提交后发布。
+`CommitSession` 在同一事务中保存 session、当前 turn、目标和项目元数据；`ProjectFactStore.Upsert` 在同一事务中验证并保存事实、Evidence refs 和 replacement edge set。schema v6 会将 legacy `facts` 行导入为 `note`/`tentative` 记录并保留可用的来源 session 与时间。
 
 `TranscriptStore` 按 `(session_id, seq)` 保存消息，并在助手消息的子表中保存工具调用顺序和原始参数。恢复时，历史消息按原顺序重放给模型；历史 tool message 只用于恢复上下文，不会再次触发工具调用。
 
@@ -176,7 +178,7 @@ transcript_tool_calls
 
 模型配置包含 `base_url`、`model`、`api_key` 或 `api_key_env`。API Key 优先读取显式字段，否则读取指定环境变量；凭据不写入项目数据库。
 
-`agent.mcp` 是具名 MCP 服务映射。旧版单服务对象会被读取为 `default` 服务，以保持配置兼容性。
+`agent.mcp` 是具名 MCP 服务映射。旧版单服务对象会被读取为 `default` 服务，以保持配置兼容性。启用 context budgeting 时，`agent.context.fact_index_ratio` 指定 Fact Index 占 context window 的比例（默认 `0.08`）；已移除的 `blackboard_ratio` 会被明确拒绝，不会静默转换。
 
 ## 10. 原生构建与开发验证
 

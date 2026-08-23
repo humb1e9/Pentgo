@@ -418,15 +418,23 @@ func (coordinator *Coordinator) Messages(sessionID string) []agent.Message {
 	return transcript.Messages()
 }
 
-// Blackboard 将当前项目事实渲染为 CLI 文本。
-func (coordinator *Coordinator) Blackboard() string {
+// FactIndex renders the current non-deprecated structured facts for the CLI.
+func (coordinator *Coordinator) FactIndex() string {
 	coordinator.mu.RLock()
 	runtime := coordinator.runtime
 	coordinator.mu.RUnlock()
 	if runtime == nil {
 		return "当前没有打开的项目。"
 	}
-	return blackboardText(runtime.Blackboard())
+	facts := runtime.ProjectFacts()
+	if facts == nil {
+		return "项目事实账本不可用。"
+	}
+	index, err := facts.FactIndex(2000)
+	if err != nil {
+		return "读取项目事实失败：" + err.Error()
+	}
+	return index.Text
 }
 
 // CloseProject 释放当前运行时及其持有的全部资源。

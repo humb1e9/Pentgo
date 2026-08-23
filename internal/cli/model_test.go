@@ -37,6 +37,16 @@ func TestTerminalModelRendersFocusedSession(t *testing.T) {
 	}
 }
 
+func TestTerminalModelShowsFactIndexLimitAsStatusActivity(t *testing.T) {
+	coordinator := app.New(config.Default(), t.TempDir(), app.Dependencies{})
+	defer coordinator.CloseProject()
+	model := newTerminalModel(context.Background(), coordinator, "")
+	model.recordEvent(app.Event{Kind: app.EventContextActivity, Message: "已限制项目事实注入（显示 1，省略 2）。", Data: agent.ContextActivity{Kind: agent.ContextFactIndexLimited}})
+	if len(model.activity) == 0 || model.activity[len(model.activity)-1].level != activityStatus || !strings.Contains(model.activity[len(model.activity)-1].text, "已限制项目事实注入") {
+		t.Fatalf("activity = %#v", model.activity)
+	}
+}
+
 func TestTerminalModelArrowKeysKeepCurrentSession(t *testing.T) {
 	coordinator := app.New(config.Default(), t.TempDir(), app.Dependencies{})
 	defer coordinator.CloseProject()

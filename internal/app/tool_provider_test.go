@@ -71,7 +71,7 @@ func TestValidateProjectToolsRejectsSessionAndBackendCollisions(t *testing.T) {
 		wantFailure     bool
 	}{
 		{name: "local backend", toolName: "execute", wantFailure: true},
-		{name: "session fact tool", toolName: "write_project_fact", wantFailure: true},
+		{name: "session fact tool", toolName: "upsert_project_fact", wantFailure: true},
 		{name: "active skill loader", toolName: "load_skill", skillsAvailable: true, wantFailure: true},
 		{name: "inactive skill loader", toolName: "load_skill", skillsAvailable: false},
 		{name: "ordinary tool", toolName: "custom_recon"},

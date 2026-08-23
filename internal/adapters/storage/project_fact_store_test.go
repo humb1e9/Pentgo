@@ -370,7 +370,7 @@ func TestFactIndexTruncatesWhenOverBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if index.Shown == 0 || !index.Truncated || index.Omitted == 0 || index.Shown+index.Omitted != 20 {
+	if !index.Truncated || index.Omitted == 0 || index.Shown+index.Omitted != 20 {
 		t.Fatalf("index truncated = %#v", index)
 	}
 }

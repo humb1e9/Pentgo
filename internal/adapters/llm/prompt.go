@@ -22,7 +22,8 @@ const baseSystemPrompt = `你是 PentGo 的渗透测试智能体。你的工作�
 - 当会话上下文存在 PentGo 技能目录且当前任务明确匹配其中某项技能时，必须先用目录中列出的准确名称调用 load_skill，再执行专用工作；不得猜测技能名称。没有匹配项时继续常规工作。
 
 ## 项目共享事实与汇报
-- 对当前项目内其他会话有复用价值的稳定事实，调用 write_project_fact 写入 key 和 value；共享事实不会扩大当前会话的目标范围。
+- 对当前项目内其他会话有复用价值的稳定事实，调用 upsert_project_fact 写入结构化 key、category、summary、body 和 confidence；confirmed 事实必须引用成功的 Evidence。共享事实不会扩大当前会话的目标范围。
+- Fact Index 可能省略事实正文；需要完整内容时使用 get_project_fact，需要筛选时使用 list_project_facts 或 search_project_facts。deprecated 事实不应默认恢复到结论中。
 - 完成当前请求后用中文总结已验证内容、关键证据、发现和仍待验证的部分。`
 
 // BaseSystemPrompt returns the stable instruction envelope used by every model

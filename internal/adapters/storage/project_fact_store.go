@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"html"
 	"sort"
 	"strings"
 	"sync"
@@ -44,6 +45,14 @@ type FactIndexResult struct {
 	Omitted   int
 	Truncated bool
 }
+
+const (
+	maxProjectFactQueryLimit = 100
+	maxFactIndexCandidates   = 512
+	maxFactIndexEdges        = 2048
+	maxFactIndexSummaryRunes = 512
+	maxFactIndexHintsPerFact = 6
+)
 
 // ProjectFactStore owns project-scoped structured facts. It shares the project
 // database connection and serializes write transactions so Evidence, facts,
@@ -85,6 +94,9 @@ func (store *ProjectFactStore) Upsert(ctx context.Context, write ProjectFactWrit
 	fact.EvidenceRefs = domain.NormalizeEvidenceRefs(fact.EvidenceRefs)
 	if err := domain.ValidateProjectFact(fact); err != nil {
 		return err
+	}
+	if len(write.Edges) > domain.MaxProjectFactEdges {
+		return fmt.Errorf("project fact has too many edges")
 	}
 	if fact.ProjectID == "" {
 		fact.ProjectID = store.projectID
@@ -188,15 +200,22 @@ func (store *ProjectFactStore) List(query FactQuery) ([]domain.ProjectFact, erro
 	}
 	conditions := []string{"pf.project_id = ?"}
 	args := []any{store.projectID}
-	if strings.TrimSpace(query.Category) != "" {
+	query, err := validateFactQuery(query)
+	if err != nil {
+		return nil, err
+	}
+	if query.Category != "" {
 		conditions = append(conditions, "pf.category = ?")
-		args = append(args, strings.TrimSpace(query.Category))
+		args = append(args, query.Category)
 	}
-	if strings.TrimSpace(query.Confidence) != "" {
+	if query.Confidence != "" {
 		conditions = append(conditions, "pf.confidence = ?")
-		args = append(args, strings.TrimSpace(query.Confidence))
+		args = append(args, query.Confidence)
+	} else {
+		conditions = append(conditions, "pf.confidence <> ?")
+		args = append(args, domain.FactConfidenceDeprecated)
 	}
-	return store.queryFacts(context.Background(), conditions, args, factQueryLimit(query.Limit))
+	return store.queryFacts(context.Background(), conditions, args, factQueryLimit(query.Limit), false)
 }
 
 // Search returns facts whose key, summary, or body contains the bounded query.
@@ -208,18 +227,25 @@ func (store *ProjectFactStore) Search(query string, filter FactQuery) ([]domain.
 	if query == "" {
 		return nil, fmt.Errorf("project fact search query is required")
 	}
+	filter, err := validateFactQuery(filter)
+	if err != nil {
+		return nil, err
+	}
 	conditions := []string{"pf.project_id = ?", "(pf.fact_key LIKE ? OR pf.summary LIKE ? OR pf.body LIKE ?)"}
 	pattern := "%" + query + "%"
 	args := []any{store.projectID, pattern, pattern, pattern}
-	if strings.TrimSpace(filter.Category) != "" {
+	if filter.Category != "" {
 		conditions = append(conditions, "pf.category = ?")
-		args = append(args, strings.TrimSpace(filter.Category))
+		args = append(args, filter.Category)
 	}
-	if strings.TrimSpace(filter.Confidence) != "" {
+	if filter.Confidence != "" {
 		conditions = append(conditions, "pf.confidence = ?")
-		args = append(args, strings.TrimSpace(filter.Confidence))
+		args = append(args, filter.Confidence)
+	} else {
+		conditions = append(conditions, "pf.confidence <> ?")
+		args = append(args, domain.FactConfidenceDeprecated)
 	}
-	return store.queryFacts(context.Background(), conditions, args, factQueryLimit(filter.Limit))
+	return store.queryFacts(context.Background(), conditions, args, factQueryLimit(filter.Limit), false)
 }
 
 // Deprecate marks a fact as deprecated while retaining its audit row.
@@ -248,14 +274,24 @@ func (store *ProjectFactStore) FactIndex(tokenBudget int) (FactIndexResult, erro
 	if store == nil || store.db == nil {
 		return FactIndexResult{}, fmt.Errorf("project fact store is nil")
 	}
+	// The index needs facts, count, and edges from one stable ledger view so
+	// displayed/omitted metadata stays deterministic while tools write facts.
+	store.mu.Lock()
+	defer store.mu.Unlock()
 	if tokenBudget < 0 {
 		tokenBudget = 0
 	}
-	facts, err := store.queryFacts(context.Background(), []string{"pf.project_id = ?", "pf.confidence <> ?"}, []any{store.projectID, domain.FactConfidenceDeprecated}, 0)
+	conditions := []string{"pf.project_id = ?", "pf.confidence <> ?"}
+	args := []any{store.projectID, domain.FactConfidenceDeprecated}
+	facts, err := store.queryFacts(context.Background(), conditions, args, maxFactIndexCandidates, false)
 	if err != nil {
 		return FactIndexResult{}, err
 	}
-	edges, err := store.queryEdges(context.Background(), []string{"pe.project_id = ?", "pe.confidence <> ?"}, []any{store.projectID, domain.FactConfidenceDeprecated})
+	total, err := store.countFacts(context.Background(), conditions, args)
+	if err != nil {
+		return FactIndexResult{}, err
+	}
+	edges, err := store.queryEdges(context.Background(), []string{"pe.project_id = ?", "pe.confidence <> ?"}, []any{store.projectID, domain.FactConfidenceDeprecated}, maxFactIndexEdges)
 	if err != nil {
 		return FactIndexResult{}, err
 	}
@@ -266,26 +302,22 @@ func (store *ProjectFactStore) FactIndex(tokenBudget int) (FactIndexResult, erro
 	}
 	lines := make([]string, 0, len(facts))
 	used := 0
-	omitted := 0
 	for _, fact := range facts {
 		line := formatFactIndexLine(fact, edges, indexByKey)
 		cost := estimateFactTokens(line)
-		if len(lines) != 0 && used+cost > tokenBudget {
-			omitted += len(facts) - len(lines)
+		if used+cost > tokenBudget {
 			break
 		}
 		lines = append(lines, line)
 		used += cost
 	}
-	if len(lines) == 0 && len(facts) != 0 {
-		omitted = len(facts)
-	}
+	omitted := total - len(lines)
 	truncated := omitted > 0
 	text := fmt.Sprintf(`<project-fact-index shown="%d" omitted="%d" truncated="%t">`, len(lines), omitted, truncated)
 	if len(lines) != 0 {
 		text += "\n" + strings.Join(lines, "\n") + "\n"
 	}
-	text += "</project-fact-index>"
+	text += "\nUse get_project_fact, list_project_facts, or search_project_facts for full details or omitted facts.\n</project-fact-index>"
 	return FactIndexResult{Text: text, Shown: len(lines), Omitted: omitted, Truncated: truncated}, nil
 }
 
@@ -301,11 +333,26 @@ func (store *ProjectFactStore) Close() error {
 	return nil
 }
 
+func validateFactQuery(query FactQuery) (FactQuery, error) {
+	query.Category = strings.TrimSpace(query.Category)
+	query.Confidence = strings.TrimSpace(query.Confidence)
+	if query.Category != "" && !domain.IsFactCategory(query.Category) {
+		return FactQuery{}, fmt.Errorf("invalid project fact category: %s", query.Category)
+	}
+	if query.Confidence != "" && !domain.IsFactConfidence(query.Confidence) {
+		return FactQuery{}, fmt.Errorf("invalid project fact confidence: %s", query.Confidence)
+	}
+	if query.Limit < 0 || query.Limit > maxProjectFactQueryLimit {
+		return FactQuery{}, fmt.Errorf("project fact limit must be between 1 and %d", maxProjectFactQueryLimit)
+	}
+	return query, nil
+}
+
 func (store *ProjectFactStore) queryFact(ctx context.Context, where string, args ...any) (domain.ProjectFact, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.ProjectFact{}, err
 	}
-	facts, err := store.queryFacts(ctx, []string{where}, args, 1)
+	facts, err := store.queryFacts(ctx, []string{where}, args, 1, true)
 	if err != nil {
 		return domain.ProjectFact{}, err
 	}
@@ -315,7 +362,7 @@ func (store *ProjectFactStore) queryFact(ctx context.Context, where string, args
 	return facts[0], nil
 }
 
-func (store *ProjectFactStore) queryFacts(ctx context.Context, conditions []string, args []any, limit int) ([]domain.ProjectFact, error) {
+func (store *ProjectFactStore) queryFacts(ctx context.Context, conditions []string, args []any, limit int, includeEvidence bool) ([]domain.ProjectFact, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -350,6 +397,9 @@ ORDER BY pf.pinned DESC, `+factCategoryOrderSQL()+`, pf.updated_at DESC, pf.fact
 	if err := rows.Close(); err != nil {
 		return nil, fmt.Errorf("close project fact rows: %w", err)
 	}
+	if !includeEvidence {
+		return facts, nil
+	}
 	for index := range facts {
 		references, err := store.loadEvidenceRefs(ctx, facts[index].ID)
 		if err != nil {
@@ -358,6 +408,18 @@ ORDER BY pf.pinned DESC, `+factCategoryOrderSQL()+`, pf.updated_at DESC, pf.fact
 		facts[index].EvidenceRefs = references
 	}
 	return facts, nil
+}
+
+func (store *ProjectFactStore) countFacts(ctx context.Context, conditions []string, args []any) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	where := " WHERE " + strings.Join(conditions, " AND ")
+	var count int
+	if err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM project_facts pf"+where, args...).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count project facts: %w", err)
+	}
+	return count, nil
 }
 
 func (store *ProjectFactStore) loadEvidenceRefs(ctx context.Context, factID string) ([]int, error) {
@@ -383,7 +445,7 @@ func (store *ProjectFactStore) loadEvidenceRefs(ctx context.Context, factID stri
 	return refs, nil
 }
 
-func (store *ProjectFactStore) queryEdges(ctx context.Context, conditions []string, args []any) ([]domain.ProjectFactEdge, error) {
+func (store *ProjectFactStore) queryEdges(ctx context.Context, conditions []string, args []any, limit int) ([]domain.ProjectFactEdge, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -392,7 +454,7 @@ func (store *ProjectFactStore) queryEdges(ctx context.Context, conditions []stri
 SELECT pe.id, pe.project_id, pe.source_fact_key, pe.target_fact_key,
        pe.edge_type, pe.confidence, pe.created_at, pe.updated_at
 FROM project_fact_edges pe`+where+`
-ORDER BY pe.source_fact_key ASC, pe.edge_type ASC, pe.target_fact_key ASC`, args...)
+ORDER BY pe.source_fact_key ASC, pe.edge_type ASC, pe.target_fact_key ASC`+edgeLimitSQL(limit), args...)
 	if err != nil {
 		return nil, fmt.Errorf("query project fact edges: %w", err)
 	}
@@ -444,6 +506,10 @@ func (store *ProjectFactStore) updateConfidence(ctx context.Context, key, confid
 		if err != nil {
 			_ = tx.Rollback()
 			return err
+		}
+		if len(refs) == 0 {
+			_ = tx.Rollback()
+			return ErrFactEvidenceMissing
 		}
 		if err := verifyEvidenceRefsTx(ctx, tx, refs); err != nil {
 			_ = tx.Rollback()
@@ -504,6 +570,10 @@ func loadEvidenceRefsTx(ctx context.Context, tx *sql.Tx, factID string) ([]int, 
 }
 
 func replaceFactEdgesTx(ctx context.Context, tx *sql.Tx, projectID, sourceKey string, edges []domain.ProjectFactEdge) error {
+	if len(edges) > domain.MaxProjectFactEdges {
+		return fmt.Errorf("project fact has too many edges")
+	}
+	seen := make(map[string]bool, len(edges))
 	if _, err := tx.Exec(`DELETE FROM project_fact_edges WHERE project_id = ? AND source_fact_key = ?`, projectID, sourceKey); err != nil {
 		return fmt.Errorf("replace project fact edges: %w", err)
 	}
@@ -518,6 +588,9 @@ func replaceFactEdgesTx(ctx context.Context, tx *sql.Tx, projectID, sourceKey st
 		if edge.SourceFactKey != sourceKey {
 			return fmt.Errorf("project fact edge source must equal upserted fact key")
 		}
+		if edge.ProjectID != "" && edge.ProjectID != projectID {
+			return fmt.Errorf("project fact edge belongs to another project")
+		}
 		if err := domain.ValidateProjectFactEdge(edge); err != nil {
 			return err
 		}
@@ -528,6 +601,11 @@ func replaceFactEdgesTx(ctx context.Context, tx *sql.Tx, projectID, sourceKey st
 		if exists == 0 {
 			return fmt.Errorf("%w: %s", ErrFactEdgeTargetMissing, edge.TargetFactKey)
 		}
+		identity := edge.TargetFactKey + "\x00" + edge.EdgeType
+		if seen[identity] {
+			return fmt.Errorf("duplicate project fact edge: %s", identity)
+		}
+		seen[identity] = true
 		if edge.ID == "" {
 			edge.ID = newID("fact-edge")
 		}
@@ -613,9 +691,19 @@ func factCategoryOrderSQL() string {
 	return "CASE " + strings.Join(parts, " ") + " END"
 }
 
+func edgeLimitSQL(limit int) string {
+	if limit <= 0 || limit > maxFactIndexEdges {
+		limit = maxFactIndexEdges
+	}
+	return fmt.Sprintf(" LIMIT %d", limit)
+}
+
 func factLimitSQL(limit int) string {
-	if limit <= 0 || limit > 100 {
-		limit = 100
+	if limit < 0 {
+		return ""
+	}
+	if limit == 0 || limit > maxFactIndexCandidates {
+		limit = maxFactIndexCandidates
 	}
 	return fmt.Sprintf(" LIMIT %d", limit)
 }
@@ -630,9 +718,9 @@ func factQueryLimit(limit int) int {
 func formatFactIndexLine(fact domain.ProjectFact, edges []domain.ProjectFactEdge, facts map[string]domain.ProjectFact) string {
 	var builder strings.Builder
 	builder.WriteString("- ")
-	builder.WriteString(fact.FactKey)
+	builder.WriteString(escapeFactIndexText(fact.FactKey))
 	builder.WriteString(": ")
-	builder.WriteString(fact.Summary)
+	builder.WriteString(escapeFactIndexText(truncateFactIndexText(fact.Summary, maxFactIndexSummaryRunes)))
 	builder.WriteString(" [")
 	builder.WriteString(fact.Confidence)
 	builder.WriteString("] [")
@@ -653,11 +741,28 @@ func formatFactIndexLine(fact domain.ProjectFact, edges []domain.ProjectFactEdge
 		}
 	}
 	sort.Strings(hints)
-	for _, hint := range hints {
+	for index, hint := range hints {
+		if index == maxFactIndexHintsPerFact {
+			builder.WriteString(fmt.Sprintf("\n  +%d more graph hints", len(hints)-index))
+			break
+		}
 		builder.WriteString("\n  ")
-		builder.WriteString(hint)
+		builder.WriteString(escapeFactIndexText(hint))
 	}
 	return builder.String()
+}
+
+func truncateFactIndexText(value string, maximum int) string {
+	if maximum <= 0 || utf8.RuneCountInString(value) <= maximum {
+		return value
+	}
+	runes := []rune(value)
+	return string(runes[:maximum]) + "…"
+}
+
+func escapeFactIndexText(value string) string {
+	value = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ", "\t", " ").Replace(value)
+	return html.EscapeString(value)
 }
 
 func estimateFactTokens(value string) int {

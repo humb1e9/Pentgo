@@ -17,22 +17,22 @@ import (
 // ProjectRuntime 是项目级资源的唯一所有者。会话状态保留在各自的 SessionWorker 中；
 // 此类型仅保存不可变引用和已发布快照。
 type ProjectRuntime struct {
-	mu         sync.RWMutex
-	lifecycle  sync.Mutex
-	commitMu   sync.Mutex
-	store      *storage.ProjectStore
-	project    *domain.Project
-	blackboard *domain.Blackboard
-	journal    *storage.EvidenceStore
-	workspace  *builtins.Workspace
-	tools      agent.ToolProvider
-	turn       TurnFunc
-	sessions   map[string]*sessionRuntime
-	ctx        context.Context
-	cancel     context.CancelFunc
-	closed     bool
-	closeDone  chan struct{}
-	closeErr   error
+	mu        sync.RWMutex
+	lifecycle sync.Mutex
+	commitMu  sync.Mutex
+	store     *storage.ProjectStore
+	project   *domain.Project
+	facts     *storage.ProjectFactStore
+	journal   *storage.EvidenceStore
+	workspace *builtins.Workspace
+	tools     agent.ToolProvider
+	turn      TurnFunc
+	sessions  map[string]*sessionRuntime
+	ctx       context.Context
+	cancel    context.CancelFunc
+	closed    bool
+	closeDone chan struct{}
+	closeErr  error
 }
 
 // sessionRuntime 将 worker 与其后续 turn 回放所需的 transcript 配对保存。
@@ -71,31 +71,33 @@ func openProjectRuntimeWithSecrets(ctx context.Context, store *storage.ProjectSt
 	if err != nil {
 		return nil, err
 	}
-	blackboard, err := store.LoadBlackboard()
+	facts, err := store.OpenProjectFacts()
 	if err != nil {
 		return nil, err
 	}
 	journal, err := storage.OpenEvidenceStore(store.DatabasePath(), secrets...)
 	if err != nil {
+		_ = facts.Close()
 		return nil, err
 	}
 	workspace, err := builtins.NewWorkspace(store.WorkspaceRoot())
 	if err != nil {
 		_ = journal.Close()
+		_ = facts.Close()
 		return nil, err
 	}
 	runtimeContext, cancel := context.WithCancel(ctx)
 	return &ProjectRuntime{
-		store:      store,
-		project:    project,
-		blackboard: blackboard,
-		journal:    journal,
-		workspace:  workspace,
-		tools:      tools,
-		sessions:   make(map[string]*sessionRuntime),
-		ctx:        runtimeContext,
-		cancel:     cancel,
-		closeDone:  make(chan struct{}),
+		store:     store,
+		project:   project,
+		facts:     facts,
+		journal:   journal,
+		workspace: workspace,
+		tools:     tools,
+		sessions:  make(map[string]*sessionRuntime),
+		ctx:       runtimeContext,
+		cancel:    cancel,
+		closeDone: make(chan struct{}),
 	}, nil
 }
 
@@ -483,14 +485,14 @@ func (runtime *ProjectRuntime) Project() *domain.Project {
 	return domain.CloneProject(runtime.project)
 }
 
-// Blackboard 返回共享事实的副本。
-func (runtime *ProjectRuntime) Blackboard() *domain.Blackboard {
+// ProjectFacts returns the project-scoped structured fact ledger.
+func (runtime *ProjectRuntime) ProjectFacts() *storage.ProjectFactStore {
 	if runtime == nil {
 		return nil
 	}
 	runtime.mu.RLock()
 	defer runtime.mu.RUnlock()
-	return domain.CloneBlackboard(runtime.blackboard)
+	return runtime.facts
 }
 
 // Store 为需要访问存储的应用服务暴露项目存储对象。
@@ -523,33 +525,6 @@ func (runtime *ProjectRuntime) Tools(ctx context.Context) ([]agent.Tool, error) 
 		return nil, nil
 	}
 	return runtime.tools.Tools(ctx)
-}
-
-// UpdateBlackboard 在副本上应用变更，保存成功后才发布，
-// 从而避免写入失败的状态在内存中变得可见。
-func (runtime *ProjectRuntime) UpdateBlackboard(update func(*domain.Blackboard) error) error {
-	if runtime == nil || update == nil {
-		return fmt.Errorf("blackboard update is invalid")
-	}
-	runtime.commitMu.Lock()
-	defer runtime.commitMu.Unlock()
-	runtime.mu.RLock()
-	if runtime.closed {
-		runtime.mu.RUnlock()
-		return fmt.Errorf("project runtime is closed")
-	}
-	board := domain.CloneBlackboard(runtime.blackboard)
-	runtime.mu.RUnlock()
-	if err := update(board); err != nil {
-		return err
-	}
-	if err := runtime.store.SaveBlackboard(board); err != nil {
-		return err
-	}
-	runtime.mu.Lock()
-	runtime.blackboard = board
-	runtime.mu.Unlock()
-	return nil
 }
 
 // PersistSession 提交指定会话的最新安全快照。
@@ -654,6 +629,9 @@ func (runtime *ProjectRuntime) Close() error {
 		}
 	}
 	if err := runtime.journal.Close(); closeErr == nil && err != nil {
+		closeErr = err
+	}
+	if err := runtime.facts.Close(); closeErr == nil && err != nil {
 		closeErr = err
 	}
 	if err := runtime.store.Close(); closeErr == nil && err != nil {

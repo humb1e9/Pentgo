@@ -61,21 +61,6 @@ type Project struct {
 	Sessions  []SessionSummary `json:"sessions,omitempty"`
 }
 
-// Fact 是同一项目内所有会话共享的键值观察结果。
-type Fact struct {
-	Key       string    `json:"key"`
-	Value     string    `json:"value"`
-	Source    string    `json:"source,omitempty"`
-	SessionID string    `json:"session_id,omitempty"`
-	At        time.Time `json:"at"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-// Blackboard 是项目范围内共享事实的集合。
-type Blackboard struct {
-	Facts []Fact `json:"facts"`
-}
-
 // NewSession 创建 open 状态的会话，并规范化可选的标识与时间。
 func NewSession(id, intent string, startedAt time.Time) *Session {
 	if strings.TrimSpace(id) == "" {
@@ -196,39 +181,6 @@ func (session *Session) finishTurn(turnID string, status TurnStatus, reason, sum
 	return nil
 }
 
-// NoteFact 按 key 新增或替换事实，使最新观察结果可供项目内所有会话使用。
-func (board *Blackboard) NoteFact(fact Fact) error {
-	if board == nil {
-		return fmt.Errorf("blackboard is nil")
-	}
-	fact.Key = strings.TrimSpace(fact.Key)
-	fact.Value = strings.TrimSpace(fact.Value)
-	if fact.Key == "" || fact.Value == "" {
-		return fmt.Errorf("fact key and value are required")
-	}
-	if fact.At.IsZero() {
-		fact.At = time.Now().UTC()
-	} else {
-		fact.At = fact.At.UTC()
-	}
-	if fact.UpdatedAt.IsZero() {
-		fact.UpdatedAt = time.Now().UTC()
-	} else {
-		fact.UpdatedAt = fact.UpdatedAt.UTC()
-	}
-	for index, existing := range board.Facts {
-		if existing.Key == fact.Key {
-			// A replacement is a fresh observation even when callers provide an
-			// older source timestamp for the observation itself.
-			fact.UpdatedAt = time.Now().UTC()
-			board.Facts[index] = fact
-			return nil
-		}
-	}
-	board.Facts = append(board.Facts, fact)
-	return nil
-}
-
 // CloneSession 深拷贝可变切片和当前 turn，供并发读取使用。
 func CloneSession(source *Session) *Session {
 	if source == nil {
@@ -248,14 +200,6 @@ func CloneProject(source *Project) *Project {
 	cloned := *source
 	cloned.Sessions = append([]SessionSummary(nil), source.Sessions...)
 	return &cloned
-}
-
-// CloneBlackboard 深拷贝项目共享事实。
-func CloneBlackboard(source *Blackboard) *Blackboard {
-	if source == nil {
-		return nil
-	}
-	return &Blackboard{Facts: append([]Fact(nil), source.Facts...)}
 }
 
 // newID 创建不透明 ID，避免领域状态依赖具体存储后端。

@@ -47,7 +47,25 @@ func TestAssemblerUsesLegacyFullTranscriptWhenContextDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(activities) != 0 || len(input.Messages) != 2 || input.Messages[0].Content != "first" || input.Messages[1].Content != "second" || input.ContextWindow != 0 {
+	if len(activities) != 0 || len(input.Messages) != 2 || input.Messages[0].Content != "first" || input.Messages[1].Content != "second" || input.ContextWindow != 0 || input.ProjectFacts != "" {
+		t.Fatalf("input/activities = %#v/%#v", input, activities)
+	}
+}
+
+func TestAssemblerInjectsBoundedStructuredFactIndex(t *testing.T) {
+	fixture := newAssemblerFixture(t)
+	defer fixture.close()
+	if err := fixture.runtime.ProjectFacts().Upsert(context.Background(), storage.ProjectFactWrite{Fact: domain.ProjectFact{
+		FactKey: "target", Category: domain.FactCategoryTarget, Summary: "API target", Body: "secret full reproducible body", Confidence: domain.FactConfidenceTentative, Pinned: true,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	policy := config.AgentContextConfig{ContextWindow: 1000, FactIndexRatio: 0.5}.Effective()
+	input, activities, err := NewContextAssembler(fixture.runtime, policy, NewContextMeter(), nil).Prepare(context.Background(), fixture.session.ID, "system", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(activities) != 0 || !strings.Contains(input.ProjectFacts, `<project-fact-index shown="1"`) || !strings.Contains(input.ProjectFacts, "API target") || strings.Contains(input.ProjectFacts, "secret full reproducible body") {
 		t.Fatalf("input/activities = %#v/%#v", input, activities)
 	}
 }
@@ -79,11 +97,11 @@ func TestContextRequestMeasuresExactProviderSystemEnvelope(t *testing.T) {
 	request := contextRequestFromInput(input)
 	wantSystem := llm.SystemInstructionPrefix(input.SystemPrompt)
 	wantFacts := llm.ProjectFactsEnvelope(input.ProjectFacts)
-	if request.SystemPrompt != wantSystem || request.Blackboard != wantFacts {
+	if request.SystemPrompt != wantSystem || request.FactIndex != wantFacts {
 		t.Fatalf("context envelope = %#v, want system=%q facts=%q", request, wantSystem, wantFacts)
 	}
-	if got := llm.SystemPrompt(input.SystemPrompt, input.ProjectFacts); got != request.SystemPrompt+request.Blackboard {
-		t.Fatalf("provider prompt = %q, measured prompt = %q", got, request.SystemPrompt+request.Blackboard)
+	if got := llm.SystemPrompt(input.SystemPrompt, input.ProjectFacts); got != request.SystemPrompt+request.FactIndex {
+		t.Fatalf("provider prompt = %q, measured prompt = %q", got, request.SystemPrompt+request.FactIndex)
 	}
 }
 

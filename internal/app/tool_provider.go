@@ -70,12 +70,9 @@ func validateProjectTools(ctx context.Context, provider agent.ToolProvider, skil
 		return err
 	}
 	reserved := map[string]bool{
-		"upsert_project_fact":    true,
-		"get_project_fact":       true,
-		"list_project_facts":     true,
-		"search_project_facts":   true,
-		"deprecate_project_fact": true,
-		"restore_project_fact":   true,
+		"upsert_project_fact": true,
+		"get_project_fact":    true,
+		"list_project_facts":  true,
 	}
 	if skillsAvailable {
 		reserved["load_skill"] = true

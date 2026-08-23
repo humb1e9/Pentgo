@@ -22,7 +22,7 @@ const (
 type ContextRequest struct {
 	SystemPrompt string
 	Tools        []agent.Tool
-	FactIndex    string
+	ProjectFacts string
 	Nodes        []agent.SurfaceNode
 	Messages     map[int]agent.Message
 }
@@ -45,18 +45,15 @@ func NewContextMeter() *contextMeter {
 
 // Measure returns an independent value snapshot for the assembled request.
 func (meter *contextMeter) Measure(request ContextRequest) agent.ContextMeasurement {
-	// The provider receives system prompt and project facts as one system message.
-	// Split its single rounded estimate only for component reporting, so Total is
-	// never inflated by rounding each part independently.
-	systemTokens := estimateTextTokens(request.SystemPrompt)
-	systemAndFactIndexTokens := estimateTextTokens(providerSystemMessage(request))
+	// The provider receives system prompt and project facts as one system
+	// message, so they are measured together to avoid rounding drift.
+	systemAndProjectFactsTokens := estimateTextTokens(providerSystemMessage(request))
 	measurement := agent.ContextMeasurement{
-		SystemTokens:     systemTokens,
+		SystemTokens:     systemAndProjectFactsTokens,
 		ToolSchemaTokens: measureTools(request.Tools),
-		FactIndexTokens:  systemAndFactIndexTokens - systemTokens,
 		SurfaceTokens:    measureSurface(request.Nodes, request.Messages),
 	}
-	measurement.TotalTokens = systemAndFactIndexTokens + measurement.ToolSchemaTokens + measurement.SurfaceTokens
+	measurement.TotalTokens = systemAndProjectFactsTokens + measurement.ToolSchemaTokens + measurement.SurfaceTokens
 	if meter == nil {
 		return measurement
 	}
@@ -132,7 +129,7 @@ func estimateTextTokens(value string) int {
 }
 
 func providerSystemMessage(request ContextRequest) string {
-	return request.SystemPrompt + request.FactIndex
+	return request.SystemPrompt + request.ProjectFacts
 }
 
 func normalizedEnvelope(request ContextRequest) string {

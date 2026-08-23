@@ -70,7 +70,7 @@ cmd ──→ config
             └── turn 事件
 ```
 
-- `ProjectRuntime` 拥有项目 context、evidence、结构化 `ProjectFactStore`、受约束的 Workspace、LocalRegistry、组合 MCP provider、transcript handle 和 worker。host 每轮以 `agent.Tool` 暴露 workspace 工具和六个项目事实工具；每个具名外部 MCP Server 维护独立的 stdio、Streamable HTTP 或 SSE 连接；所有工具以全局唯一名称暴露。
+- `ProjectRuntime` 拥有项目 context、evidence、最小 `ProjectFactLedger`、只读 Fact Index、受约束的 Workspace、LocalRegistry、组合 MCP provider、transcript handle 和 worker。host 每轮以 `agent.Tool` 暴露 workspace 工具和三个项目事实工具；每个具名外部 MCP Server 维护独立的 stdio、Streamable HTTP 或 SSE 连接；所有工具以全局唯一名称暴露。
 - `SessionWorker` 自己的 goroutine 才能修改 `domain.Session`；`Snapshot` 返回原子发布的深拷贝。
 - 一个 session 同时只运行一个 turn；同一项目内不同 session 可以并发运行。
 - `pentgo` 打开 `<cwd>/.pentgo/` 并创建新会话；目录不存在时同时创建工作区。`pentgo resume` 在进入 TUI 前列出会话并恢复用户选择的历史会话。
@@ -84,7 +84,8 @@ cmd ──→ config
 app.SessionWorker
   → app.TurnService.BeginTurn
   → transcript.Append(user)
-  → ContextAssembler.Prepare(Surface + bounded Fact Index)
+  → capture one fixed Fact Index snapshot
+  → ContextAssembler.Prepare(Surface + turn snapshot)
   → agent.ModelStepper.StreamStep(one provider request)
   → host consumes deltas (UI only)
   → transcript.Append(complete assistant/tool messages in order)
@@ -93,7 +94,7 @@ app.SessionWorker
   → app.ProjectRuntime.PersistState
 ```
 
-正常完成的 turn 不会关闭 session。模型适配器不保存 session、project、项目事实或 checkpoint；host loop 拥有工具调用和最多一次 overflow recovery。启用 context window 时，raw transcript 是审计 ledger，Context Surface 是可压缩的模型投影；每轮同时注入独立预算、确定性排序的 Fact Index。它只呈现 key、category、summary、confidence 与非弃用图提示，正文通过 host 事实工具按需读取；活动信息只进入 UI，不进入 transcript。重启后的继续从持久化 Surface 和事实账本组装请求，历史 tool message 只回放，不再次调用工具。
+正常完成的 turn 不会关闭 session。模型适配器不保存 session、project、项目事实或 checkpoint；host loop 拥有工具调用和最多一次 overflow recovery。启用 context window 时，raw transcript 是审计 ledger，Context Surface 是可压缩的模型投影。每个 turn 在工具执行前捕获一次固定 4,096-rune、按 key 排序的 Fact Index，此快照被该 turn 的全部模型请求（包括 overflow recovery）复用；同 turn 内新写的事实从下一 turn 可见。最小事实只保存 key、value、可选 Evidence 来源和更新时间；活动信息只进入 UI，不进入 transcript。
 
 ## 持久化边界
 
@@ -103,16 +104,16 @@ app.SessionWorker
 └── tmp/                         MCP 工作目录和临时文件
 ```
 
-`pentgo.db` 使用 SQLite WAL、foreign keys 和版本化 schema。核心数据按关系建模：`projects`、`sessions`、`session_targets`、`turns`、`project_facts`、`project_fact_evidence`、`project_fact_edges`、`evidence_records`、`transcript_messages` 和 `transcript_tool_calls`。provider 参数保留为 JSON 列，领域事实不存 JSON blob。v5 项目的 legacy `facts` 行会在 v6 迁移中原子导入为 `note`/`tentative` 项目事实，并保留来源 session 与时间。
+`pentgo.db` 使用 SQLite WAL、foreign keys 和版本化 schema。核心数据按关系建模：`projects`、`sessions`、`session_targets`、`turns`、`project_facts`、`evidence_records`、`transcript_messages` 和 `transcript_tool_calls`。`project_facts` 只包含 `(project_id, fact_key, value, evidence_ref, updated_at)`；provider 参数保留为 JSON 列，领域事实不存 JSON blob。v7 migration 会删除所有旧事实表及其数据，不迁移短期项目的旧事实，同时保留 transcript 与 Evidence 审计表。
 
-project 的 session summaries 从 `sessions` 查询派生。`CommitSession` 原子保存 session、turn、targets 和 project 元数据；`ProjectFactStore.Upsert` 原子保存事实、Evidence 引用和其替换边集合。
+project 的 session summaries 从 `sessions` 查询派生。`CommitSession` 原子保存 session、turn、targets 和 project 元数据；`ProjectFactRepository.Upsert` 仅替换同 key 的 value、可选 Evidence ref 与更新时间。
 
 
 ## Tool 边界
 
 `agent.Tool` 只有名称、描述和 `Invoke(context.Context, map[string]any)`。需要保留 provider schema 的工具额外实现 `agent.ToolSchemaProvider`。`adapters/llm` 只把 schema 绑定到单次 streamed request，不执行工具；`adapters/mcp` 将 MCP schema 转为同一协议。
 
-应用层提供 `upsert_project_fact`、`get_project_fact`、`list_project_facts`、`search_project_facts`、`deprecate_project_fact`、`restore_project_fact` 和按需启用的 `load_skill`。`confirmed` 事实只能引用本项目成功的 Evidence；`tentative` 可以没有 Evidence，`deprecated` 事实和边保留审计记录但默认不可见。Workspace wrappers、LocalRegistry 的用户声明本机 CLI 与外部 MCP 工具都由 host loop 执行，再由统一 executor 写入证据。所有执行工具都返回带有 `[evidence_ref: N]` 的持久化结果。
+应用层提供 `upsert_project_fact`、`get_project_fact`、`list_project_facts` 和按需启用的 `load_skill`。项目事实的可选 `evidence_ref` 只验证当前项目存在相应 Evidence，不解释执行成功状态；写入未带该字段时清除旧来源。Workspace wrappers、LocalRegistry 的用户声明本机 CLI 与外部 MCP 工具都由 host loop 执行，再由统一 executor 写入证据。所有执行工具都返回带有 `[evidence_ref: N]` 的持久化结果。
 
 ## Skills
 

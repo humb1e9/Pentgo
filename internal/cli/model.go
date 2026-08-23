@@ -557,7 +557,7 @@ func (model *terminalModel) recordEvent(event app.Event) {
 			switch activity.Kind {
 			case agent.ContextRequestRejected:
 				level = activityError
-			case agent.ContextCheckpointCreated, agent.ContextToolPruned, agent.ContextFactIndexLimited, agent.ContextOverflowRetry:
+			case agent.ContextCheckpointCreated, agent.ContextToolPruned, agent.ContextOverflowRetry:
 				level = activityStatus
 			}
 		}

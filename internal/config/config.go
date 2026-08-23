@@ -20,12 +20,9 @@ var (
 	localToolReservedNames = map[string]bool{
 		"ls": true, "read_file": true, "write_file": true, "edit_file": true,
 		"glob": true, "grep": true, "execute": true,
-		"upsert_project_fact":    true,
-		"get_project_fact":       true,
-		"list_project_facts":     true,
-		"search_project_facts":   true,
-		"deprecate_project_fact": true,
-		"restore_project_fact":   true,
+		"upsert_project_fact": true,
+		"get_project_fact":    true,
+		"list_project_facts":  true,
 	}
 )
 
@@ -53,7 +50,6 @@ type AgentContextConfig struct {
 	ContextWindow            int     `json:"context_window,omitempty"`
 	ThresholdRatio           float64 `json:"threshold_ratio,omitempty"`
 	RetainRatio              float64 `json:"retain_ratio,omitempty"`
-	FactIndexRatio           float64 `json:"fact_index_ratio,omitempty"`
 	ToolResultThresholdChars int     `json:"tool_result_threshold_chars,omitempty"`
 	ToolResultHeadChars      int     `json:"tool_result_head_chars,omitempty"`
 	ToolResultTailChars      int     `json:"tool_result_tail_chars,omitempty"`
@@ -63,25 +59,6 @@ type AgentContextConfig struct {
 }
 
 const toolResultPruneMarker = "\n\n[... tool result middle pruned ...]\n\n"
-
-// UnmarshalJSON rejects the removed Phase 1 blackboard_ratio explicitly so
-// operators migrate intent instead of silently getting a different budget.
-func (config *AgentContextConfig) UnmarshalJSON(data []byte) error {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
-		return err
-	}
-	if _, legacy := fields["blackboard_ratio"]; legacy {
-		return fmt.Errorf("blackboard_ratio was removed; use fact_index_ratio")
-	}
-	type raw AgentContextConfig
-	var decoded raw
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		return err
-	}
-	*config = AgentContextConfig(decoded)
-	return nil
-}
 
 // Enabled reports whether context budgeting is active for this agent.
 func (config AgentContextConfig) Enabled() bool {
@@ -99,9 +76,6 @@ func (config AgentContextConfig) Effective() AgentContextConfig {
 	}
 	if config.RetainRatio == 0 {
 		config.RetainRatio = 0.16
-	}
-	if config.FactIndexRatio == 0 {
-		config.FactIndexRatio = 0.08
 	}
 	if config.ToolResultThresholdChars == 0 {
 		config.ToolResultThresholdChars = 8192
@@ -261,9 +235,6 @@ func validateAgentContextConfig(policy AgentContextConfig) error {
 	}
 	if policy.RetainRatio <= 0 || policy.RetainRatio >= policy.ThresholdRatio {
 		return fmt.Errorf("retain_ratio must be in (0, threshold_ratio)")
-	}
-	if policy.FactIndexRatio <= 0 || policy.FactIndexRatio >= policy.ThresholdRatio {
-		return fmt.Errorf("fact_index_ratio must be in (0, threshold_ratio)")
 	}
 	if policy.ToolResultThresholdChars <= 0 || policy.ToolResultHeadChars < 0 || policy.ToolResultTailChars < 0 || policy.ToolResultHeadChars+len([]rune(toolResultPruneMarker))+policy.ToolResultTailChars > policy.ToolResultThresholdChars {
 		return fmt.Errorf("tool result threshold/head/tail settings are invalid")

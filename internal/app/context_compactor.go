@@ -26,7 +26,7 @@ type CompactionRequest struct {
 	Surface      agent.ContextSurface
 	Messages     map[int]agent.Message
 	SystemPrompt string
-	FactIndex    string
+	ProjectFacts string
 	Tools        []agent.Tool
 	ModelRoute   string
 	Prunes       map[int]string
@@ -58,7 +58,7 @@ func (compactor *ContextCompactor) Prepare(ctx context.Context, request Compacti
 	if !compactor.policy.Enabled() || compactor.meter == nil {
 		return pruned, activities, nil
 	}
-	measurement := compactor.meter.Measure(ContextRequest{SystemPrompt: request.SystemPrompt, FactIndex: request.FactIndex, Tools: request.Tools, Nodes: pruned.Nodes, Messages: request.Messages})
+	measurement := compactor.meter.Measure(ContextRequest{SystemPrompt: request.SystemPrompt, ProjectFacts: request.ProjectFacts, Tools: request.Tools, Nodes: pruned.Nodes, Messages: request.Messages})
 	if measurement.TotalTokens < contextThreshold(compactor.policy) {
 		if len(replacements) != 0 {
 			updated, err := compactor.surface.PruneTools(request.Surface.Generation, replacements)

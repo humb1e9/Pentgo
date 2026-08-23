@@ -108,6 +108,14 @@ func (service *TurnService) RunTurn(ctx context.Context, runtime *ProjectRuntime
 	if err != nil {
 		return err
 	}
+	factIndex := runtime.ProjectFactIndex()
+	if factIndex == nil {
+		return service.finishError(runtime, session, turn.ID, fmt.Errorf("project fact index is unavailable"), service.currentTime())
+	}
+	factSnapshot, err := factIndex.Snapshot(ctx)
+	if err != nil {
+		return service.finishError(runtime, session, turn.ID, err, service.currentTime())
+	}
 	if targets := extractTargets(message); len(targets) != 0 {
 		session.AddTargets(targets...)
 	}
@@ -136,7 +144,7 @@ func (service *TurnService) RunTurn(ctx context.Context, runtime *ProjectRuntime
 	systemPrompt := service.currentSystemPrompt()
 	maxRequests := service.requestLimit()
 	for request := 0; request < maxRequests; request++ {
-		input, activities, err := assembler.Prepare(ctx, session.ID, systemPrompt, tools)
+		input, activities, err := assembler.Prepare(ctx, session.ID, systemPrompt, tools, factSnapshot)
 		for _, activity := range activities {
 			runtime.Emit(session.ID, Event{TurnID: turn.ID, Kind: EventContextActivity, Message: activity.Message, Data: activity})
 		}
@@ -150,7 +158,7 @@ func (service *TurnService) RunTurn(ctx context.Context, runtime *ProjectRuntime
 			if stepErr != nil {
 				if errors.Is(stepErr, agent.ErrContextWindowExceeded) && !overflowRecovered {
 					overflowRecovered = true
-					input, activities, stepErr = assembler.PrepareOverflowRecovery(ctx, session.ID, systemPrompt, tools)
+					input, activities, stepErr = assembler.PrepareOverflowRecovery(ctx, session.ID, systemPrompt, tools, factSnapshot)
 					for _, activity := range activities {
 						runtime.Emit(session.ID, Event{TurnID: turn.ID, Kind: EventContextActivity, Message: activity.Message, Data: activity})
 					}
@@ -169,7 +177,7 @@ func (service *TurnService) RunTurn(ctx context.Context, runtime *ProjectRuntime
 			final, err = consumeModelStream(ctx, runtime, session.ID, turn.ID, stream)
 			if errors.Is(err, agent.ErrContextWindowExceeded) && !overflowRecovered {
 				overflowRecovered = true
-				input, activities, err = assembler.PrepareOverflowRecovery(ctx, session.ID, systemPrompt, tools)
+				input, activities, err = assembler.PrepareOverflowRecovery(ctx, session.ID, systemPrompt, tools, factSnapshot)
 				for _, activity := range activities {
 					runtime.Emit(session.ID, Event{TurnID: turn.ID, Kind: EventContextActivity, Message: activity.Message, Data: activity})
 				}

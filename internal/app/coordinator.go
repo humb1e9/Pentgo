@@ -418,7 +418,7 @@ func (coordinator *Coordinator) Messages(sessionID string) []agent.Message {
 	return transcript.Messages()
 }
 
-// FactIndex renders the current non-deprecated structured facts for the CLI.
+// FactIndex renders the fixed-size minimal Fact Index for the CLI.
 func (coordinator *Coordinator) FactIndex() string {
 	coordinator.mu.RLock()
 	runtime := coordinator.runtime
@@ -426,15 +426,15 @@ func (coordinator *Coordinator) FactIndex() string {
 	if runtime == nil {
 		return "当前没有打开的项目。"
 	}
-	facts := runtime.ProjectFacts()
-	if facts == nil {
+	index := runtime.ProjectFactIndex()
+	if index == nil {
 		return "项目事实账本不可用。"
 	}
-	index, err := facts.FactIndex(2000)
+	text, err := index.Snapshot(context.Background())
 	if err != nil {
 		return "读取项目事实失败：" + err.Error()
 	}
-	return index.Text
+	return text
 }
 
 // CloseProject 释放当前运行时及其持有的全部资源。

@@ -149,6 +149,22 @@ func (store *EvidenceStore) Lookup(sequence int) (Record, bool) {
 	return record, err == nil
 }
 
+// Exists reports whether an Evidence record exists. It intentionally does not
+// expose content or interpret success, because fact references are provenance
+// links rather than confidence claims.
+func (store *EvidenceStore) Exists(sequence int) bool {
+	if store == nil || store.db == nil || sequence <= 0 {
+		return false
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.closed {
+		return false
+	}
+	var found bool
+	return store.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM evidence_records WHERE seq = ?)`, sequence).Scan(&found) == nil && found
+}
+
 // scanRecord 将数据库行转换为公开的证据表示。
 func scanRecord(row interface{ Scan(...any) error }) (Record, error) {
 	var record Record

@@ -22,7 +22,8 @@ type ProjectRuntime struct {
 	commitMu  sync.Mutex
 	store     *storage.ProjectStore
 	project   *domain.Project
-	facts     *storage.ProjectFactStore
+	facts     *ProjectFactLedger
+	factIndex *ProjectFactIndex
 	journal   *storage.EvidenceStore
 	workspace *builtins.Workspace
 	tools     agent.ToolProvider
@@ -71,19 +72,19 @@ func openProjectRuntimeWithSecrets(ctx context.Context, store *storage.ProjectSt
 	if err != nil {
 		return nil, err
 	}
-	facts, err := store.OpenProjectFacts()
+	repository, err := store.OpenProjectFactRepository()
 	if err != nil {
 		return nil, err
 	}
 	journal, err := storage.OpenEvidenceStore(store.DatabasePath(), secrets...)
 	if err != nil {
-		_ = facts.Close()
 		return nil, err
 	}
+	facts := NewProjectFactLedger(repository, journal)
+	factIndex := NewProjectFactIndex(facts)
 	workspace, err := builtins.NewWorkspace(store.WorkspaceRoot())
 	if err != nil {
 		_ = journal.Close()
-		_ = facts.Close()
 		return nil, err
 	}
 	runtimeContext, cancel := context.WithCancel(ctx)
@@ -91,6 +92,7 @@ func openProjectRuntimeWithSecrets(ctx context.Context, store *storage.ProjectSt
 		store:     store,
 		project:   project,
 		facts:     facts,
+		factIndex: factIndex,
 		journal:   journal,
 		workspace: workspace,
 		tools:     tools,
@@ -485,14 +487,25 @@ func (runtime *ProjectRuntime) Project() *domain.Project {
 	return domain.CloneProject(runtime.project)
 }
 
-// ProjectFacts returns the project-scoped structured fact ledger.
-func (runtime *ProjectRuntime) ProjectFacts() *storage.ProjectFactStore {
+// ProjectFacts returns the project-scoped minimal fact ledger.
+func (runtime *ProjectRuntime) ProjectFacts() *ProjectFactLedger {
 	if runtime == nil {
 		return nil
 	}
 	runtime.mu.RLock()
 	defer runtime.mu.RUnlock()
 	return runtime.facts
+}
+
+// ProjectFactIndex returns the read-only Fact Index renderer used to capture
+// one stable snapshot at the start of every turn.
+func (runtime *ProjectRuntime) ProjectFactIndex() *ProjectFactIndex {
+	if runtime == nil {
+		return nil
+	}
+	runtime.mu.RLock()
+	defer runtime.mu.RUnlock()
+	return runtime.factIndex
 }
 
 // Store 为需要访问存储的应用服务暴露项目存储对象。
@@ -629,9 +642,6 @@ func (runtime *ProjectRuntime) Close() error {
 		}
 	}
 	if err := runtime.journal.Close(); closeErr == nil && err != nil {
-		closeErr = err
-	}
-	if err := runtime.facts.Close(); closeErr == nil && err != nil {
 		closeErr = err
 	}
 	if err := runtime.store.Close(); closeErr == nil && err != nil {

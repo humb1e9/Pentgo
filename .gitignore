@@ -16,6 +16,7 @@
 /build/
 *.exe
 *.test
+*_test.go
 coverage.out
 *.coverprofile
 *.prof

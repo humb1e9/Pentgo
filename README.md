@@ -49,8 +49,7 @@ mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/pentgo"
     "provider": "openai",
     "max_turns": 20,
     "context": {
-      "context_window": 128000,
-      "fact_index_ratio": 0.08
+      "context_window": 128000
     },
     "openai": {
       "base_url": "https://api.openai.com/v1",
@@ -63,7 +62,7 @@ mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/pentgo"
 
 使用 Anthropic 时，将 `provider` 改为 `anthropic`，并在 `agent.anthropic` 中填写 `base_url`、`model` 与 `api_key_env`。其他兼容 OpenAI 的服务通常只需替换 `base_url` 和 `model`。
 
-当配置 `agent.context.context_window` 后，PentGo 会自动管理长会话上下文，优先保留近期工作与有界 Fact Index；`fact_index_ratio` 默认占窗口的 8%。Fact Index 仅包含结构化事实摘要和图提示，不包含正文；模型可通过项目事实工具读取完整内容。完整 raw transcript 与 Evidence 审计数据仍保存在本地。省略 context window 则保持完整 transcript 回放，且不注入 Fact Index。
+PentGo 会在每个 turn 开始时生成一次固定 4,096 Unicode runes、按 key 排序的 Fact Index 快照，并在该 turn 的所有模型请求中复用；同 turn 内写入的事实从下一 turn 才可见。Fact Index 包含 key、value 与可选来源编号，模型可用项目事实工具读取完整记录或被省略的条目。完整 raw transcript 与 Evidence 审计数据仍保存在本地；`context_window` 仅控制 Context Surface 压缩，不控制 Fact Index 是否注入。
 
 ### 3. 启动
 
@@ -95,7 +94,7 @@ mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/pentgo"
 
 ## 项目事实账本
 
-项目范围的事实由 host 执行的六个工具维护：`upsert_project_fact`、`get_project_fact`、`list_project_facts`、`search_project_facts`、`deprecate_project_fact` 与 `restore_project_fact`。写入包含 key、类别、摘要、可复现正文和置信度；`confirmed` 写入必须引用本项目中成功的 Evidence。`upsert_project_fact` 在同一个事务内写入事实、Evidence 引用和出边。弃用事实和边仍保留审计记录，但默认不进入 Fact Index。
+项目范围的事实由 host 执行的三个工具维护：`upsert_project_fact`、`get_project_fact` 与 `list_project_facts`。记录只有小写 snake_case key、完整 value、可选 `evidence_ref` 和更新时间；key 必须匹配 `^[a-z][a-z0-9_]{0,63}$`，value 最多 16,384 Unicode runes。`evidence_ref` 只要求引用本项目现存的 Evidence（成功或失败均可）。同 key 的 upsert 完整覆盖 value 与来源；未提供 ref 会清除旧关联。项目是短期测试工作区，因此不提供删除、弃用、类别或图边。
 
 ## 添加工具
 

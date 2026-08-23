@@ -11,7 +11,7 @@ import (
 )
 
 // schemaVersion 记录每个项目数据库应使用的 SQLite 布局版本。
-const schemaVersion = 5
+const schemaVersion = 6
 
 // schema 由 openSQLite 在单个事务中应用于新数据库。
 // 表使用规范化关系持久化事实，而非序列化状态块。
@@ -67,14 +67,39 @@ CREATE TABLE IF NOT EXISTS evidence_records (
     finished_at INTEGER NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS facts (
-    key TEXT PRIMARY KEY,
-    position INTEGER NOT NULL UNIQUE CHECK (position >= 0),
-    value TEXT NOT NULL,
-    source TEXT NOT NULL DEFAULT '',
-    session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
-    at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+CREATE TABLE IF NOT EXISTS project_facts (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    fact_key TEXT NOT NULL,
+    category TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    body TEXT NOT NULL,
+    confidence TEXT NOT NULL,
+    pinned INTEGER NOT NULL CHECK(pinned IN (0,1)),
+    source_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(project_id, fact_key)
+);
+
+CREATE TABLE IF NOT EXISTS project_fact_evidence (
+    fact_id TEXT NOT NULL REFERENCES project_facts(id) ON DELETE CASCADE,
+    evidence_seq INTEGER NOT NULL REFERENCES evidence_records(seq),
+    PRIMARY KEY(fact_id, evidence_seq)
+);
+
+CREATE TABLE IF NOT EXISTS project_fact_edges (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    source_fact_key TEXT NOT NULL,
+    target_fact_key TEXT NOT NULL,
+    edge_type TEXT NOT NULL,
+    confidence TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(project_id, source_fact_key, target_fact_key, edge_type),
+    FOREIGN KEY(project_id, source_fact_key) REFERENCES project_facts(project_id, fact_key),
+    FOREIGN KEY(project_id, target_fact_key) REFERENCES project_facts(project_id, fact_key)
 );
 
 CREATE TABLE IF NOT EXISTS transcript_messages (
@@ -273,6 +298,115 @@ CREATE UNIQUE INDEX IF NOT EXISTS context_compactions_one_started_range
 		}
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("commit sqlite schema v4 to v5 migration: %w", err)
+		}
+	}
+	if version >= 1 && version <= 5 {
+		var hasLegacyFacts bool
+		if err := db.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'facts')`).Scan(&hasLegacyFacts); err != nil {
+			return fmt.Errorf("inspect sqlite schema v5 to v6 migration: %w", err)
+		}
+		// Older partial-schema fixtures can legitimately have no project facts.
+		// The current schema is created after migration, so no project lookup is
+		// required unless an actual legacy facts table must be copied.
+		if !hasLegacyFacts {
+			return nil
+		}
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("begin sqlite schema v5 to v6 migration: %w", err)
+		}
+		var projectID string
+		if err := tx.QueryRow(`SELECT id FROM projects WHERE singleton = 1`).Scan(&projectID); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("migrate sqlite schema v5 to v6 project id: %w", err)
+		}
+		if hasLegacyFacts {
+			if _, err := tx.Exec(`
+CREATE TABLE IF NOT EXISTS project_facts (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    fact_key TEXT NOT NULL,
+    category TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    body TEXT NOT NULL,
+    confidence TEXT NOT NULL,
+    pinned INTEGER NOT NULL CHECK(pinned IN (0,1)),
+    source_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(project_id, fact_key)
+);
+CREATE TABLE IF NOT EXISTS project_fact_evidence (
+    fact_id TEXT NOT NULL REFERENCES project_facts(id) ON DELETE CASCADE,
+    evidence_seq INTEGER NOT NULL REFERENCES evidence_records(seq),
+    PRIMARY KEY(fact_id, evidence_seq)
+);
+CREATE TABLE IF NOT EXISTS project_fact_edges (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    source_fact_key TEXT NOT NULL,
+    target_fact_key TEXT NOT NULL,
+    edge_type TEXT NOT NULL,
+    confidence TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(project_id, source_fact_key, target_fact_key, edge_type),
+    FOREIGN KEY(project_id, source_fact_key) REFERENCES project_facts(project_id, fact_key),
+    FOREIGN KEY(project_id, target_fact_key) REFERENCES project_facts(project_id, fact_key)
+);`); err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf("create project fact tables v5 to v6: %w", err)
+			}
+			rows, err := tx.Query(`SELECT key, value, session_id, at, updated_at FROM facts ORDER BY position`)
+			if err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf("migrate sqlite schema v5 to v6 facts: %w", err)
+			}
+			var migrated []struct {
+				key         string
+				value       string
+				sessionID   sql.NullString
+				at, updated int64
+			}
+			for rows.Next() {
+				var item struct {
+					key         string
+					value       string
+					sessionID   sql.NullString
+					at, updated int64
+				}
+				if err := rows.Scan(&item.key, &item.value, &item.sessionID, &item.at, &item.updated); err != nil {
+					rows.Close()
+					_ = tx.Rollback()
+					return fmt.Errorf("scan legacy fact v5 to v6: %w", err)
+				}
+				migrated = append(migrated, item)
+			}
+			if err := rows.Close(); err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf("close legacy fact scan v5 to v6: %w", err)
+			}
+			for _, fact := range migrated {
+				if _, err := tx.Exec(`
+INSERT INTO project_facts(
+    id, project_id, fact_key, category, summary, body, confidence, pinned,
+    source_session_id, created_at, updated_at
+) VALUES(?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+					"legacy:"+fact.key, projectID, fact.key,
+					"note", fact.value, fact.value, "tentative",
+					nullableText(fact.sessionID.String), fact.at, fact.updated,
+				); err != nil {
+					_ = tx.Rollback()
+					return fmt.Errorf("insert legacy fact v5 to v6: %w", err)
+				}
+			}
+			if _, err := tx.Exec(`DROP TABLE facts`); err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf("drop legacy facts v5 to v6: %w", err)
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit sqlite schema v5 to v6 migration: %w", err)
 		}
 	}
 	return nil

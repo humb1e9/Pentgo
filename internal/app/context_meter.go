@@ -24,7 +24,7 @@ const (
 type ContextRequest struct {
 	SystemPrompt string
 	Tools        []agent.Tool
-	Blackboard   string
+	FactIndex    string
 	Nodes        []agent.SurfaceNode
 	Messages     map[int]agent.Message
 }
@@ -51,14 +51,14 @@ func (meter *contextMeter) Measure(request ContextRequest) agent.ContextMeasurem
 	// Split its single rounded estimate only for component reporting, so Total is
 	// never inflated by rounding each part independently.
 	systemTokens := estimateTextTokens(request.SystemPrompt)
-	systemAndBlackboardTokens := estimateTextTokens(providerSystemMessage(request))
+	systemAndFactIndexTokens := estimateTextTokens(providerSystemMessage(request))
 	measurement := agent.ContextMeasurement{
 		SystemTokens:     systemTokens,
 		ToolSchemaTokens: measureTools(request.Tools),
-		BlackboardTokens: systemAndBlackboardTokens - systemTokens,
+		FactIndexTokens:  systemAndFactIndexTokens - systemTokens,
 		SurfaceTokens:    measureSurface(request.Nodes, request.Messages),
 	}
-	measurement.TotalTokens = systemAndBlackboardTokens + measurement.ToolSchemaTokens + measurement.SurfaceTokens
+	measurement.TotalTokens = systemAndFactIndexTokens + measurement.ToolSchemaTokens + measurement.SurfaceTokens
 	if meter == nil {
 		return measurement
 	}
@@ -197,7 +197,7 @@ func RenderBoundedBlackboard(board *domain.Blackboard, tokenBudget int) Blackboa
 }
 
 func providerSystemMessage(request ContextRequest) string {
-	return request.SystemPrompt + request.Blackboard
+	return request.SystemPrompt + request.FactIndex
 }
 
 func normalizedEnvelope(request ContextRequest) string {

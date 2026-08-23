@@ -36,7 +36,7 @@ type ContextSurface struct {
 type ContextMeasurement struct {
 	SystemTokens     int
 	ToolSchemaTokens int
-	BlackboardTokens int
+	FactIndexTokens  int
 	SurfaceTokens    int
 	TotalTokens      int
 }
@@ -71,7 +71,7 @@ type ContextActivity struct {
 const (
 	ContextToolPruned        = "context_tool_pruned"
 	ContextCheckpointCreated = "context_checkpoint_created"
-	ContextBlackboardLimited = "context_blackboard_truncated"
+	ContextFactIndexLimited  = "context_fact_index_truncated"
 	ContextRequestRejected   = "context_request_rejected"
 	ContextOverflowRetry     = "context_overflow_retry"
 )

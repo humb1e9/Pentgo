@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"os"
@@ -203,26 +204,31 @@ func TestDeleteSessionCascadesTranscriptAndTurns(t *testing.T) {
 	}
 }
 
-func TestBlackboardRoundTripsFacts(t *testing.T) {
+func TestProjectFactsRoundTripFacts(t *testing.T) {
 	store := newTestStore(t)
 	defer store.Close()
-	session := domain.NewSession("session-board", "inspect", time.Now().UTC())
+	session := domain.NewSession("session-facts", "inspect", time.Now().UTC())
 	if err := store.SaveSession(session); err != nil {
 		t.Fatal(err)
 	}
-	updatedAt := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
-	board := &domain.Blackboard{
-		Facts: []domain.Fact{{Key: "host", Value: "TARGET", Source: "test", SessionID: session.ID, At: time.Now().UTC(), UpdatedAt: updatedAt}},
-	}
-	if err := store.SaveBlackboard(board); err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := store.LoadBlackboard()
+	facts, err := store.OpenProjectFacts()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded.Facts) != 1 || loaded.Facts[0].Key != "host" || loaded.Facts[0].SessionID != session.ID || !loaded.Facts[0].UpdatedAt.Equal(updatedAt) {
-		t.Fatalf("blackboard = %+v", loaded)
+	defer facts.Close()
+	updatedAt := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	if err := facts.Upsert(context.Background(), ProjectFactWrite{Fact: domain.ProjectFact{
+		FactKey: "host", Category: domain.FactCategoryNote, Summary: "TARGET", Body: "TARGET",
+		Confidence: domain.FactConfidenceTentative, SourceSessionID: session.ID, CreatedAt: time.Now().UTC(), UpdatedAt: updatedAt,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, found, err := facts.Get("host")
+	if err != nil || !found {
+		t.Fatalf("get = %#v found=%v err=%v", loaded, found, err)
+	}
+	if loaded.FactKey != "host" || loaded.SourceSessionID != session.ID || !loaded.UpdatedAt.Equal(updatedAt) {
+		t.Fatalf("project fact = %+v", loaded)
 	}
 }
 

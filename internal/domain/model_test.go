@@ -50,6 +50,36 @@ func TestBlackboardReplacementRefreshesFactUpdatedAt(t *testing.T) {
 	}
 }
 
+func TestProjectFactValidation(t *testing.T) {
+	for _, category := range []string{FactCategoryTarget, FactCategoryAuth, FactCategoryInfra, FactCategoryBusiness, FactCategoryFinding, FactCategoryChain, FactCategoryExploit, FactCategoryPOC, FactCategoryNote} {
+		fact := ProjectFact{FactKey: "key", Category: category, Summary: "summary", Body: "body", Confidence: FactConfidenceTentative}
+		if err := ValidateProjectFact(fact); err != nil {
+			t.Fatalf("category %q rejected: %v", category, err)
+		}
+	}
+	for _, fact := range []ProjectFact{
+		{FactKey: "key", Category: "invalid", Summary: "summary", Body: "body", Confidence: FactConfidenceTentative},
+		{FactKey: "key", Category: FactCategoryNote, Summary: "", Body: "body", Confidence: FactConfidenceTentative},
+		{FactKey: "key", Category: FactCategoryNote, Summary: "summary", Body: "body", Confidence: FactConfidenceConfirmed},
+		{FactKey: "key", Category: FactCategoryNote, Summary: "summary", Body: "body", Confidence: FactConfidenceTentative, EvidenceRefs: []int{1, 1}},
+	} {
+		if err := ValidateProjectFact(fact); err == nil {
+			t.Fatalf("invalid fact accepted: %#v", fact)
+		}
+	}
+}
+
+func TestProjectFactEdgeValidation(t *testing.T) {
+	edge := ProjectFactEdge{SourceFactKey: "source", TargetFactKey: "target", EdgeType: FactEdgeSupports, Confidence: FactConfidenceConfirmed}
+	if err := ValidateProjectFactEdge(edge); err != nil {
+		t.Fatal(err)
+	}
+	edge.EdgeType = "invalid"
+	if err := ValidateProjectFactEdge(edge); err == nil {
+		t.Fatal("invalid edge type accepted")
+	}
+}
+
 func TestTurnStatusTransitions(t *testing.T) {
 	session := NewSession("session-1", "inspect", time.Now().UTC())
 	turn, err := session.BeginTurn("turn-1", "inspect", time.Now().UTC())

@@ -25,7 +25,7 @@ func TestDefaultLeavesOptionalToolProvidersDisabled(t *testing.T) {
 }
 
 func TestLoadContextPolicy(t *testing.T) {
-	writeConfig(t, `{"agent":{"context":{"context_window":128000,"threshold_ratio":0.8,"retain_ratio":0.16,"blackboard_ratio":0.08,"tool_result_threshold_chars":8192,"tool_result_head_chars":4096,"tool_result_tail_chars":1024,"checkpoint_max_tokens":8192,"checkpoint_provider":"openai","checkpoint_model":"summary-model"}}}`)
+	writeConfig(t, `{"agent":{"context":{"context_window":128000,"threshold_ratio":0.8,"retain_ratio":0.16,"fact_index_ratio":0.08,"tool_result_threshold_chars":8192,"tool_result_head_chars":4096,"tool_result_tail_chars":1024,"checkpoint_max_tokens":8192,"checkpoint_provider":"openai","checkpoint_model":"summary-model"}}}`)
 
 	cfg, err := Load()
 	if err != nil {
@@ -45,7 +45,7 @@ func TestLoadContextPolicyAppliesEffectiveDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := cfg.Agent.Context
-	if !got.Enabled() || got.ThresholdRatio != 0.80 || got.RetainRatio != 0.16 || got.BlackboardRatio != 0.08 || got.ToolResultThresholdChars != 8192 || got.ToolResultHeadChars != 4096 || got.ToolResultTailChars != 1024 || got.CheckpointMaxTokens != 8192 {
+	if !got.Enabled() || got.ThresholdRatio != 0.80 || got.RetainRatio != 0.16 || got.FactIndexRatio != 0.08 || got.ToolResultThresholdChars != 8192 || got.ToolResultHeadChars != 4096 || got.ToolResultTailChars != 1024 || got.CheckpointMaxTokens != 8192 {
 		t.Fatalf("effective context = %#v", got)
 	}
 }
@@ -58,6 +58,8 @@ func TestLoadRejectsInvalidContextPolicy(t *testing.T) {
 	}{
 		{name: "negative window", data: `{"agent":{"context":{"context_window":-1}}}`, want: "context_window"},
 		{name: "retain beyond threshold", data: `{"agent":{"context":{"context_window":1000,"threshold_ratio":0.8,"retain_ratio":0.8}}}`, want: "retain_ratio"},
+		{name: "fact index beyond threshold", data: `{"agent":{"context":{"context_window":1000,"threshold_ratio":0.8,"fact_index_ratio":0.8}}}`, want: "fact_index_ratio"},
+		{name: "removed blackboard ratio", data: `{"agent":{"context":{"context_window":1000,"blackboard_ratio":0.08}}}`, want: "blackboard_ratio was removed"},
 		{name: "unpaired checkpoint route", data: `{"agent":{"context":{"context_window":1000,"checkpoint_provider":"openai"}}}`, want: "checkpoint_provider and checkpoint_model"},
 		{name: "unsupported checkpoint provider", data: `{"agent":{"context":{"context_window":1000,"checkpoint_provider":"other","checkpoint_model":"summary"}}}`, want: "checkpoint_provider must be"},
 		{name: "tool result shape", data: `{"agent":{"context":{"context_window":1000,"tool_result_threshold_chars":10,"tool_result_head_chars":8,"tool_result_tail_chars":8}}}`, want: "tool result"},

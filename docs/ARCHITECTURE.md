@@ -66,11 +66,11 @@ cmd ──→ config
         ├── pentgo.db
         ├── 共享 Local Backend、LocalRegistry、多个外部 MCP client 和组合工具 provider
         └── 多个 app.SessionWorker
-            ├── SQLite transcript/session rows
+            ├── SQLite 对话记录 / session rows
             └── turn 事件
 ```
 
-- `ProjectRuntime` 拥有项目 context、evidence、最小 `ProjectFactLedger`、只读 Fact Index、受约束的 Workspace、LocalRegistry、组合 MCP provider、transcript handle 和 worker。host 每轮以 `agent.Tool` 暴露 workspace 工具和三个项目事实工具；每个具名外部 MCP Server 维护独立的 stdio、Streamable HTTP 或 SSE 连接；所有工具以全局唯一名称暴露。
+- `ProjectRuntime` 拥有项目 context、evidence、最小 `ProjectFactLedger`、只读 Fact Index、受约束的 Workspace、LocalRegistry、组合 MCP provider、对话记录句柄和 worker。host 每轮以 `agent.Tool` 暴露 workspace 工具和三个项目事实工具；每个具名外部 MCP Server 维护独立的 stdio、Streamable HTTP 或 SSE 连接；所有工具以全局唯一名称暴露。
 - `SessionWorker` 自己的 goroutine 才能修改 `domain.Session`；`Snapshot` 返回原子发布的深拷贝。
 - 一个 session 同时只运行一个 turn；同一项目内不同 session 可以并发运行。
 - `pentgo` 打开 `<cwd>/.pentgo/` 并创建新会话；目录不存在时同时创建工作区。`pentgo resume` 在进入 TUI 前列出会话并恢复用户选择的历史会话。
@@ -83,18 +83,18 @@ cmd ──→ config
 ```text
 app.SessionWorker
   → app.TurnService.BeginTurn
-  → transcript.Append(user)
+  → conversation.Append(user)（追加用户消息至对话记录）
   → capture one fixed Fact Index snapshot
   → ContextAssembler.Prepare(Surface + turn snapshot)
   → agent.ModelStepper.StreamStep(one provider request)
   → host consumes deltas (UI only)
-  → transcript.Append(complete assistant/tool messages in order)
+  → conversation.Append(complete assistant/tool messages in order)（按顺序追加至对话记录）
   → host records evidence once per tool result
   → app.TurnService.FinishTurn
   → app.ProjectRuntime.PersistState
 ```
 
-正常完成的 turn 不会关闭 session。模型适配器不保存 session、project、项目事实或 checkpoint；host loop 拥有工具调用和最多一次 overflow recovery。启用 context window 时，raw transcript 是审计 ledger，Context Surface 是可压缩的模型投影。每个 turn 在工具执行前捕获一次固定 4,096-rune、按 key 排序的 Fact Index，此快照被该 turn 的全部模型请求（包括 overflow recovery）复用；同 turn 内新写的事实从下一 turn 可见。最小事实只保存 key、value、可选 Evidence 来源和更新时间；活动信息只进入 UI，不进入 transcript。
+正常完成的 turn 不会关闭 session。模型适配器不保存 session、project、项目事实或 checkpoint；host loop 拥有工具调用和最多一次 overflow recovery。启用 context window 时，原始对话记录是审计 ledger，Context Surface 是可压缩的模型投影。每个 turn 在工具执行前捕获一次固定 4,096-rune、按 key 排序的 Fact Index，此快照被该 turn 的全部模型请求（包括 overflow recovery）复用；同 turn 内新写的事实从下一 turn 可见。最小事实只保存 key、value、可选 Evidence 来源和更新时间；活动信息只进入 UI，不进入对话记录。
 
 ## 持久化边界
 
@@ -104,7 +104,7 @@ app.SessionWorker
 └── tmp/                         MCP 工作目录和临时文件
 ```
 
-`pentgo.db` 使用 SQLite WAL、foreign keys 和版本化 schema。核心数据按关系建模：`projects`、`sessions`、`session_targets`、`turns`、`project_facts`、`evidence_records`、`transcript_messages` 和 `transcript_tool_calls`。`project_facts` 只包含 `(project_id, fact_key, value, evidence_ref, updated_at)`；provider 参数保留为 JSON 列，领域事实不存 JSON blob。v7 migration 会删除所有旧事实表及其数据，不迁移短期项目的旧事实，同时保留 transcript 与 Evidence 审计表。
+`pentgo.db` 使用 SQLite WAL、foreign keys 和版本化 schema。核心数据按关系建模：`projects`、`sessions`、`session_targets`、`turns`、`project_facts`、`evidence_records`、`conversation_messages` 和 `conversation_tool_calls`。`project_facts` 只包含 `(project_id, fact_key, value, evidence_ref, updated_at)`；provider 参数保留为 JSON 列，领域事实不存 JSON blob。项目数据库是可重建的工作状态；对话记录始终使用 `conversation_messages` 与 `conversation_tool_calls`。
 
 project 的 session summaries 从 `sessions` 查询派生。`CommitSession` 原子保存 session、turn、targets 和 project 元数据；`ProjectFactRepository.Upsert` 仅替换同 key 的 value、可选 Evidence ref 与更新时间。
 
@@ -117,7 +117,7 @@ project 的 session summaries 从 `sessions` 查询派生。`CommitSession` 原�
 
 ## Skills
 
-`skillfs.Registry` 构造时接收显式 `fs.FS`，不读取当前工作目录，也不使用包级默认 registry。Coordinator 每次启动时本地扫描一次顶层 `*.md`，用有效 YAML frontmatter 描述建立内存名称/路径白名单和稳定 digest；坏文件被诊断并跳过。新建或恢复会话时，宿主将 digest 版本化的精简目录作为一条 system transcript message 注入；未变更目录不会重复注入，变更目录会显式替换旧目录。模型依据该会话上下文以准确名称调用 `load_skill` 后才读取单个正文。
+`skillfs.Registry` 构造时接收显式 `fs.FS`，不读取当前工作目录，也不使用包级默认 registry。Coordinator 每次启动时本地扫描一次顶层 `*.md`，用有效 YAML frontmatter 描述建立内存名称/路径白名单和稳定 digest；坏文件被诊断并跳过。新建或恢复会话时，宿主将 digest 版本化的精简目录作为一条 system 对话消息注入对话记录；未变更目录不会重复注入，变更目录会显式替换旧目录。模型依据该会话上下文以准确名称调用 `load_skill` 后才读取单个正文。
 
 ## 验证
 

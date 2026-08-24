@@ -1,3 +1,9 @@
+---
+name: gnuboard5-attack
+description: >-
+  Gnuboard5 (Korean CMS) attack chain. Use when targeting Gnuboard5/XE/Rhymix: fingerprinting, admin panel bruteforce, double-CSRF-token bypass, GIF polyglot webshell upload, OTP/auth_key leakage, and post-shell DB access.
+---
+
 # SKILL: Gnuboard5 / 그누보드5 공격 체인
 
 ## 메타데이터

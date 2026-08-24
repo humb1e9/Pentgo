@@ -1,3 +1,9 @@
+---
+name: sqli
+description: >-
+  SQL injection advanced playbook. Use when input reaches SQL queries: two-step vulnerability confirmation, technique selection (error/UNION/boolean/time-based), prioritized data extraction, and hash cracking.
+---
+
 # SKILL: SQL Injection Advanced
 
 ## 목적

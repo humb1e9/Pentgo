@@ -1,3 +1,9 @@
+---
+name: waf_bypass
+description: >-
+  WAF bypass mastery playbook. Use when requests are blocked by a WAF: WAF fingerprinting, encoding and obfuscation, per-vendor evasion (Cloudflare/ModSecurity/AWS), HTTP request smuggling, header injection, rate-limit bypass, and WordPress/Wordfence-specific techniques.
+---
+
 # WAF BYPASS MASTERY — bingo Signature Skill
 
 bingo의 핵심 차별화 기술. 다른 도구들이 막히는 곳에서도 통과한다.

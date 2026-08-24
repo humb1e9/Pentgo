@@ -62,31 +62,31 @@ cmd ──→ config
         ├── pentgo.db
         ├── 共享 Local Backend、LocalRegistry、多个外部 MCP client 和组合工具 provider
         └── 多个 app.SessionWorker
-            ├── SQLite transcript/session rows
+            ├── SQLite 对话记录 / session rows
             └── turn 事件
 ```
 
 `SessionWorker` 在独立 goroutine 中串行处理一个会话的请求。该 goroutine 是 `domain.Session` 的唯一写入者；外部调用方只能提交请求、读取原子发布的深拷贝快照和消费有界事件流。
 
-每个会话一次只运行一个 turn，不同会话可以并行。事件 channel 满时会丢弃最旧的临时事件，不会阻塞模型或工具执行；持久化 transcript 始终是可恢复的事实来源。
+每个会话一次只运行一个 turn，不同会话可以并行。事件 channel 满时会丢弃最旧的临时事件，不会阻塞模型或工具执行；持久化对话记录始终是可恢复的事实来源。
 
 ## 4. 一轮任务的执行顺序
 
 ```text
 app.SessionWorker
   → app.TurnService.BeginTurn
-  → transcript.Append(user)
+  → conversation.Append(user)（追加用户消息至对话记录）
   → agent.ModelStepper.StreamStep(assembled request)
   → app host loop consumes deltas (UI only)
-  → transcript.Append(complete assistant/tool messages in order)
+  → conversation.Append(complete assistant/tool messages in order)（按顺序追加至对话记录）
   → host records evidence before returning each tool result
   → app.TurnService.FinishTurn
   → app.ProjectRuntime.PersistState
 ```
 
-`TurnService` 在发布界面事件前先持久化每条 transcript 消息。模型适配器只执行一个 streamed provider request，绝不在 adapter 内调用工具；工具并发执行后仍按 provider 调用顺序持久化。失败、取消和中断会被映射为相应的 turn 状态，并在返回调用方前保存最后快照。上下文超限最多触发一次压缩恢复重试。
+`TurnService` 在发布界面事件前先持久化每条对话消息。模型适配器只执行一个 streamed provider request，绝不在 adapter 内调用工具；工具并发执行后仍按 provider 调用顺序持久化。失败、取消和中断会被映射为相应的 turn 状态，并在返回调用方前保存最后快照。上下文超限最多触发一次压缩恢复重试。
 
-模型适配器是短生命周期对象，不保存 session、project、共享记录或 checkpoint。启用 `agent.context.context_window` 时，host 在每个 provider request 前从持久化 Context Surface 物化请求；Surface 是模型可见投影，raw transcript、tool calls 与 evidence records 仍是不可变审计数据。默认阈值为窗口的 80%，保留近期尾部 16%；超大的 tool result 使用 Unicode 安全的头尾裁剪，必要时生成 checkpoint。压缩活动只作为 terminal/UI activity，不写入 transcript。
+模型适配器是短生命周期对象，不保存 session、project、共享记录或 checkpoint。启用 `agent.context.context_window` 时，host 在每个 provider request 前从持久化 Context Surface 物化请求；Surface 是模型可见投影，原始对话记录、tool calls 与 evidence records 仍是不可变审计数据。默认阈值为窗口的 80%，保留近期尾部 16%；超大的 tool result 使用 Unicode 安全的头尾裁剪，必要时生成 checkpoint。压缩活动只作为 terminal/UI activity，不写入对话记录。
 
 项目共享事实是最小键值账本：key、value、可选单个 Evidence ref 与更新时间。TurnService 在每个 turn 开始时读取并渲染一次固定 4,096-rune Fact Index，按 key 排序；该快照会被同 turn 的工具循环与 overflow recovery 复用，本 turn 内写入从下一 turn 才可见。Index 中的内容是转义、单行化的不可信数据。可选 ref 仅要求 Evidence 存在，成功与失败均可关联；raw ledger、generation 检查、tool-call/result pair closure 和不可信 checkpoint source 的隔离不变。
 
@@ -130,7 +130,7 @@ MCP 工具保留服务声明的描述与 JSON Schema。调用完成后，host ex
 
 `skillfs.Registry` 接收显式 `fs.FS`，不读取包级全局状态。PentGo 在每次进程启动时扫描一次顶层 `*.md`，要求每份有效技能提供非空 YAML frontmatter `description`；描述经过本地标准化和长度限制后形成稳定 digest。无法读取、frontmatter 格式错误或缺少描述的单份技能会被跳过，并作为终端本地诊断显示，不会阻断其它技能。
 
-每个新建或恢复的会话都会收到一条由宿主写入 transcript 的 digest 版本化目录 system message；未变化的目录不会重复注入，修改 `skills/` 后重启 PentGo 才会重新扫描，并在恢复会话时以新目录显式替换旧目录。后续 turn 只回放该上下文，不重新扫描。完整正文在模型以目录中的准确名称调用 `load_skill` 后才读取。单份正文限制为 32 KiB，避免单个文件无限占用模型上下文。
+每个新建或恢复的会话都会收到一条由宿主写入对话记录的 digest 版本化目录 system message；未变化的目录不会重复注入，修改 `skills/` 后重启 PentGo 才会重新扫描，并在恢复会话时以新目录显式替换旧目录。后续 turn 只回放该上下文，不重新扫描。完整正文在模型以目录中的准确名称调用 `load_skill` 后才读取。单份正文限制为 32 KiB，避免单个文件无限占用模型上下文。
 
 原生运行默认使用：
 
@@ -157,13 +157,13 @@ session_targets
 turns
 project_facts
 evidence_records
-transcript_messages
-transcript_tool_calls
+conversation_messages
+conversation_tool_calls
 ```
 
-`CommitSession` 在同一事务中保存 session、当前 turn、目标和项目元数据；`ProjectFactRepository.Upsert` 以 `(project_id, fact_key)` 为主键替换 value、可选 Evidence ref 和更新时间。schema v7 删除旧的事实/边表及其数据，不迁移短期项目记录，且不影响 transcript 或 Evidence。
+`CommitSession` 在同一事务中保存 session、当前 turn、目标和项目元数据；`ProjectFactRepository.Upsert` 以 `(project_id, fact_key)` 为主键替换 value、可选 Evidence ref 和更新时间。项目数据库是可重建的工作状态；当前对话记录使用 `conversation_messages` 与 `conversation_tool_calls`。
 
-`TranscriptStore` 按 `(session_id, seq)` 保存消息，并在助手消息的子表中保存工具调用顺序和原始参数。恢复时，历史消息按原顺序重放给模型；历史 tool message 只用于恢复上下文，不会再次触发工具调用。
+`ConversationStore` 按 `(session_id, seq)` 保存消息，并在助手消息的子表中保存工具调用顺序和原始参数。恢复时，历史消息按原顺序重放给模型；历史 tool message 只用于恢复上下文，不会再次触发工具调用。
 
 `EvidenceStore` 为每次工具结果分配递增记录编号，并将编号附加到返回文本。记录写入失败后存储会进入失败状态，避免后续输出被误认为已完整保存。
 

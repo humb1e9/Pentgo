@@ -62,7 +62,7 @@ mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/pentgo"
 
 使用 Anthropic 时，将 `provider` 改为 `anthropic`，并在 `agent.anthropic` 中填写 `base_url`、`model` 与 `api_key_env`。其他兼容 OpenAI 的服务通常只需替换 `base_url` 和 `model`。
 
-PentGo 会在每个 turn 开始时生成一次固定 4,096 Unicode runes、按 key 排序的 Fact Index 快照，并在该 turn 的所有模型请求中复用；同 turn 内写入的事实从下一 turn 才可见。Fact Index 包含 key、value 与可选来源编号，模型可用项目事实工具读取完整记录或被省略的条目。完整 raw transcript 与 Evidence 审计数据仍保存在本地；`context_window` 仅控制 Context Surface 压缩，不控制 Fact Index 是否注入。
+PentGo 会在每个 turn 开始时生成一次固定 4,096 Unicode runes、按 key 排序的 Fact Index 快照，并在该 turn 的所有模型请求中复用；同 turn 内写入的事实从下一 turn 才可见。Fact Index 包含 key、value 与可选来源编号，模型可用项目事实工具读取完整记录或被省略的条目。完整的原始对话记录与 Evidence 审计数据仍保存在本地；`context_window` 仅控制 Context Surface 压缩，不控制 Fact Index 是否注入。
 
 ### 3. 启动
 

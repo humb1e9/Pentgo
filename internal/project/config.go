@@ -21,7 +21,7 @@ type ContextConfig struct {
 }
 
 func DefaultConfig() Config {
-	return Config{MaxTurns: 1000, Context: ContextConfig{ContextWindow: 128000, ThresholdRatio: .8, RetainRatio: .16, ToolResultThresholdChars: 8192, ToolResultHeadChars: 4096, ToolResultTailChars: 1024, CheckpointMaxTokens: 8192}}
+	return Config{MaxTurns: 1000, Context: ContextConfig{ContextWindow: 256000, ThresholdRatio: .8, RetainRatio: .16, ToolResultThresholdChars: 8192, ToolResultHeadChars: 4096, ToolResultTailChars: 1024, CheckpointMaxTokens: 8192}}
 }
 
 func (config Config) Effective() Config {

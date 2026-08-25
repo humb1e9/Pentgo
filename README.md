@@ -40,17 +40,7 @@ echo 'export PATH="$HOME/go/bin:$PATH"' >> ~/.bashrc
 source ~/.bashrc
 ```
 
-| 工具 | 用途 | apt | 备选 |
-| --- | --- | --- | --- |
-| amass | 子域名枚举 | `sudo apt install amass` | `go install github.com/owasp-amass/amass/v4/cmd/amass@latest` |
-| subfinder | 子域名发现 | `sudo apt install subfinder` | `go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest` |
-| gau | 历史 URL 抓取 | （apt 无此包） | `go install github.com/lc/gau/v2/cmd/gau@latest` |
-| paramspider | 参数挖掘 | `sudo apt install paramspider` | `pipx install paramspider` |
-| katana | 爬虫与端点发现 | （apt 无此包） | `go install github.com/projectdiscovery/katana/cmd/katana@latest` |
-| httpx | HTTP 存活探测 | `sudo apt install httpx-toolkit` | `go install github.com/projectdiscovery/httpx/cmd/httpx@latest` |
-| wafw00f | WAF 指纹识别 | `sudo apt install wafw00f` | `pipx install wafw00f` |
-
-注意：Debian/Kali 上 httpx 的包名是 `httpx-toolkit`（`httpx` 是另一个工具）。
+Debian/Kali 上 httpx 的包名是 `httpx-toolkit`（`httpx` 是另一个工具）。
 
 ### 启动
 

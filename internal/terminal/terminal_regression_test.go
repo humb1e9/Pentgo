@@ -33,8 +33,29 @@ func TestResumeDefaultsToLatestNonEmptySession(t *testing.T) {
 	if _, err := coordinator.NewSession("新会话"); err != nil {
 		t.Fatal(err)
 	}
+	if err := coordinator.CloseProject(); err != nil {
+		t.Fatal(err)
+	}
+	store, err := project.OpenProjectStore(filepath.Join(root, ".pentgo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := store.OpenConversation(active.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conversation.Append(core.Message{Role: core.RoleUser, Content: "history"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = conversation.Close()
+	_ = store.Close()
+	resumed := app.NewManager(testRuntimeConfig(), root, app.Dependencies{SkillsFS: fstest.MapFS{}})
+	defer resumed.CloseProject()
+	if _, err := resumed.OpenCurrentProject(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	var output bytes.Buffer
-	terminal := NewRuntimeTerminal(coordinator, strings.NewReader("\n"), &output)
+	terminal := NewRuntimeTerminal(resumed, strings.NewReader("\n"), &output)
 	selected, err := terminal.selectResumeSession()
 	if err != nil {
 		t.Fatal(err)
@@ -50,6 +71,53 @@ func TestStartupDiagnosticsDismissAfterNotice(t *testing.T) {
 	updated, _ := model.Update(dismissStartupActivityMsg{})
 	if got := updated.(*terminalModel).startupActivity; len(got) != 0 {
 		t.Fatalf("startup activity = %#v, want dismissed", got)
+	}
+}
+
+func TestRuntimeTerminalResumeRendersPersistedConversation(t *testing.T) {
+	root := t.TempDir()
+	first := app.NewManager(testRuntimeConfig(), root, app.Dependencies{SkillsFS: fstest.MapFS{}})
+	if _, _, err := first.OpenOrCreateWorkspace(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	session, err := first.NewSession("resume")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := project.OpenProjectStore(filepath.Join(root, ".pentgo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := store.OpenConversation(session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := persisted.Append(core.Message{Role: core.RoleUser, Content: "terminal persisted question"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := persisted.Append(core.Message{Role: core.RoleAssistant, Content: "terminal persisted answer"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = persisted.Close()
+	_ = store.Close()
+	if err := first.CloseProject(); err != nil {
+		t.Fatal(err)
+	}
+
+	resumed := app.NewManager(testRuntimeConfig(), root, app.Dependencies{SkillsFS: fstest.MapFS{}})
+	var output bytes.Buffer
+	terminal := NewRuntimeTerminal(resumed, strings.NewReader("\n\x03"), &output)
+	if err := terminal.Resume(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	view := ansi.Strip(output.String())
+	for _, want := range []string{"terminal persisted question", "terminal persisted answer"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("RuntimeTerminal.Resume output missing %q:\n%s", want, view)
+		}
+	}
+	if sessions := resumed.Sessions(); len(sessions) != 0 {
+		t.Fatalf("resume left project open: %#v", sessions)
 	}
 }
 

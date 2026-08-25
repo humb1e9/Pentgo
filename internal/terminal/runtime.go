@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"pentgo/internal/core"
 )
 
 // RuntimeTerminal 持有终端输入输出和程序生命周期，terminalModel 仅持有 Bubble Tea 显示状态。
@@ -116,10 +118,10 @@ func (terminal *RuntimeTerminal) selectResumeSession() (string, error) {
 		return "", fmt.Errorf("没有可恢复的会话")
 	}
 	sort.SliceStable(sessions, func(i, j int) bool {
-		iEmpty := sessions[i].Turns == 0 && strings.TrimSpace(sessions[i].Name) == "新会话"
-		jEmpty := sessions[j].Turns == 0 && strings.TrimSpace(sessions[j].Name) == "新会话"
-		if iEmpty != jEmpty {
-			return !iEmpty
+		iHistory := hasVisibleHistory(terminal.coordinator.Messages(sessions[i].ID))
+		jHistory := hasVisibleHistory(terminal.coordinator.Messages(sessions[j].ID))
+		if iHistory != jHistory {
+			return iHistory
 		}
 		if sessions[i].UpdatedAt.Equal(sessions[j].UpdatedAt) {
 			return sessions[i].ID > sessions[j].ID
@@ -160,4 +162,13 @@ func (terminal *RuntimeTerminal) selectResumeSession() (string, error) {
 		}
 	}
 	return "", fmt.Errorf("未找到会话 %q", choice)
+}
+
+func hasVisibleHistory(messages []core.Message) bool {
+	for _, message := range messages {
+		if message.Role != core.RoleSystem {
+			return true
+		}
+	}
+	return false
 }

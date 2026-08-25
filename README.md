@@ -25,7 +25,29 @@ cd Pentgo
 ./install.sh
 ```
 
-`install.sh` 会检查 Go 工具链（缺失时给出安装指引）、执行 `go mod tidy` 拉齐依赖、编译 `pentgo` 到 `~/.local/bin`（无需 sudo），并在首次安装时把内置 skills 复制到 `~/.local/share/pentgo/skills`。重复运行只重新编译，不会覆盖你已有的 skills。确认 `~/.local/bin` 在 `PATH` 中即可运行 `pentgo`。
+`install.sh` 会依次完成：检查 Go 工具链（缺失时给出安装指引）、`go mod tidy` 拉齐依赖、编译 `pentgo` 到 `~/.local/bin`（无需 sudo）、首次安装时把内置 skills 复制到 `~/.local/share/pentgo/skills`（重复运行不覆盖）。确认 `~/.local/bin` 在 `PATH` 中即可运行 `pentgo`。
+
+- 安装七个内置安全工具：amass、subfinder、gau、paramspider、katana、httpx、wafw00f。安装方式见[内置安全工具](#内置安全工具)。
+
+### 内置安全工具
+
+PentGo 的侦察类 skills 依赖以下七个外部 CLI。请按表格自行安装并确认各命令在 `PATH` 中可运行：
+
+| 工具 | 用途 | Kali/Debian (apt) | 备选安装 |
+| --- | --- | --- | --- |
+| amass | 子域名枚举 | `sudo apt install amass` | `go install github.com/owasp-amass/amass/v4/cmd/amass@latest` |
+| subfinder | 子域名发现 | `sudo apt install subfinder` | `go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest` |
+| gau | 从 Wayback/Common Crawl 抓取历史 URL | （apt 无此包） | `go install github.com/lc/gau/v2/cmd/gau@latest` |
+| paramspider | 从 Web 归档挖掘参数 | `sudo apt install paramspider` | `pipx install paramspider` |
+| katana | 爬虫与端点发现 | （apt 无此包） | `go install github.com/projectdiscovery/katana/cmd/katana@latest` |
+| httpx | HTTP 存活探测 | `sudo apt install httpx-toolkit` | `go install github.com/projectdiscovery/httpx/cmd/httpx@latest` |
+| wafw00f | WAF 指纹识别 | `sudo apt install wafw00f` | `pipx install wafw00f` |
+
+注意：
+
+- Debian/Kali 上 projectdiscovery httpx 的 apt 包名是 `httpx-toolkit`（`httpx` 包是另一个 Python HTTP 客户端）。
+- `go install` 的产物在 `~/go/bin`，`pipx` 的产物在 `~/.local/bin`，请把对应目录加入 `PATH`。
+- PentGo 不代理、不校验这些工具的行为；请仅在已获授权的目标上使用。要把它们暴露给模型，把命令登记到 `agent.local_tools`（见[本机 CLI](#本机-cli)）。
 
 ### 2. 配置模型
 

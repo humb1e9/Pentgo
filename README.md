@@ -10,42 +10,66 @@ PentGo 是一个运行在终端里的持久化 AI Agent 工作台。它让你在
 
 ### 安装
 
-- Go 1.25+
-- 支持工具调用的模型
-- 七个内置安全工具
+**前置条件：**Linux/macOS、Git、Go 1.25 或更高版本，以及一个支持工具调用的模型服务。以下命令在 Debian/Kali 的 Bash 中可直接执行；其他发行版请用对应包管理器安装 Go 和 Git。
+
+#### 1. 下载、编译并安装 PentGo
 
 ```bash
+# 首次安装
 git clone https://github.com/humb1e9/Pentgo.git
 cd Pentgo
-go mod tidy
-mkdir -p ~/.local/bin
-go build -o ~/.local/bin/pentgo ./cmd/pentgo
-data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/pentgo"
-mkdir -p "$data_dir"
-[ -d "$data_dir/skills" ] || cp -R skills "$data_dir/skills"
+
+# 编译并安装到 $(go env GOPATH)/bin，无需 sudo
+go install ./cmd/pentgo
+
+# 首次安装时复制内置 Skills；已有个人 Skills 不会被覆盖
+# PentGo 固定从 ~/.local/share/pentgo/skills 读取 Skills。
+skills_dir="$HOME/.local/share/pentgo/skills"
+install -d "$(dirname "$skills_dir")"
+[ -d "$skills_dir" ] || cp -R skills "$skills_dir"
 ```
 
-确认 `~/.local/bin` 在 `PATH` 中。
+将 `go install` 安装的 PentGo 和其他工具永久加入 `PATH`。按你正在使用的 Shell **二选一**执行：
 
-#### 七个内置安全工具
+```bash
+# Bash
+echo 'export PATH="$(go env GOPATH)/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+```bash
+# Zsh
+echo 'export PATH="$(go env GOPATH)/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+#### 2. 可选：安装常用侦察工具
+
+PentGo 可以直接运行而不安装这些工具；安装后，模型才可通过已配置的本机工具调用它们。
 
 ```bash
 sudo apt update
 sudo apt install -y amass subfinder paramspider httpx-toolkit wafw00f
 go install github.com/lc/gau/v2/cmd/gau@latest
 go install github.com/projectdiscovery/katana/cmd/katana@latest
-
-# go install 的产物在 ~/go/bin，写入 shell 配置才能长期生效（zsh 用户改为 ~/.zshrc）
-echo 'export PATH="$HOME/go/bin:$PATH"' >> ~/.bashrc
-source ~/.bashrc
 ```
 
-Debian/Kali 上 httpx 的包名是 `httpx-toolkit`（`httpx` 是另一个工具）。
+Debian/Kali 上 HTTPX 的包名是 `httpx-toolkit`；`httpx` 是另一个软件包。
 
-### 启动
+### 首次启动与配置
+
+在希望保存项目记录的工作目录启动。首次运行会创建配置模板并退出：
 
 ```bash
-pentgo        # 新会话
+mkdir -p ~/pentgo-workspace
+cd ~/pentgo-workspace
+pentgo
+```
+
+编辑 `${XDG_CONFIG_HOME:-$HOME/.config}/pentgo/config.json`，至少填写 `model.model` 和 `model.api_key`；随后重新启动：
+
+```bash
+pentgo        # 创建新会话
 pentgo resume # 恢复已有项目并选择会话
 ```
 
@@ -107,7 +131,7 @@ pentgo resume # 恢复已有项目并选择会话
     └── tmp/
 ```
 
-保留 `.pentgo/`。在启动目录创建 `skills/`，放入带 YAML frontmatter `description` 的 Markdown 文件即可作为可复用技能。
+保留 `.pentgo/`。可复用 Skills 位于 `~/.local/share/pentgo/skills/`；在其中放入带 YAML frontmatter `description` 的 Markdown 文件即可加载。
 
 ### 项目事实账本
 
@@ -129,7 +153,6 @@ internal/
 ├── terminal/          终端界面：bubbletea 视图、命令解析、事件渲染
 └── tools/             工具实现：工作区工具、本机 CLI、MCP 客户端、skills
 skills/                内置 Markdown skills（首次安装复制到用户数据目录）
-docs/                  ARCHITECTURE.md、TECHNICAL.md
 ```
 
 依赖方向：`bootstrap` 是唯一组装根；`project` 根只保留 `ProjectStore`、`ProjectFact` 与 `OpenSQLite`，各子包拥有自己的 store（会话消息在 `session`、上下文投影在 `context`、证据在 `turn`），`session` 与 `context` 不反向依赖 `project` 根。
@@ -146,8 +169,3 @@ $ pentgo
 › /exit
 $ pentgo resume   # 会话、事实、证据全部恢复
 ```
-
-## 更多文档
-
-- [技术文档](docs/TECHNICAL.md)
-- [架构地图](docs/ARCHITECTURE.md)

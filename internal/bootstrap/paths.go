@@ -25,11 +25,8 @@ func ConfigFile() (string, error) {
 	return filepath.Join(dir, "config.json"), nil
 }
 
-// SkillsDir returns the user-owned skill directory used at runtime.
+// SkillsDir returns PentGo's fixed user-owned skill directory.
 func SkillsDir() (string, error) {
-	if base := os.Getenv("XDG_DATA_HOME"); base != "" {
-		return filepath.Join(base, "pentgo", "skills"), nil
-	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err

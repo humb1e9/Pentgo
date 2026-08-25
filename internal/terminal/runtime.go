@@ -15,9 +15,10 @@ import (
 
 // RuntimeTerminal 持有终端输入输出和程序生命周期，terminalModel 仅持有 Bubble Tea 显示状态。
 type RuntimeTerminal struct {
-	coordinator Controller
-	input       io.Reader
-	output      io.Writer
+	coordinator  Controller
+	input        io.Reader
+	output       io.Writer
+	useAltScreen bool
 }
 
 // NewRuntimeTerminal 提供非 nil 且便于测试的输入输出默认值。
@@ -28,7 +29,7 @@ func NewRuntimeTerminal(coordinator Controller, input io.Reader, output io.Write
 	if output == nil {
 		output = io.Discard
 	}
-	return &RuntimeTerminal{coordinator: coordinator, input: input, output: output}
+	return &RuntimeTerminal{coordinator: coordinator, input: input, output: output, useAltScreen: input == os.Stdin && output == os.Stdout}
 }
 
 // Run 打开或恢复当前工作区，启动 Bubble Tea，并在 UI 退出时关闭项目资源。
@@ -72,7 +73,7 @@ func (terminal *RuntimeTerminal) run(ctx context.Context, createWorkspace bool, 
 		return err
 	}
 	options := []tea.ProgramOption{tea.WithInput(terminal.input), tea.WithOutput(terminal.output)}
-	if terminal.input == os.Stdin && terminal.output == os.Stdout {
+	if terminal.useAltScreen {
 		options = append(options, tea.WithAltScreen())
 	}
 	result, err := tea.NewProgram(newTerminalModel(runtimeContext, terminal.coordinator, focused), options...).Run()
@@ -114,7 +115,12 @@ func (terminal *RuntimeTerminal) selectResumeSession() (string, error) {
 	if len(sessions) == 0 {
 		return "", fmt.Errorf("没有可恢复的会话")
 	}
-	sort.Slice(sessions, func(i, j int) bool {
+	sort.SliceStable(sessions, func(i, j int) bool {
+		iEmpty := sessions[i].Turns == 0 && strings.TrimSpace(sessions[i].Name) == "新会话"
+		jEmpty := sessions[j].Turns == 0 && strings.TrimSpace(sessions[j].Name) == "新会话"
+		if iEmpty != jEmpty {
+			return !iEmpty
+		}
 		if sessions[i].UpdatedAt.Equal(sessions[j].UpdatedAt) {
 			return sessions[i].ID > sessions[j].ID
 		}

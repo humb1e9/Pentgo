@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"bytes"
 	"context"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,34 @@ import (
 	"pentgo/internal/project"
 	app "pentgo/internal/project/runtime"
 )
+
+func TestResumeDefaultsToLatestNonEmptySession(t *testing.T) {
+	root := t.TempDir()
+	coordinator := app.NewManager(testRuntimeConfig(), root, app.Dependencies{SkillsFS: fstest.MapFS{}})
+	defer coordinator.CloseProject()
+	if _, _, err := coordinator.OpenOrCreateWorkspace(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	active, err := coordinator.NewSession("persisted history")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.RenameSession(active.ID, "old history"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coordinator.NewSession("新会话"); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	terminal := NewRuntimeTerminal(coordinator, strings.NewReader("\n"), &output)
+	selected, err := terminal.selectResumeSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected != active.ID {
+		t.Fatalf("selected session = %q, want persisted %q; output=%s", selected, active.ID, output.String())
+	}
+}
 
 func TestStartupDiagnosticsDismissAfterNotice(t *testing.T) {
 	model := newTerminalModel(context.Background(), nil, "")

@@ -16,15 +16,16 @@ type TurnFunc func(context.Context, *Session, string) error
 
 // Worker serializes all mutable state for one session on its own goroutine.
 type Worker struct {
-	session  *Session
-	turn     TurnFunc
-	input    chan workerRequest
-	cancel   context.CancelFunc
-	done     chan struct{}
-	events   chan Event
-	snapshot atomic.Pointer[Session]
-	closed   atomic.Bool
-	stateMu  sync.Mutex
+	session    *Session
+	turn       TurnFunc
+	input      chan workerRequest
+	cancel     context.CancelFunc
+	done       chan struct{}
+	events     chan Event
+	snapshot   atomic.Pointer[Session]
+	closed     atomic.Bool
+	stateMu    sync.Mutex
+	turnCancel context.CancelFunc
 }
 
 type workerRequest struct {
@@ -160,6 +161,20 @@ func (worker *Worker) Stop() {
 	worker.cancel()
 }
 
+// Pause cancels only the active turn while keeping the session worker available.
+func (worker *Worker) Pause() bool {
+	if worker == nil {
+		return false
+	}
+	worker.stateMu.Lock()
+	defer worker.stateMu.Unlock()
+	if worker.turnCancel == nil {
+		return false
+	}
+	worker.turnCancel()
+	return true
+}
+
 // Emit publishes an event inside this worker without transferring event
 // channel ownership.
 func (worker *Worker) Emit(event Event) {
@@ -200,10 +215,16 @@ func (worker *Worker) run(ctx context.Context) {
 				continue
 			}
 			turnContext, cancel := context.WithCancel(request.ctx)
+			worker.stateMu.Lock()
+			worker.turnCancel = cancel
+			worker.stateMu.Unlock()
 			stopWorker := context.AfterFunc(ctx, cancel)
 			worker.publish(Event{SessionID: worker.session.ID, Kind: EventTurnStarted, Message: request.message})
 			err := worker.turn(turnContext, worker.session, request.message)
 			stopWorker()
+			worker.stateMu.Lock()
+			worker.turnCancel = nil
+			worker.stateMu.Unlock()
 			cancel()
 			if transitionErr := worker.interruptOrFailAfterError(turnContext, err); transitionErr != nil && err == nil {
 				err = transitionErr

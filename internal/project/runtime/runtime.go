@@ -287,6 +287,23 @@ func (runtime *ProjectRuntime) Submit(ctx context.Context, sessionID, message st
 	return session.worker.Submit(ctx, message)
 }
 
+// PauseSession cancels the active turn while leaving its session ready for the next user message.
+func (runtime *ProjectRuntime) PauseSession(sessionID string) error {
+	if runtime == nil {
+		return fmt.Errorf("project runtime is nil")
+	}
+	runtime.mu.RLock()
+	session := runtime.sessions[sessionID]
+	runtime.mu.RUnlock()
+	if session == nil {
+		return fmt.Errorf("session %q is not available", sessionID)
+	}
+	if !session.worker.Pause() {
+		return fmt.Errorf("session %q has no running turn", sessionID)
+	}
+	return nil
+}
+
 // RenameSession 先在 worker 中执行重命名，再提交持久化变更。提交失败时，
 // 内存状态和持久化状态都会回滚至原名称。
 func (runtime *ProjectRuntime) RenameSession(sessionID, name string) error {

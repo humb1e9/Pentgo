@@ -23,5 +23,6 @@ type Controller interface {
 	Messages(string) []core.Message
 	Events(string) <-chan sessionstate.Event
 	SkillDiagnostics() []tools.Diagnostic
+	PauseSession(string) error
 	Submit(context.Context, string, string) <-chan error
 }

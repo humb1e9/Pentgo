@@ -3,6 +3,7 @@ package terminal
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -54,6 +55,8 @@ var (
 	modelBodyStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("255"))
 	toolStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("179")).Bold(true)
 	toolBodyStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	actionStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("63")).Bold(true).Padding(0, 1)
+	pauseStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("160")).Bold(true).Padding(0, 1)
 )
 
 // activityLevel 定义临时 CLI 反馈的语义层级；文本始终以安全纯文本保存。
@@ -190,6 +193,9 @@ func (model *terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.refresh()
 		return model, nil
 	case tea.MouseMsg:
+		if typed.Type == tea.MouseLeft && typed.Action == tea.MouseActionPress && model.actionButtonHit(typed) {
+			return model, model.handleActionButton()
+		}
 		switch typed.Type {
 		case tea.MouseWheelUp:
 			model.viewport.ScrollUp(model.viewport.MouseWheelDelta)
@@ -269,12 +275,20 @@ func (model *terminalModel) renderHeader() string {
 	))
 }
 
-// renderComposer 包含输入和固定可发现的快捷键提示。
+// renderComposer puts the clickable send/pause action beside the input.
 func (model *terminalModel) renderComposer() string {
 	width := model.contentWidth()
 	hint := ansi.Truncate("PgUp/PgDn 浏览历史 · Ctrl+O 详情 · Ctrl+C 退出", max(8, width-2), "...")
-	body := lipgloss.JoinVertical(lipgloss.Left, model.input.View(), composerHintStyle.Render(hint))
+	line := lipgloss.JoinHorizontal(lipgloss.Top, model.input.View(), " ", model.renderActionButton())
+	body := lipgloss.JoinVertical(lipgloss.Left, line, composerHintStyle.Render(hint))
 	return inputStyle.Width(width).Render(body)
+}
+
+func (model *terminalModel) renderActionButton() string {
+	if model.turnRunning {
+		return pauseStyle.Render("暂停")
+	}
+	return actionStyle.Render("发送")
 }
 
 func (model *terminalModel) headerHeight() int {
@@ -314,10 +328,8 @@ func (model *terminalModel) sessionStatus() string {
 // layout 在窗口调整后为标题栏和 composer 预留空间，并保证视口可读。
 func (model *terminalModel) layout() {
 	contentWidth := model.contentWidth()
-	// textinput.View adds the prompt and one cursor cell to Width for non-empty input.
-	// Reserve the composer border/padding plus those two prompt cells to keep the
-	// rendered input line inside the rounded box for CJK, emoji, and long values.
-	model.input.Width = max(12, contentWidth-5)
+	// Reserve border/padding, the prompt/cursor cells, gap, and the action button.
+	model.input.Width = max(12, contentWidth-lipgloss.Width(model.renderActionButton())-7)
 	model.viewport.Width = max(12, contentWidth)
 	viewportHeight := model.height - model.headerHeight() - model.composerHeight()
 	model.viewport.Height = max(3, viewportHeight)
@@ -549,6 +561,29 @@ func (model *terminalModel) focusedSession() *sessionstate.Session {
 		}
 	}
 	return nil
+}
+
+func (model *terminalModel) actionButtonHit(mouse tea.MouseMsg) bool {
+	buttonWidth := lipgloss.Width(model.renderActionButton())
+	buttonX := model.width - buttonWidth - 3
+	buttonY := model.headerHeight() + model.viewport.Height + 1
+	return mouse.X >= buttonX && mouse.X < buttonX+buttonWidth && mouse.Y == buttonY
+}
+
+func (model *terminalModel) handleActionButton() tea.Cmd {
+	if model.turnRunning {
+		if err := model.coordinator.PauseSession(model.focused); err != nil && !errors.Is(err, context.Canceled) {
+			model.addActivity(activityError, err.Error())
+			model.refresh()
+		}
+		return nil
+	}
+	line := strings.TrimSpace(model.input.Value())
+	if line == "" {
+		return nil
+	}
+	model.input.Reset()
+	return model.handleLine(line)
 }
 
 // toggleToolDetails 仅切换当前 TUI 的工具详情显示，不会变更 conversation 或 evidence。

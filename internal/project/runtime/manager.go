@@ -385,6 +385,20 @@ func (coordinator *Manager) DeleteSession(id string) error {
 	return runtime.DeleteSession(id)
 }
 
+// PauseSession cancels the active turn without closing its session.
+func (coordinator *Manager) PauseSession(sessionID string) error {
+	if coordinator == nil {
+		return fmt.Errorf("coordinator is nil")
+	}
+	coordinator.mu.RLock()
+	runtime := coordinator.runtime
+	coordinator.mu.RUnlock()
+	if runtime == nil {
+		return fmt.Errorf("no project is open")
+	}
+	return runtime.PauseSession(sessionID)
+}
+
 // Submit 将消息转发给当前运行时中的会话 worker。
 func (coordinator *Manager) Submit(ctx context.Context, sessionID, message string) <-chan error {
 	coordinator.mu.RLock()

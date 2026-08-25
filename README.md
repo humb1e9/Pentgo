@@ -21,22 +21,30 @@ PentGo 是一个运行在终端里的持久化 AI Agent 工作台。它让你在
 
 ### 安装
 
-准备环境：
+需要提前准备：
 
 - 安装 Go **1.25 或更高版本**，并确认 `go version` 可运行。
 - 准备支持工具调用的 OpenAI 兼容模型或 Anthropic 模型。
+- 安装下方表格中的七个内置安全工具，并确认各命令在 `PATH` 中可运行。
 
 ```bash
 git clone https://github.com/humb1e9/Pentgo.git
 cd Pentgo
-./install.sh
+go mod tidy
+mkdir -p ~/.local/bin
+go build -o ~/.local/bin/pentgo ./cmd/pentgo
+
+# 首次安装时复制内置 skills（已存在则跳过，不覆盖你的修改）
+data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/pentgo"
+mkdir -p "$data_dir"
+[ -d "$data_dir/skills" ] || cp -R skills "$data_dir/skills"
 ```
 
-`install.sh` 会依次完成：检查 Go 工具链（缺失时给出安装指引）、`go mod tidy` 拉齐依赖、编译 `pentgo` 到 `~/.local/bin`（无需 sudo）、首次安装时把内置 skills 复制到 `~/.local/share/pentgo/skills`（重复运行不覆盖）。确认 `~/.local/bin` 在 `PATH` 中即可运行 `pentgo`。
+确认 `~/.local/bin` 在 `PATH` 中即可运行 `pentgo`。
 
-### 内置安全工具
+#### 七个内置安全工具
 
-PentGo 的侦察类 skills 依赖以下七个外部 CLI。请按表格自行安装并确认各命令在 `PATH` 中可运行：
+PentGo 的侦察类 skills 依赖以下七个外部 CLI：
 
 | 工具 | 用途 | Kali/Debian (apt) | 备选安装 |
 | --- | --- | --- | --- |

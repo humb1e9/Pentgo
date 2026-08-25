@@ -132,6 +132,10 @@ CREATE TABLE IF NOT EXISTS context_compactions (
 CREATE UNIQUE INDEX IF NOT EXISTS context_compactions_one_started_range
     ON context_compactions(session_id, generation, source_start_seq, source_end_seq)
     WHERE status = 'started';
+
+CREATE TABLE IF NOT EXISTS project_notices (
+    notice_key TEXT PRIMARY KEY
+);
 `
 
 // openSQLite creates or validates the current schema. Existing incompatible

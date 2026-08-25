@@ -154,6 +154,23 @@ func (store *ProjectStore) WorkspaceRoot() string {
 // DatabasePath 返回此存储的 SQLite 文件位置。
 func (store *ProjectStore) DatabasePath() string { return filepath.Join(store.Root(), "pentgo.db") }
 
+// ClaimNotice atomically records a one-time project notice and reports whether
+// this caller is the first to claim it.
+func (store *ProjectStore) ClaimNotice(key string) (bool, error) {
+	if store == nil || store.db == nil || strings.TrimSpace(key) == "" {
+		return false, fmt.Errorf("project notice key is invalid")
+	}
+	result, err := store.db.Exec("INSERT INTO project_notices(notice_key) VALUES(?) ON CONFLICT(notice_key) DO NOTHING", key)
+	if err != nil {
+		return false, fmt.Errorf("claim project notice: %w", err)
+	}
+	claimed, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("inspect project notice claim: %w", err)
+	}
+	return claimed != 0, nil
+}
+
 // TmpDir 返回此项目专用的 MCP 和临时进程存储目录。
 func (store *ProjectStore) TmpDir() string { return filepath.Join(store.Root(), "tmp") }
 

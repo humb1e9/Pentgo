@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -85,7 +86,7 @@ func NewManager(cfg Config, outputRoot string, deps Dependencies) *Manager {
 	}
 }
 
-// SkillDiagnostics returns the immutable process-start skill scan diagnostics.
+// SkillDiagnostics returns unacknowledged startup skill scan diagnostics.
 func (coordinator *Manager) SkillDiagnostics() []tools.Diagnostic {
 	if coordinator == nil {
 		return nil
@@ -93,6 +94,34 @@ func (coordinator *Manager) SkillDiagnostics() []tools.Diagnostic {
 	coordinator.mu.RLock()
 	defer coordinator.mu.RUnlock()
 	return append([]tools.Diagnostic(nil), coordinator.skillDiagnostics...)
+}
+
+// claimSkillDiagnostics exposes each unchanged scan result only once per project.
+func (coordinator *Manager) claimSkillDiagnostics(store *projectmodel.ProjectStore) error {
+	if coordinator == nil || store == nil {
+		return nil
+	}
+	coordinator.mu.RLock()
+	diagnostics := append([]tools.Diagnostic(nil), coordinator.skillDiagnostics...)
+	coordinator.mu.RUnlock()
+	if len(diagnostics) == 0 {
+		return nil
+	}
+	hash := sha256.New()
+	for _, diagnostic := range diagnostics {
+		fmt.Fprintf(hash, "%s\x00%s\x00", diagnostic.Path, diagnostic.Reason)
+	}
+	claimed, err := store.ClaimNotice(fmt.Sprintf("skill-diagnostics:%x", hash.Sum(nil)))
+	if err != nil {
+		return err
+	}
+	if claimed {
+		return nil
+	}
+	coordinator.mu.Lock()
+	coordinator.skillDiagnostics = nil
+	coordinator.mu.Unlock()
+	return nil
 }
 
 // CreateProject 在 Manager 根目录初始化并打开项目。
@@ -190,6 +219,10 @@ func (coordinator *Manager) openStore(ctx context.Context, store *projectmodel.P
 	secrets := tools.ConfigSecrets(coordinator.cfg.Tools.MCP)
 	projectRuntime, err := OpenProjectRuntimeWithSecrets(ctx, store, nil, secrets...)
 	if err != nil {
+		return err
+	}
+	if err := coordinator.claimSkillDiagnostics(store); err != nil {
+		_ = projectRuntime.Close()
 		return err
 	}
 	var externalTools core.ToolProvider

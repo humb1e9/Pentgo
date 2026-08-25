@@ -14,7 +14,7 @@ import (
 // Provider request limits apply to every model call, including checkpoints.
 const (
 	anthropicMaxTokens  = 4096
-	modelRequestTimeout = time.Minute
+	modelRequestTimeout = 5 * time.Minute
 )
 
 // NewModel 为适配器构造配置指定的原生工具调用模型。

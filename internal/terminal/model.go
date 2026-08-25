@@ -194,6 +194,12 @@ func (model *terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+o":
 			model.toggleToolDetails()
 			return model, nil
+		case "up":
+			model.viewport.LineUp(1)
+			return model, nil
+		case "down":
+			model.viewport.LineDown(1)
+			return model, nil
 		case "pgup", "ctrl+u":
 			model.viewport.PageUp()
 			return model, nil

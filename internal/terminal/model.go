@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -20,8 +21,9 @@ import (
 
 // 默认终端尺寸。
 const (
-	defaultWidth  = 100
-	defaultHeight = 32
+	defaultWidth               = 100
+	defaultHeight              = 32
+	startupActivityDisplayTime = 3 * time.Second
 )
 
 // 共享的 Lip Gloss 样式使视图渲染与终端状态分离。
@@ -108,6 +110,9 @@ type turnCompleteMsg struct {
 // contextDoneMsg 在运行时根上下文结束时通知 Bubble Tea 退出。
 type contextDoneMsg struct{ err error }
 
+// dismissStartupActivityMsg removes one-time startup diagnostics after a brief notice.
+type dismissStartupActivityMsg struct{}
+
 // newTerminalModel 初始化输入框、最小视口和已聚焦会话。
 func newTerminalModel(ctx context.Context, coordinator Controller, focused string) *terminalModel {
 	if ctx == nil {
@@ -142,7 +147,11 @@ func newTerminalModel(ctx context.Context, coordinator Controller, focused strin
 
 // Init 聚焦输入框，并启动当前会话和上下文监听。
 func (model *terminalModel) Init() tea.Cmd {
-	return tea.Batch(model.input.Focus(), model.watchSession(model.focused), model.waitContext())
+	commands := []tea.Cmd{model.input.Focus(), model.watchSession(model.focused), model.waitContext()}
+	if len(model.startupActivity) != 0 {
+		commands = append(commands, dismissStartupActivityAfter(startupActivityDisplayTime))
+	}
+	return tea.Batch(commands...)
 }
 
 // Update 将终端输入和 worker 事件转换为模型状态变更。
@@ -157,6 +166,10 @@ func (model *terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case contextDoneMsg:
 		model.err = typed.err
 		return model, tea.Quit
+	case dismissStartupActivityMsg:
+		model.dismissStartupActivity()
+		model.refresh()
+		return model, nil
 	case runtimeEventMsg:
 		if typed.ok && typed.sessionID == model.focused {
 			model.recordEvent(typed.event)
@@ -180,6 +193,18 @@ func (model *terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		switch typed.String() {
 		case "ctrl+o":
 			model.toggleToolDetails()
+			return model, nil
+		case "pgup", "ctrl+u":
+			model.viewport.PageUp()
+			return model, nil
+		case "pgdown", "ctrl+d":
+			model.viewport.PageDown()
+			return model, nil
+		case "home":
+			model.viewport.GotoTop()
+			return model, nil
+		case "end":
+			model.viewport.GotoBottom()
 			return model, nil
 		case "ctrl+c":
 			return model, tea.Quit
@@ -233,7 +258,7 @@ func (model *terminalModel) renderHeader() string {
 // renderComposer 包含输入和固定可发现的快捷键提示。
 func (model *terminalModel) renderComposer() string {
 	width := model.contentWidth()
-	hint := ansi.Truncate("Enter 发送 · Ctrl+O 详情 · Ctrl+C 退出", max(8, width-2), "...")
+	hint := ansi.Truncate("PgUp/PgDn 浏览历史 · Ctrl+O 详情 · Ctrl+C 退出", max(8, width-2), "...")
 	body := lipgloss.JoinVertical(lipgloss.Left, model.input.View(), composerHintStyle.Render(hint))
 	return inputStyle.Width(width).Render(body)
 }
@@ -390,6 +415,13 @@ func (model *terminalModel) waitContext() tea.Cmd {
 	return func() tea.Msg {
 		<-model.ctx.Done()
 		return contextDoneMsg{err: model.ctx.Err()}
+	}
+}
+
+func dismissStartupActivityAfter(delay time.Duration) tea.Cmd {
+	return func() tea.Msg {
+		time.Sleep(delay)
+		return dismissStartupActivityMsg{}
 	}
 }
 

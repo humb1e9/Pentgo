@@ -81,6 +81,7 @@ type terminalModel struct {
 	focused         string
 	eventCancel     context.CancelFunc
 	activity        []activityEntry
+	startupActivity []activityEntry
 	streamActivity  []activityEntry
 	runningTools    map[string]int
 	turnRunning     bool
@@ -132,7 +133,7 @@ func newTerminalModel(ctx context.Context, coordinator Controller, focused strin
 	model.refresh()
 	if coordinator != nil {
 		for _, diagnostic := range coordinator.SkillDiagnostics() {
-			model.addActivity(activityError, fmt.Sprintf("技能已跳过：%s：%s", diagnostic.Path, diagnostic.Reason))
+			model.startupActivity = append(model.startupActivity, activityEntry{level: activityError, text: fmt.Sprintf("技能已跳过：%s：%s", diagnostic.Path, diagnostic.Reason)})
 		}
 		model.refresh()
 	}
@@ -313,8 +314,11 @@ func (model *terminalModel) renderConversation() {
 	if model.generating {
 		lines = append(lines, renderGeneratingPlaceholder())
 	}
-	if len(lines) == 0 && len(model.activity) == 0 && len(model.streamActivity) == 0 {
+	if len(lines) == 0 && len(model.activity) == 0 && len(model.startupActivity) == 0 && len(model.streamActivity) == 0 {
 		lines = append(lines, model.renderWelcome())
+	}
+	for _, activity := range model.startupActivity {
+		lines = append(lines, ansi.Hardwrap(renderActivity(activity), model.contentWidth(), true))
 	}
 	for _, activity := range model.streamActivity {
 		lines = append(lines, ansi.Hardwrap(renderActivity(activity), model.contentWidth(), true))
@@ -391,6 +395,7 @@ func (model *terminalModel) waitContext() tea.Cmd {
 
 // handleLine 将用户文本派发至聚焦会话，或解释斜杠命令。
 func (model *terminalModel) handleLine(line string) tea.Cmd {
+	model.dismissStartupActivity()
 	command, argument, _ := strings.Cut(line, " ")
 	argument = strings.TrimSpace(argument)
 	if !strings.HasPrefix(command, "/") {
@@ -577,6 +582,14 @@ func (model *terminalModel) finishRunningTool(name string) {
 		return
 	}
 	model.runningTools[name]--
+}
+
+// dismissStartupActivity removes one-time startup diagnostics before the first user action.
+func (model *terminalModel) dismissStartupActivity() {
+	if len(model.startupActivity) == 0 {
+		return
+	}
+	model.startupActivity = nil
 }
 
 // clearTransientState isolates command feedback and live execution state to the current focused session.

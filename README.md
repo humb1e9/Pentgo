@@ -22,8 +22,10 @@ PentGo 是一个运行在终端里的持久化 AI Agent 工作台。它让你在
 ```bash
 git clone https://github.com/humb1e9/Pentgo.git
 cd Pentgo
-go build -o pentgo ./cmd
+./install.sh
 ```
+
+`install.sh` 会检查 Go 工具链（缺失时给出安装指引）、执行 `go mod tidy` 拉齐依赖、编译 `pentgo` 到 `~/.local/bin`（无需 sudo），并在首次安装时把内置 skills 复制到 `~/.local/share/pentgo/skills`。重复运行只重新编译，不会覆盖你已有的 skills。确认 `~/.local/bin` 在 `PATH` 中即可运行 `pentgo`。
 
 ### 2. 配置模型
 

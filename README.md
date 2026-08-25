@@ -6,17 +6,6 @@ PentGo 是一个运行在终端里的持久化 AI Agent 工作台。它让你在
 
 > **仅限已获得明确授权的目标、数据和环境。**
 
-## 特性速览
-
-- **持久化会话**：在终端中创建、切换、恢复多个会话；退出后用 `pentgo resume` 继续。
-- **工作区工具**：模型内置 `ls` / `read_file` / `write_file` / `edit_file` / `glob` / `grep` / `execute` 七个工作区工具，直接操作启动目录下的文件与命令。
-- **本机 CLI 接入**：把 amass、subfinder 等任意命令登记为模型可调用的工具（`agent.local_tools`）。
-- **标准 MCP**：支持 stdio / HTTP / SSE 三种 MCP 服务，与本机工具统一命名空间。
-- **上下文管理**：Context Surface 持久化投影，超限时自动生成 checkpoint 摘要压缩前缀，配合 token 计量。
-- **项目事实账本**：跨会话共享的项目事实，每 turn 注入有界 Fact Index 快照，模型可读可写。
-- **Evidence 审计**：每次工具调用的完整记录（成功与失败均保留）持久化，可回溯。
-- **Markdown Skills**：把常用流程写成带 frontmatter 的 Markdown，模型按需加载。
-
 ## 基础使用
 
 ### 安装
@@ -45,7 +34,10 @@ sudo apt update
 sudo apt install -y amass subfinder paramspider httpx-toolkit wafw00f
 go install github.com/lc/gau/v2/cmd/gau@latest
 go install github.com/projectdiscovery/katana/cmd/katana@latest
-export PATH="$HOME/go/bin:$PATH"
+
+# go install 的产物在 ~/go/bin，写入 shell 配置才能长期生效（zsh 用户改为 ~/.zshrc）
+echo 'export PATH="$HOME/go/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
 ```
 
 | 工具 | 用途 | apt | 备选 |
@@ -58,7 +50,7 @@ export PATH="$HOME/go/bin:$PATH"
 | httpx | HTTP 存活探测 | `sudo apt install httpx-toolkit` | `go install github.com/projectdiscovery/httpx/cmd/httpx@latest` |
 | wafw00f | WAF 指纹识别 | `sudo apt install wafw00f` | `pipx install wafw00f` |
 
-注意：Debian/Kali 上 httpx 的包名是 `httpx-toolkit`（`httpx` 是另一个工具）。`go install` 产物在 `~/go/bin`，需加入 `PATH`。
+注意：Debian/Kali 上 httpx 的包名是 `httpx-toolkit`（`httpx` 是另一个工具）。
 
 ### 启动
 

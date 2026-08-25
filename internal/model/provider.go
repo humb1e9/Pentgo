@@ -11,9 +11,11 @@ import (
 	"github.com/cloudwego/eino/components/model"
 )
 
-// anthropicMaxTokens 提供 Claude 适配器要求的显式输出上限，
-// 请求超时仍由共享 HTTP 客户端控制。
-const anthropicMaxTokens = 4096
+// Provider request limits apply to every model call, including checkpoints.
+const (
+	anthropicMaxTokens  = 4096
+	modelRequestTimeout = time.Minute
+)
 
 // NewModel 为适配器构造配置指定的原生工具调用模型。
 // 它不发起请求，并将凭据保留在领域状态之外。
@@ -26,7 +28,7 @@ func New(ctx context.Context, configuration Config) (model.ToolCallingChatModel,
 		ctx = context.Background()
 	}
 	baseURL := strings.TrimRight(strings.TrimSpace(configuration.BaseURL), "/")
-	client := &http.Client{Timeout: time.Minute}
+	client := &http.Client{Timeout: modelRequestTimeout}
 	if strings.EqualFold(configuration.Provider, "anthropic") {
 		return einoclaude.NewChatModel(ctx, &einoclaude.Config{APIKey: configuration.APIKey, BaseURL: &baseURL, Model: configuration.Model, MaxTokens: anthropicMaxTokens, HTTPClient: client})
 	}

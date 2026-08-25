@@ -533,16 +533,14 @@ func (model *terminalModel) recordEvent(event sessionstate.Event) {
 			model.addStreamActivity(name)
 		}
 	case sessionstate.EventContextActivity:
-		level := activityInfo
 		if activity, ok := event.Data.(core.ContextActivity); ok {
 			switch activity.Kind {
 			case core.ContextRequestRejected:
-				level = activityError
-			case core.ContextCheckpointCreated, core.ContextToolPruned, core.ContextOverflowRetry:
-				level = activityStatus
+				model.addActivity(activityError, name)
+			case core.ContextCheckpointCreated:
+				model.addActivity(activityStatus, "正在压缩上下文…")
 			}
 		}
-		model.addActivity(level, name)
 	case sessionstate.EventAssistantMessage:
 		model.generating = false
 		model.streamActivity = nil

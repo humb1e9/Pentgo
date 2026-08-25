@@ -79,10 +79,7 @@ func (assembler *ContextAssembler) PrepareOverflowRecovery(ctx context.Context, 
 	if err != nil {
 		return core.ModelStepInput{}, activities, err
 	}
-	if measurement := assembler.meter.Measure(contextRequestFromInput(prunedInput)); measurement.TotalTokens < contextThreshold(assembler.policy) {
-		if len(prunes) == 0 {
-			return prunedInput, append(activities, core.ContextActivity{Kind: core.ContextOverflowRetry, Message: "Provider 报告上下文超限，但当前上下文已经在安全预算内。"}), nil
-		}
+	if measurement := assembler.meter.Measure(contextRequestFromInput(prunedInput)); measurement.TotalTokens < contextThreshold(assembler.policy) && len(prunes) != 0 {
 		updated, err := surfaceStore.PruneTools(surface.Generation, prunes)
 		if err != nil {
 			return core.ModelStepInput{}, activities, err
@@ -90,6 +87,9 @@ func (assembler *ContextAssembler) PrepareOverflowRecovery(ctx context.Context, 
 		input, err := assembler.materialize(sessionID, systemPrompt, tools, facts, updated, messages)
 		return input, append(activities, core.ContextActivity{Kind: core.ContextOverflowRetry, Message: "Provider 报告上下文超限，已裁剪工具结果后重试。"}), err
 	}
+	// The provider has rejected this exact surface, so an estimate below the
+	// local threshold is not sufficient evidence that replaying it will work.
+	// Force a checkpoint when no tool result can be pruned.
 	if assembler.summarizer == nil {
 		return core.ModelStepInput{}, append(activities, core.ContextActivity{Kind: core.ContextOverflowRetry, Message: "Provider 报告上下文超限，但没有可用 checkpoint summarizer。"}), ErrContextPreflight
 	}

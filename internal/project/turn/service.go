@@ -43,7 +43,7 @@ func NewTurnService(stepper core.ModelStepper, tools core.ToolProvider, cfg Turn
 		cfg.Clock = func() time.Time { return time.Now().UTC() }
 	}
 	if cfg.MaxRequests <= 0 {
-		cfg.MaxRequests = 20
+		cfg.MaxRequests = 1000
 	}
 	return &TurnService{
 		stepper:        stepper,

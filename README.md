@@ -111,7 +111,7 @@ pentgo resume # 恢复已有项目并选择会话
     }
   },
   "project": {
-    "max_turns": 20,
+    "max_turns": 1000,
     "context": { "context_window": 128000 }
   }
 }
@@ -120,7 +120,7 @@ pentgo resume # 恢复已有项目并选择会话
 - `model.provider` 决定协议（`openai` / `anthropic`），连接参数全部平铺在 `model` 下。Anthropic 只需把 `provider` 换成 `anthropic` 并替换 `base_url` 与 `model`；其他兼容服务通常只需替换 `base_url` 和 `model`。
 - `tools.local` 把本机命令暴露为模型工具：键名是模型看到的工具名，`command` 支持 `PATH` 命令或绝对路径。工具接收 `{"args":[...]}` 原生参数数组，不经过 shell；工具名不能与内置工具冲突。
 - `tools.mcp` 接入 stdio（`command`/`args`）或 HTTP/SSE（`type` + `url`）服务。所有来源的工具名必须唯一。
-- `project.max_turns` 限制单次任务轮数，`project.context` 控制上下文预算（`context_window` 等，全部有缺省值）。
+- `project.max_turns` 限制单个用户请求内的模型调用次数（默认 1000），`project.context` 控制上下文预算（`context_window` 等，全部有缺省值）。
 
 ### 工作区与 Skills
 

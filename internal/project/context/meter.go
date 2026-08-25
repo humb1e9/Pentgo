@@ -98,7 +98,18 @@ func EstimateTextTokens(value string) int {
 	if value == "" {
 		return 0
 	}
-	return (utf8.RuneCountInString(value) + estimatedCharactersPerToken - 1) / estimatedCharactersPerToken
+	asciiRunes := 0
+	nonASCIITokens := 0
+	for _, runeValue := range value {
+		if runeValue <= utf8.RuneSelf {
+			asciiRunes++
+		} else {
+			// CJK text is commonly tokenized near one token per rune. Counting it
+			// as four characters underestimates the Chinese system prompt and tool output.
+			nonASCIITokens++
+		}
+	}
+	return nonASCIITokens + (asciiRunes+estimatedCharactersPerToken-1)/estimatedCharactersPerToken
 }
 
 func providerSystemMessage(request Request) string {

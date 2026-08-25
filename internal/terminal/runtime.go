@@ -1,7 +1,6 @@
 package terminal
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -128,11 +127,6 @@ func (terminal *RuntimeTerminal) selectResumeSession() (string, error) {
 		}
 		return sessions[i].UpdatedAt.After(sessions[j].UpdatedAt)
 	})
-	reader, ok := terminal.input.(*bufio.Reader)
-	if !ok {
-		reader = bufio.NewReader(terminal.input)
-		terminal.input = reader
-	}
 	fmt.Fprintln(terminal.output, "恢复会话")
 	for index, session := range sessions {
 		name := strings.TrimSpace(session.Name)
@@ -142,11 +136,10 @@ func (terminal *RuntimeTerminal) selectResumeSession() (string, error) {
 		fmt.Fprintf(terminal.output, "%d. %s  %s  %d turns\n", index+1, name, session.ID, session.Turns)
 	}
 	fmt.Fprint(terminal.output, "选择会话 [1]: ")
-	line, err := reader.ReadString('\n')
-	if err != nil && err != io.EOF {
+	choice, err := readResumeChoice(terminal.input)
+	if err != nil {
 		return "", fmt.Errorf("读取会话选择: %w", err)
 	}
-	choice := strings.TrimSpace(line)
 	if choice == "" {
 		return sessions[0].ID, nil
 	}
@@ -171,4 +164,28 @@ func hasVisibleHistory(messages []core.Message) bool {
 		}
 	}
 	return false
+}
+
+// readResumeChoice reads exactly one line without buffering future TUI keys.
+func readResumeChoice(input io.Reader) (string, error) {
+	var line strings.Builder
+	buffer := []byte{0}
+	for {
+		count, err := input.Read(buffer)
+		if count != 0 {
+			if buffer[0] == '\n' {
+				return strings.TrimSpace(line.String()), nil
+			}
+			line.WriteByte(buffer[0])
+		}
+		if err != nil {
+			if err == io.EOF {
+				return strings.TrimSpace(line.String()), nil
+			}
+			return "", err
+		}
+		if count == 0 {
+			return "", io.ErrNoProgress
+		}
+	}
 }

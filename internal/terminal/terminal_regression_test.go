@@ -63,6 +63,9 @@ func TestResumeDefaultsToLatestNonEmptySession(t *testing.T) {
 	if selected != active.ID {
 		t.Fatalf("selected session = %q, want persisted %q; output=%s", selected, active.ID, output.String())
 	}
+	if terminal.input == nil {
+		t.Fatal("resume selection lost the TUI input")
+	}
 }
 
 func TestStartupDiagnosticsDismissAfterNotice(t *testing.T) {

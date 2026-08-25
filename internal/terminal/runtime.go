@@ -73,7 +73,7 @@ func (terminal *RuntimeTerminal) run(ctx context.Context, createWorkspace bool, 
 	if err != nil {
 		return err
 	}
-	options := []tea.ProgramOption{tea.WithInput(terminal.input), tea.WithOutput(terminal.output)}
+	options := []tea.ProgramOption{tea.WithInput(terminal.input), tea.WithOutput(terminal.output), tea.WithMouseCellMotion()}
 	if terminal.useAltScreen {
 		options = append(options, tea.WithAltScreen())
 	}

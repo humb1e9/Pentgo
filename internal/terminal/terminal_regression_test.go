@@ -178,6 +178,25 @@ func TestResumedSessionRendersPersistedConversation(t *testing.T) {
 	}
 }
 
+func TestMouseWheelScrollsHistoryWithoutEditingInput(t *testing.T) {
+	model := newTerminalModel(context.Background(), nil, "")
+	model.width, model.height = 100, 12
+	model.layout()
+	model.viewport.SetContent(strings.Repeat("persisted history\n", 100))
+	model.viewport.GotoBottom()
+	model.input.SetValue("draft")
+	before := model.viewport.YOffset
+
+	updated, _ := model.Update(tea.MouseMsg{Type: tea.MouseWheelUp, Action: tea.MouseActionPress})
+	model = updated.(*terminalModel)
+	if model.viewport.YOffset >= before {
+		t.Fatalf("wheel up offset = %d, want less than %d", model.viewport.YOffset, before)
+	}
+	if model.input.Value() != "draft" {
+		t.Fatalf("mouse input changed composer: %q", model.input.Value())
+	}
+}
+
 func TestHistoryNavigationRevealsResumedMessages(t *testing.T) {
 	model := newTerminalModel(context.Background(), nil, "")
 	model.width, model.height = 100, 12

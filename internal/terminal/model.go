@@ -189,6 +189,14 @@ func (model *terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		model.refresh()
 		return model, nil
+	case tea.MouseMsg:
+		switch typed.Type {
+		case tea.MouseWheelUp:
+			model.viewport.ScrollUp(model.viewport.MouseWheelDelta)
+		case tea.MouseWheelDown:
+			model.viewport.ScrollDown(model.viewport.MouseWheelDelta)
+		}
+		return model, nil
 	case tea.KeyMsg:
 		switch typed.String() {
 		case "ctrl+o":

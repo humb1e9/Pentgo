@@ -65,61 +65,38 @@ pentgo resume # 恢复已有项目并选择会话
 
 ## 配置
 
-配置文件：`${XDG_CONFIG_HOME:-$HOME/.config}/pentgo/config.json`。
-
-### 模型
-
-```bash
-export OPENAI_API_KEY="你的密钥"
-mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/pentgo"
-```
+配置文件：`${XDG_CONFIG_HOME:-$HOME/.config}/pentgo/config.json`。首次运行 `pentgo` 会自动生成 `0600` 模板，编辑其中的 `model.model` 与 `model.api_key` 即可。
 
 ```json
 {
-  "agent": {
+  "model": {
     "provider": "openai",
-    "max_turns": 20,
-    "context": { "context_window": 128000 },
-    "openai": {
-      "base_url": "https://api.openai.com/v1",
-      "model": "你的模型名",
-      "api_key_env": "OPENAI_API_KEY"
-    }
-  }
-}
-```
-
-Anthropic 将 `provider` 改为 `anthropic`，在 `agent.anthropic` 中填写 `base_url`、`model`、`api_key_env`。其他兼容服务只需替换 `base_url` 和 `model`。
-
-### 本机 CLI
-
-```json
-{
-  "agent": {
-    "local_tools": {
+    "base_url": "https://api.openai.com/v1",
+    "model": "你的模型名",
+    "api_key": "你的密钥"
+  },
+  "tools": {
+    "max_output_bytes": 65536,
+    "local": {
       "amass": { "command": "amass", "description": "对已获授权的域名运行 Amass。" },
       "custom_recon": { "command": "/opt/tools/custom-recon" }
-    }
-  }
-}
-```
-
-键名是模型看到的工具名。每个工具接收 `{"args":[...]}`，不经过 shell。工具名不能与内置工具冲突。
-
-### MCP 服务
-
-```json
-{
-  "agent": {
+    },
     "mcp": {
       "scanner": { "command": "my-mcp-server", "args": ["--stdio"] },
       "catalog": { "type": "http", "url": "http://127.0.0.1:8080/mcp" }
     }
+  },
+  "project": {
+    "max_turns": 20,
+    "context": { "context_window": 128000 }
   }
 }
 ```
 
-支持 stdio、HTTP、SSE。所有来源的工具名必须唯一。
+- `model.provider` 决定协议（`openai` / `anthropic`），连接参数全部平铺在 `model` 下。Anthropic 只需把 `provider` 换成 `anthropic` 并替换 `base_url` 与 `model`；其他兼容服务通常只需替换 `base_url` 和 `model`。
+- `tools.local` 把本机命令暴露为模型工具：键名是模型看到的工具名，`command` 支持 `PATH` 命令或绝对路径。工具接收 `{"args":[...]}` 原生参数数组，不经过 shell；工具名不能与内置工具冲突。
+- `tools.mcp` 接入 stdio（`command`/`args`）或 HTTP/SSE（`type` + `url`）服务。所有来源的工具名必须唯一。
+- `project.max_turns` 限制单次任务轮数，`project.context` 控制上下文预算（`context_window` 等，全部有缺省值）。
 
 ### 工作区与 Skills
 

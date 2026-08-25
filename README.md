@@ -44,7 +44,22 @@ mkdir -p "$data_dir"
 
 #### 七个内置安全工具
 
-PentGo 的侦察类 skills 依赖以下七个外部 CLI：
+PentGo 的侦察类 skills 依赖以下七个外部 CLI。Kali/Debian 上可以先用下面的命令装齐，再按表格补齐 apt 没有的工具：
+
+```bash
+# apt 提供的五个
+sudo apt update
+sudo apt install -y amass subfinder paramspider httpx-toolkit wafw00f
+
+# apt 仓库没有的两个，用 go install 源码安装
+go install github.com/lc/gau/v2/cmd/gau@latest
+go install github.com/projectdiscovery/katana/cmd/katana@latest
+
+# go install 的产物在 ~/go/bin，确认它在 PATH 中
+export PATH="$HOME/go/bin:$PATH"
+```
+
+各工具的用途与备选安装方式：
 
 | 工具 | 用途 | Kali/Debian (apt) | 备选安装 |
 | --- | --- | --- | --- |

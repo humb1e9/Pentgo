@@ -66,7 +66,7 @@ cd ~/pentgo-workspace
 pentgo
 ```
 
-编辑 `${XDG_CONFIG_HOME:-$HOME/.config}/pentgo/config.json`，至少填写 `model.model` 和 `model.api_key`；随后重新启动：
+编辑 `~/.config/pentgo/config.json`，至少填写 `model.model` 和 `model.api_key`；随后重新启动：
 
 ```bash
 pentgo        # 创建新会话
@@ -89,7 +89,7 @@ pentgo resume # 恢复已有项目并选择会话
 
 ## 配置
 
-配置文件：`${XDG_CONFIG_HOME:-$HOME/.config}/pentgo/config.json`。首次运行 `pentgo` 会自动生成 `0600` 模板，编辑其中的 `model.model` 与 `model.api_key` 即可。
+配置文件：`~/.config/pentgo/config.json`。首次运行 `pentgo` 会自动生成 `0600` 模板，编辑其中的 `model.model` 与 `model.api_key` 即可。
 
 ```json
 {

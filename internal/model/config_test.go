@@ -24,30 +24,34 @@ func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, 
 	return function(request)
 }
 
-func TestRetryEOFTransportRetriesReplayablePreResponseFailure(t *testing.T) {
-	calls := 0
-	transport := retryEOFTransport{attempts: 2, base: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		calls++
-		if calls == 1 {
-			return nil, io.EOF
-		}
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("ok")), Request: request}, nil
-	})}
-	request, err := http.NewRequest(http.MethodPost, "https://example.test/v1/chat/completions", bytes.NewBufferString("body"))
-	if err != nil {
-		t.Fatal(err)
+func TestRetryTransportRetriesReplayablePreResponseFailures(t *testing.T) {
+	for _, failure := range []error{io.EOF, errors.New("net/http: TLS handshake timeout")} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			calls := 0
+			transport := retryTransport{attempts: 2, base: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				calls++
+				if calls == 1 {
+					return nil, failure
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("ok")), Request: request}, nil
+			})}
+			request, err := http.NewRequest(http.MethodPost, "https://example.test/v1/chat/completions", bytes.NewBufferString("body"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := transport.RoundTrip(request)
+			if err != nil || response == nil || calls != 2 {
+				t.Fatalf("response/error/calls = %#v/%v/%d", response, err, calls)
+			}
+			_ = response.Body.Close()
+		})
 	}
-	response, err := transport.RoundTrip(request)
-	if err != nil || response == nil || calls != 2 {
-		t.Fatalf("response/error/calls = %#v/%v/%d", response, err, calls)
-	}
-	_ = response.Body.Close()
 }
 
-func TestRetryEOFTransportDoesNotRetryResponseOrUnreplayableBody(t *testing.T) {
+func TestRetryTransportDoesNotRetryResponseOrUnreplayableBody(t *testing.T) {
 	calls := 0
 	response := &http.Response{StatusCode: http.StatusBadGateway, Body: io.NopCloser(strings.NewReader("bad gateway"))}
-	transport := retryEOFTransport{attempts: 2, base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+	transport := retryTransport{attempts: 2, base: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		calls++
 		return response, io.EOF
 	})}

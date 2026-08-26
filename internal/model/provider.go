@@ -31,21 +31,21 @@ func New(ctx context.Context, configuration Config) (model.ToolCallingChatModel,
 		ctx = context.Background()
 	}
 	baseURL := strings.TrimRight(strings.TrimSpace(configuration.BaseURL), "/")
-	client := &http.Client{Timeout: modelRequestTimeout, Transport: retryEOFTransport{base: http.DefaultTransport, attempts: modelTransportRetries}}
+	client := &http.Client{Timeout: modelRequestTimeout, Transport: retryTransport{base: http.DefaultTransport, attempts: modelTransportRetries}}
 	if strings.EqualFold(configuration.Provider, "anthropic") {
 		return einoclaude.NewChatModel(ctx, &einoclaude.Config{APIKey: configuration.APIKey, BaseURL: &baseURL, Model: configuration.Model, MaxTokens: anthropicMaxTokens, HTTPClient: client})
 	}
 	return einoopenai.NewChatModel(ctx, &einoopenai.ChatModelConfig{APIKey: configuration.APIKey, BaseURL: baseURL, Model: configuration.Model, HTTPClient: client})
 }
 
-// retryEOFTransport retries only pre-response EOF failures. A response is
-// never retried, so a stream that has started cannot be duplicated.
-type retryEOFTransport struct {
+// retryTransport retries only pre-response transient connection failures. A
+// response is never retried, so a stream that has started cannot be duplicated.
+type retryTransport struct {
 	base     http.RoundTripper
 	attempts int
 }
 
-func (transport retryEOFTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+func (transport retryTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	base := transport.base
 	if base == nil {
 		base = http.DefaultTransport
@@ -68,7 +68,7 @@ func (transport retryEOFTransport) RoundTrip(request *http.Request) (*http.Respo
 		}
 		response, err := base.RoundTrip(request)
 		lastErr = err
-		if response != nil || !errors.Is(err, io.EOF) || attempt >= attempts || request.Context().Err() != nil {
+		if response != nil || !retryableTransportError(err) || attempt >= attempts || request.Context().Err() != nil {
 			return response, err
 		}
 		select {
@@ -77,4 +77,8 @@ func (transport retryEOFTransport) RoundTrip(request *http.Request) (*http.Respo
 			return nil, request.Context().Err()
 		}
 	}
+}
+
+func retryableTransportError(err error) bool {
+	return err != nil && (errors.Is(err, io.EOF) || strings.Contains(strings.ToLower(err.Error()), "tls handshake timeout"))
 }

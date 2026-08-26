@@ -13,7 +13,6 @@ var reservedNames = map[string]bool{
 	"ls": true, "read_file": true, "write_file": true, "edit_file": true,
 	"glob": true, "grep": true, "execute": true,
 	"upsert_project_fact": true, "get_project_fact": true, "list_project_facts": true,
-	"load_skill": true,
 }
 
 type LocalToolConfig struct {

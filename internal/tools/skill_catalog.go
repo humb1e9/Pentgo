@@ -172,23 +172,36 @@ func (registry *Registry) Names() []string {
 	return names
 }
 
-// Match returns a single high-confidence skill for a user request. Ambiguous
-// and weak matches deliberately return false so the model can use load_skill.
-func (registry *Registry) Match(request string) (Skill, bool) {
+// Matches returns up to limit relevant skills ranked by a conservative fuzzy score.
+func (registry *Registry) Matches(request string, limit int) []Skill {
 	request = strings.ToLower(strings.TrimSpace(request))
-	if request == "" {
-		return Skill{}, false
+	if request == "" || limit <= 0 {
+		return nil
 	}
-	best, bestScore, tied := Skill{}, 0, false
+	type candidate struct {
+		skill Skill
+		score int
+	}
+	candidates := make([]candidate, 0)
 	for _, skill := range registry.Catalog() {
-		score := skillMatchScore(request, skill)
-		if score > bestScore {
-			best, bestScore, tied = skill, score, false
-		} else if score != 0 && score == bestScore {
-			tied = true
+		if score := skillMatchScore(request, skill); score >= 4 {
+			candidates = append(candidates, candidate{skill: skill, score: score})
 		}
 	}
-	return best, bestScore >= 4 && !tied
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].score == candidates[j].score {
+			return candidates[i].skill.Name < candidates[j].skill.Name
+		}
+		return candidates[i].score > candidates[j].score
+	})
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+	matched := make([]Skill, len(candidates))
+	for index, candidate := range candidates {
+		matched[index] = candidate.skill
+	}
+	return matched
 }
 
 func skillMatchScore(request string, skill Skill) int {
@@ -234,36 +247,6 @@ func chineseFragments(text string) []string {
 		}
 	}
 	return fragments
-}
-
-// RenderCatalog renders compact metadata without any skill body.
-func (registry *Registry) RenderCatalog(replacement bool) string {
-	if registry == nil {
-		return bound([]byte("<pentgo-skill-catalog digest=\"\">\n</pentgo-skill-catalog>"))
-	}
-	registry.mu.RLock()
-	catalog := append([]Skill(nil), registry.catalog...)
-	digest := registry.digest
-	registry.mu.RUnlock()
-
-	var builder strings.Builder
-	fmt.Fprintf(&builder, "<pentgo-skill-catalog digest=\"%s\">\n", digest)
-	if replacement {
-		builder.WriteString("This catalog completely replaces every earlier PentGo skill catalog in this session.\n")
-	}
-	if len(catalog) == 0 {
-		if replacement {
-			builder.WriteString("No PentGo skills are currently available. Do not use names from earlier PentGo skill catalogs.\n")
-		}
-	} else {
-		builder.WriteString("Available PentGo skills:\n")
-		for _, skill := range catalog {
-			fmt.Fprintf(&builder, "- `%s`：%s\n", skill.Name, skill.Description)
-		}
-		builder.WriteString("When the task clearly matches a listed skill, call load_skill with its exact name before specialized work. Do not guess skill names; if no entry matches, continue normally.\n")
-	}
-	builder.WriteString("</pentgo-skill-catalog>")
-	return bound([]byte(builder.String()))
 }
 
 // Load lazily reads and validates a skill body from a path accepted by Scan.

@@ -61,7 +61,7 @@ func (provider *combinedToolProvider) Tools(ctx context.Context) ([]core.Tool, e
 // validateProjectTools rejects names that would collide with tools added for
 // every session. It runs before session restoration so a project never opens
 // with a provider that is guaranteed to fail on its first turn.
-func validateProjectTools(ctx context.Context, provider core.ToolProvider, skillsAvailable bool) error {
+func validateProjectTools(ctx context.Context, provider core.ToolProvider) error {
 	if provider == nil {
 		return nil
 	}
@@ -73,9 +73,6 @@ func validateProjectTools(ctx context.Context, provider core.ToolProvider, skill
 		"upsert_project_fact": true,
 		"get_project_fact":    true,
 		"list_project_facts":  true,
-	}
-	if skillsAvailable {
-		reserved["load_skill"] = true
 	}
 	for _, tool := range tools {
 		if tool == nil {

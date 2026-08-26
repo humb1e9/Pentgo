@@ -235,7 +235,7 @@ func (coordinator *Manager) openStore(ctx context.Context, store *projectmodel.P
 		externalTools = mcpClients
 	}
 	projectTools := combineToolProviders(coordinator.localTools, externalTools)
-	if err := validateProjectTools(ctx, projectTools, coordinator.skillAvailable); err != nil {
+	if err := validateProjectTools(ctx, projectTools); err != nil {
 		_ = projectTools.Close()
 		_ = projectRuntime.Close()
 		return err
@@ -250,10 +250,6 @@ func (coordinator *Manager) openStore(ctx context.Context, store *projectmodel.P
 		_ = projectRuntime.Close()
 		return err
 	}
-	var loadSkill SkillLoader
-	if coordinator.skillAvailable && coordinator.skills != nil {
-		loadSkill = coordinator.skills.Load
-	}
 	checkpointSummarizer := NewModelCheckpointSummarizer(coordinator.deps.NewModel, coordinator.cfg.Model)
 	service := NewTurnService(nil, store, nil, TurnServiceConfig{
 		StepperFactory: func(runContext context.Context, _ *sessionstate.Session, runtime *ProjectRuntime) (core.ModelStepper, error) {
@@ -263,8 +259,6 @@ func (coordinator *Manager) openStore(ctx context.Context, store *projectmodel.P
 			}
 			return llm.NewEngine(runContext, chatModel, nil)
 		},
-		LoadSkill:       loadSkill,
-		SkillsAvailable: coordinator.skillAvailable,
 		SkillContext: func(request string) string {
 			return matchedSkillContext(coordinator.skills, request)
 		},
@@ -336,10 +330,6 @@ func (coordinator *Manager) NewSession(intent string, targets ...string) (*sessi
 	if err != nil {
 		return nil, err
 	}
-	if err := ensureSessionSkillCatalog(runtime.Conversation(session.ID), coordinator.skills); err != nil {
-		_ = runtime.DeleteSession(session.ID)
-		return nil, err
-	}
 	return runtime.Snapshot(session.ID), nil
 }
 
@@ -363,9 +353,6 @@ func (coordinator *Manager) ResumeSession(id string) (*sessionstate.Session, err
 	session := runtime.Snapshot(id)
 	if session == nil {
 		return nil, fmt.Errorf("session %q does not exist", id)
-	}
-	if err := ensureSessionSkillCatalog(runtime.Conversation(id), coordinator.skills); err != nil {
-		return nil, err
 	}
 	return runtime.Snapshot(id), nil
 }

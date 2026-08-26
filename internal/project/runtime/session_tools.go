@@ -10,22 +10,15 @@ import (
 	builtins "pentgo/internal/tools"
 )
 
-// SkillLoader returns complete documentation for exactly one discovered skill.
-type SkillLoader func(string) (string, error)
-
-// runtimeToolProvider builds tools visible to one session turn. The optional
-// skill loader comes from process-start discovery; its catalog remains in the
-// persisted session conversation rather than this turn's tool configuration.
+// runtimeToolProvider builds tools visible to one session turn.
 type runtimeToolProvider struct {
-	runtime         *ProjectRuntime
-	session         *sessionstate.Session
-	projectTools    []core.Tool
-	loadSkill       SkillLoader
-	skillsAvailable bool
+	runtime      *ProjectRuntime
+	session      *sessionstate.Session
+	projectTools []core.Tool
 }
 
-func newRuntimeToolProvider(runtime *ProjectRuntime, session *sessionstate.Session, projectTools []core.Tool, loadSkill SkillLoader, skillsAvailable bool) *runtimeToolProvider {
-	return &runtimeToolProvider{runtime: runtime, session: session, projectTools: append([]core.Tool(nil), projectTools...), loadSkill: loadSkill, skillsAvailable: skillsAvailable}
+func newRuntimeToolProvider(runtime *ProjectRuntime, session *sessionstate.Session, projectTools []core.Tool) *runtimeToolProvider {
+	return &runtimeToolProvider{runtime: runtime, session: session, projectTools: append([]core.Tool(nil), projectTools...)}
 }
 
 // Tools combines session built-ins, host-owned project-fact tools, and
@@ -40,9 +33,6 @@ func (provider *runtimeToolProvider) Tools(context.Context) ([]core.Tool, error)
 	}
 	tools := builtins.NewTools(provider.runtime.Workspace())
 	tools = append(tools, newProjectFactTools(facts)...)
-	if provider.loadSkill != nil && provider.skillsAvailable {
-		tools = append(tools, builtins.NewSkillTool(builtins.SkillLoader(provider.loadSkill)))
-	}
 	seen := make(map[string]bool, len(tools)+len(provider.projectTools))
 	for _, tool := range tools {
 		seen[tool.Name()] = true

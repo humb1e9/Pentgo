@@ -12,14 +12,12 @@ import (
 
 type StepperFactory func(context.Context, *sessionstate.Session, *ProjectRuntime) (core.ModelStepper, error)
 type TurnServiceConfig struct {
-	StepperFactory  StepperFactory
-	LoadSkill       SkillLoader
-	SkillsAvailable bool
-	SkillContext    func(string) string
-	Clock           func() time.Time
-	MaxRequests     int
-	SystemPrompt    string
-	Assembler       ContextPreparer
+	StepperFactory StepperFactory
+	SkillContext   func(string) string
+	Clock          func() time.Time
+	MaxRequests    int
+	SystemPrompt   string
+	Assembler      ContextPreparer
 }
 type TurnService = projectturn.TurnService
 
@@ -29,7 +27,7 @@ func NewTurnService(stepper core.ModelStepper, _ any, tools core.ToolProvider, c
 			return cfg.StepperFactory(ctx, session, runtime.(*ProjectRuntime))
 		},
 		BuildTools: func(ctx context.Context, runtime projectturn.Runtime, session *sessionstate.Session, external []core.Tool) ([]core.Tool, error) {
-			return newRuntimeToolProvider(runtime.(*ProjectRuntime), session, external, cfg.LoadSkill, cfg.SkillsAvailable).Tools(ctx)
+			return newRuntimeToolProvider(runtime.(*ProjectRuntime), session, external).Tools(ctx)
 		},
 		Clock: cfg.Clock, MaxRequests: cfg.MaxRequests, SystemPrompt: cfg.SystemPrompt, SkillContext: cfg.SkillContext,
 		Assembler: projectcontext.ContextPreparer(cfg.Assembler),

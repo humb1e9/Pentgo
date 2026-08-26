@@ -242,7 +242,9 @@ func providerMessages(instruction string, persisted []core.Message) []*schema.Me
 	nonSystem := make([]core.Message, 0, len(persisted))
 	for _, message := range persisted {
 		if message.Role == core.RoleSystem {
-			systemParts = append(systemParts, message.Content)
+			if !strings.HasPrefix(message.Content, "<pentgo-skill-catalog ") {
+				systemParts = append(systemParts, message.Content)
+			}
 			continue
 		}
 		nonSystem = append(nonSystem, message)

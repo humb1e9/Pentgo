@@ -314,13 +314,13 @@ func TestStepUsesChineseSystemPromptAndReplaysMessages(t *testing.T) {
 		t.Fatalf("model input order = %#v", fixture.inputs)
 	}
 	fixed := fixture.inputs[0][0].Content
-	for _, want := range []string{"渗透测试智能体", "会话上下文存在 PentGo 技能目录", "调用 load_skill", "不得猜测技能名称"} {
+	for _, want := range []string{"渗透测试智能体", "宿主会按当前用户请求预加载相关 PentGo 技能"} {
 		if !strings.Contains(fixed, want) {
 			t.Fatalf("fixed prompt missing %q: %q", want, fixed)
 		}
 	}
-	if !strings.Contains(fixed, "`api`：API routing") {
-		t.Fatalf("catalog was not merged into provider system prompt: %q", fixed)
+	if strings.Contains(fixed, "`api`：API routing") {
+		t.Fatalf("legacy catalog leaked into provider system prompt: %q", fixed)
 	}
 }
 

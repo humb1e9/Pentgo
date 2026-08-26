@@ -14,6 +14,7 @@ import (
 	"pentgo/internal/core"
 	"pentgo/internal/project"
 	app "pentgo/internal/project/runtime"
+	sessionstate "pentgo/internal/project/session"
 )
 
 func TestResumeDefaultsToLatestNonEmptySession(t *testing.T) {
@@ -175,6 +176,23 @@ func TestResumedSessionRendersPersistedConversation(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("resumed view missing %q:\n%s", want, view)
 		}
+	}
+}
+
+func TestStreamDeltasRenderAsContinuousText(t *testing.T) {
+	model := newTerminalModel(context.Background(), nil, "")
+	model.recordEvent(sessionstate.Event{Kind: sessionstate.EventAssistantDelta, Message: "正在"})
+	model.recordEvent(sessionstate.Event{Kind: sessionstate.EventAssistantDelta, Message: "检查目标"})
+	if model.streamText != "正在检查目标" {
+		t.Fatalf("stream text = %q", model.streamText)
+	}
+	view := ansi.Strip(renderConversationBlock("PENTGO", model.streamText, 100, 0, modelBodyStyle))
+	if !strings.Contains(view, "正在检查目标") {
+		t.Fatalf("streamed view split fragments: %q", view)
+	}
+	model.recordEvent(sessionstate.Event{Kind: sessionstate.EventAssistantMessage})
+	if model.streamText != "" {
+		t.Fatalf("completed stream not cleared: %q", model.streamText)
 	}
 }
 

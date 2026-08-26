@@ -87,7 +87,7 @@ type terminalModel struct {
 	eventCancel     context.CancelFunc
 	activity        []activityEntry
 	startupActivity []activityEntry
-	streamActivity  []activityEntry
+	streamText      string
 	runningTools    map[string]int
 	turnRunning     bool
 	generating      bool
@@ -365,14 +365,14 @@ func (model *terminalModel) renderConversation() {
 	if model.generating {
 		lines = append(lines, renderGeneratingPlaceholder())
 	}
-	if len(lines) == 0 && len(model.activity) == 0 && len(model.startupActivity) == 0 && len(model.streamActivity) == 0 {
+	if len(lines) == 0 && len(model.activity) == 0 && len(model.startupActivity) == 0 && model.streamText == "" {
 		lines = append(lines, model.renderWelcome())
 	}
 	for _, activity := range model.startupActivity {
 		lines = append(lines, ansi.Hardwrap(renderActivity(activity), model.contentWidth(), true))
 	}
-	for _, activity := range model.streamActivity {
-		lines = append(lines, ansi.Hardwrap(renderActivity(activity), model.contentWidth(), true))
+	if model.streamText != "" {
+		lines = append(lines, renderConversationBlock(modelStyle.Render("PENTGO"), model.streamText, model.contentWidth(), 0, modelBodyStyle))
 	}
 	for _, activity := range model.activity {
 		lines = append(lines, ansi.Hardwrap(renderActivity(activity), model.contentWidth(), true))
@@ -611,7 +611,7 @@ func (model *terminalModel) recordEvent(event sessionstate.Event) {
 	case sessionstate.EventAssistantDelta:
 		model.generating = true
 		if name != "" {
-			model.addStreamActivity(name)
+			model.addStreamText(name)
 		}
 	case sessionstate.EventContextActivity:
 		if activity, ok := event.Data.(core.ContextActivity); ok {
@@ -624,10 +624,10 @@ func (model *terminalModel) recordEvent(event sessionstate.Event) {
 		}
 	case sessionstate.EventAssistantMessage:
 		model.generating = false
-		model.streamActivity = nil
+		model.streamText = ""
 	case sessionstate.EventToolStarted:
 		model.generating = false
-		model.streamActivity = nil
+		model.streamText = ""
 		if name == "" {
 			name = "工具"
 		}
@@ -674,22 +674,19 @@ func (model *terminalModel) dismissStartupActivity() {
 // clearTransientState isolates command feedback and live execution state to the current focused session.
 func (model *terminalModel) clearTransientState() {
 	model.activity = nil
-	model.streamActivity = nil
+	model.streamText = ""
 	model.runningTools = make(map[string]int)
 	model.turnRunning = false
 	model.generating = false
 }
 
-// addActivity 独立于持久化 conversation 限制临时 UI 输出的长度，并且只保存安全纯文本。
-func (model *terminalModel) addStreamActivity(value string) {
+// addStreamText coalesces provider deltas into one continuous assistant response.
+func (model *terminalModel) addStreamText(value string) {
 	value = safeTerminalText(value)
 	if value == "" {
 		return
 	}
-	model.streamActivity = append(model.streamActivity, activityEntry{level: activityInfo, text: value})
-	if len(model.streamActivity) > 4 {
-		model.streamActivity = append([]activityEntry(nil), model.streamActivity[len(model.streamActivity)-4:]...)
-	}
+	model.streamText += value
 }
 
 func (model *terminalModel) addActivity(level activityLevel, value string) {

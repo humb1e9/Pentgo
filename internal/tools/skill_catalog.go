@@ -172,6 +172,70 @@ func (registry *Registry) Names() []string {
 	return names
 }
 
+// Match returns a single high-confidence skill for a user request. Ambiguous
+// and weak matches deliberately return false so the model can use load_skill.
+func (registry *Registry) Match(request string) (Skill, bool) {
+	request = strings.ToLower(strings.TrimSpace(request))
+	if request == "" {
+		return Skill{}, false
+	}
+	best, bestScore, tied := Skill{}, 0, false
+	for _, skill := range registry.Catalog() {
+		score := skillMatchScore(request, skill)
+		if score > bestScore {
+			best, bestScore, tied = skill, score, false
+		} else if score != 0 && score == bestScore {
+			tied = true
+		}
+	}
+	return best, bestScore >= 4 && !tied
+}
+
+func skillMatchScore(request string, skill Skill) int {
+	name := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(skill.Name, "-", " "), "_", " "))
+	if utf8.RuneCountInString(name) >= 5 && strings.Contains(request, name) {
+		return 100
+	}
+	description := strings.ToLower(skill.Description)
+	best := 0
+	for _, fragment := range chineseFragments(request) {
+		if strings.Contains(description, fragment) && utf8.RuneCountInString(fragment) > best {
+			best = utf8.RuneCountInString(fragment)
+		}
+	}
+	for _, token := range strings.FieldsFunc(name, func(r rune) bool { return r == ' ' }) {
+		if strings.Contains(request, token) {
+			if len(token) >= 4 {
+				best += 4
+			} else if len(token) >= 3 {
+				best += 3
+			}
+			continue
+		}
+		// Common security skill names use a trailing "i" abbreviation, such as
+		// sqli. Match its stable root "sql" without treating generic short names
+		// (for example api) as an automatic preload signal.
+		root := strings.TrimSuffix(token, "i")
+		if len(token) >= 4 && len(root) >= 3 && strings.Contains(request, root) {
+			best += 4
+		}
+	}
+	return best
+}
+
+func chineseFragments(text string) []string {
+	var fragments []string
+	for _, part := range strings.FieldsFunc(text, func(r rune) bool { return r < 0x4e00 || r > 0x9fff }) {
+		runes := []rune(part)
+		for length := min(12, len(runes)); length >= 4; length-- {
+			for start := 0; start+length <= len(runes); start++ {
+				fragments = append(fragments, string(runes[start:start+length]))
+			}
+		}
+	}
+	return fragments
+}
+
 // RenderCatalog renders compact metadata without any skill body.
 func (registry *Registry) RenderCatalog(replacement bool) string {
 	if registry == nil {

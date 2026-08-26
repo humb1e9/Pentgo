@@ -3,6 +3,7 @@ package runtime
 import (
 	"fmt"
 	"regexp"
+	"strings"
 
 	"pentgo/internal/core"
 	sessionstate "pentgo/internal/project/session"
@@ -27,6 +28,23 @@ func catalogDigestFromMessage(message core.Message) (string, bool) {
 
 // ensureSessionSkillCatalog appends catalog context only when the startup
 // catalog differs from the latest catalog already persisted for this session.
+func matchedSkillContext(registry *skillsadapter.Registry, request string) string {
+	if registry == nil {
+		return ""
+	}
+	skill, ok := registry.Match(request)
+	if !ok {
+		return ""
+	}
+	body, err := registry.Load(skill.Name)
+	if err != nil || strings.TrimSpace(body) == "" {
+		return ""
+	}
+	return "<pentgo-preloaded-skill name=\"" + skill.Name + "\">\n" +
+		"The user request clearly matches this skill. Follow it before specialized work; do not call load_skill for this same skill again.\n" +
+		body + "\n</pentgo-preloaded-skill>"
+}
+
 func ensureSessionSkillCatalog(conversation *sessionstate.ConversationStore, registry *skillsadapter.Registry) error {
 	if conversation == nil {
 		return fmt.Errorf("session conversation is unavailable")

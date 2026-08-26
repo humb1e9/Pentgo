@@ -24,6 +24,7 @@ type TurnServiceConfig struct {
 	Clock          func() time.Time
 	MaxRequests    int
 	SystemPrompt   string
+	SkillContext   func(string) string
 	Assembler      projectcontext.ContextPreparer
 }
 
@@ -35,6 +36,7 @@ type TurnService struct {
 	now            func() time.Time
 	maxRequests    int
 	systemPrompt   string
+	skillContext   func(string) string
 	assembler      projectcontext.ContextPreparer
 }
 
@@ -53,6 +55,7 @@ func NewTurnService(stepper core.ModelStepper, tools core.ToolProvider, cfg Turn
 		now:            cfg.Clock,
 		maxRequests:    cfg.MaxRequests,
 		systemPrompt:   strings.TrimSpace(cfg.SystemPrompt),
+		skillContext:   cfg.SkillContext,
 		assembler:      cfg.Assembler,
 	}
 }
@@ -108,6 +111,9 @@ func (service *TurnService) RunTurn(ctx context.Context, runtime Runtime, sessio
 	}
 	assembler := service.contextAssembler(runtime)
 	systemPrompt := service.systemPrompt
+	if service.skillContext != nil {
+		systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + service.skillContext(message))
+	}
 	maxRequests := service.maxRequests
 	for request := 0; request < maxRequests; request++ {
 		input, activities, err := assembler.Prepare(ctx, session.ID, systemPrompt, tools, factSnapshot)

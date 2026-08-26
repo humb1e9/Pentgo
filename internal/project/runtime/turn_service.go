@@ -15,6 +15,7 @@ type TurnServiceConfig struct {
 	StepperFactory  StepperFactory
 	LoadSkill       SkillLoader
 	SkillsAvailable bool
+	SkillContext    func(string) string
 	Clock           func() time.Time
 	MaxRequests     int
 	SystemPrompt    string
@@ -30,7 +31,7 @@ func NewTurnService(stepper core.ModelStepper, _ any, tools core.ToolProvider, c
 		BuildTools: func(ctx context.Context, runtime projectturn.Runtime, session *sessionstate.Session, external []core.Tool) ([]core.Tool, error) {
 			return newRuntimeToolProvider(runtime.(*ProjectRuntime), session, external, cfg.LoadSkill, cfg.SkillsAvailable).Tools(ctx)
 		},
-		Clock: cfg.Clock, MaxRequests: cfg.MaxRequests, SystemPrompt: cfg.SystemPrompt,
+		Clock: cfg.Clock, MaxRequests: cfg.MaxRequests, SystemPrompt: cfg.SystemPrompt, SkillContext: cfg.SkillContext,
 		Assembler: projectcontext.ContextPreparer(cfg.Assembler),
 	})
 }

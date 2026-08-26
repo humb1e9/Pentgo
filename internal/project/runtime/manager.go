@@ -265,10 +265,13 @@ func (coordinator *Manager) openStore(ctx context.Context, store *projectmodel.P
 		},
 		LoadSkill:       loadSkill,
 		SkillsAvailable: coordinator.skillAvailable,
-		Clock:           coordinator.deps.Clock,
-		MaxRequests:     coordinator.cfg.Project.MaxTurns,
-		SystemPrompt:    llm.BaseSystemPrompt(),
-		Assembler:       NewContextAssembler(projectRuntime, coordinator.cfg.Project.Context, NewContextMeter(), checkpointSummarizer),
+		SkillContext: func(request string) string {
+			return matchedSkillContext(coordinator.skills, request)
+		},
+		Clock:        coordinator.deps.Clock,
+		MaxRequests:  coordinator.cfg.Project.MaxTurns,
+		SystemPrompt: llm.BaseSystemPrompt(),
+		Assembler:    NewContextAssembler(projectRuntime, coordinator.cfg.Project.Context, NewContextMeter(), checkpointSummarizer),
 	})
 	if err := projectRuntime.SetTurnHandler(func(runContext context.Context, session *sessionstate.Session, message string) error {
 		return service.RunTurn(runContext, projectRuntime, session, message)

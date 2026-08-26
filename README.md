@@ -20,7 +20,7 @@ git clone https://github.com/humb1e9/Pentgo.git
 cd Pentgo
 
 # 编译并安装到 $(go env GOPATH)/bin，无需 sudo
-go install ./cmd/pentgo
+go install ./cmd
 
 # 首次安装时复制内置 Skills；已有个人 Skills 不会被覆盖
 # PentGo 固定从 ~/.local/share/pentgo/skills 读取 Skills。
@@ -140,7 +140,7 @@ pentgo resume # 恢复已有项目并选择会话
 ## 项目结构
 
 ```text
-cmd/pentgo/            进程入口：信号处理与依赖装配
+cmd/                    进程入口：信号处理与依赖装配
 internal/
 ├── bootstrap/         组装根：用户配置读取、路径解析、Application 装配
 ├── core/              共享协议：Message、Tool、ModelStepper 等值类型

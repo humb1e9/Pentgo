@@ -91,6 +91,7 @@ type terminalModel struct {
 	runningTools    map[string]int
 	turnRunning     bool
 	generating      bool
+	turnErrorShown  bool
 	showToolDetails bool
 	width           int
 	height          int
@@ -187,8 +188,8 @@ func (model *terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			model.generating = false
 			model.runningTools = make(map[string]int)
 		}
-		if typed.err != nil && !model.hasActivity(activityError, typed.err.Error()) {
-			model.addActivity(activityError, typed.err.Error())
+		if typed.err != nil {
+			model.addTurnError(typed.err.Error())
 		}
 		model.refresh()
 		return model, nil
@@ -460,6 +461,7 @@ func (model *terminalModel) handleLine(line string) tea.Cmd {
 		if model.focused == "" {
 			return model.startSessionWithMessage(line)
 		}
+		model.clearTurnFeedback()
 		return model.submit(model.focused, line)
 	}
 	switch command {
@@ -606,6 +608,8 @@ func (model *terminalModel) recordEvent(event sessionstate.Event) {
 	name := safeTerminalText(event.Message)
 	switch event.Kind {
 	case sessionstate.EventTurnStarted:
+		model.activity = nil
+		model.turnErrorShown = false
 		model.turnRunning = true
 		model.generating = true
 	case sessionstate.EventAssistantDelta:
@@ -617,7 +621,7 @@ func (model *terminalModel) recordEvent(event sessionstate.Event) {
 		if activity, ok := event.Data.(core.ContextActivity); ok {
 			switch activity.Kind {
 			case core.ContextRequestRejected:
-				model.addActivity(activityError, name)
+				model.addTurnError(name)
 			case core.ContextCheckpointCreated:
 				model.addActivity(activityStatus, "正在压缩上下文…")
 			}
@@ -644,7 +648,7 @@ func (model *terminalModel) recordEvent(event sessionstate.Event) {
 		model.turnRunning = false
 		model.generating = false
 		model.runningTools = make(map[string]int)
-		model.addActivity(activityError, name)
+		model.addTurnError(name)
 	case sessionstate.EventTurnFinished:
 		model.turnRunning = false
 		model.generating = false
@@ -673,11 +677,16 @@ func (model *terminalModel) dismissStartupActivity() {
 
 // clearTransientState isolates command feedback and live execution state to the current focused session.
 func (model *terminalModel) clearTransientState() {
-	model.activity = nil
-	model.streamText = ""
+	model.clearTurnFeedback()
 	model.runningTools = make(map[string]int)
 	model.turnRunning = false
 	model.generating = false
+}
+
+func (model *terminalModel) clearTurnFeedback() {
+	model.activity = nil
+	model.streamText = ""
+	model.turnErrorShown = false
 }
 
 // addStreamText coalesces provider deltas into one continuous assistant response.
@@ -687,6 +696,18 @@ func (model *terminalModel) addStreamText(value string) {
 		return
 	}
 	model.streamText += value
+}
+
+func (model *terminalModel) addTurnError(value string) {
+	if model.turnErrorShown {
+		return
+	}
+	value = safeTerminalText(value)
+	if value == "" {
+		return
+	}
+	model.turnErrorShown = true
+	model.addActivity(activityError, value)
 }
 
 func (model *terminalModel) addActivity(level activityLevel, value string) {

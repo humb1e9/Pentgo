@@ -3,6 +3,7 @@ package terminal
 import (
 	"bytes"
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -176,6 +177,21 @@ func TestResumedSessionRendersPersistedConversation(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("resumed view missing %q:\n%s", want, view)
 		}
+	}
+}
+
+func TestTurnErrorAppearsOnceAndClearsForNextTurn(t *testing.T) {
+	model := newTerminalModel(context.Background(), nil, "session-1")
+	model.recordEvent(sessionstate.Event{Kind: sessionstate.EventTurnStarted})
+	model.recordEvent(sessionstate.Event{Kind: sessionstate.EventTurnFailed, Message: "provider failed"})
+	updated, _ := model.Update(turnCompleteMsg{sessionID: "session-1", err: errors.New("provider failed")})
+	model = updated.(*terminalModel)
+	if len(model.activity) != 1 || model.activity[0].level != activityError {
+		t.Fatalf("duplicate turn errors = %#v", model.activity)
+	}
+	model.recordEvent(sessionstate.Event{Kind: sessionstate.EventTurnStarted})
+	if len(model.activity) != 0 || model.turnErrorShown {
+		t.Fatalf("next turn retained error state: %#v shown=%v", model.activity, model.turnErrorShown)
 	}
 }
 

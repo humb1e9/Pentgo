@@ -286,9 +286,9 @@ func (model *terminalModel) renderComposer() string {
 
 func (model *terminalModel) renderActionButton() string {
 	if model.turnRunning {
-		return pauseStyle.Render("暂停")
+		return pauseStyle.Render("■")
 	}
-	return actionStyle.Render("发送")
+	return actionStyle.Render("➜")
 }
 
 func (model *terminalModel) headerHeight() int {

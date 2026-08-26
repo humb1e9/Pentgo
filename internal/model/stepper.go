@@ -70,10 +70,7 @@ func (engine *Engine) StreamStep(ctx context.Context, input core.ModelStepInput)
 	if input.MaxOutputTokens > 0 {
 		options = append(options, model.WithMaxTokens(input.MaxOutputTokens))
 	}
-	instruction := SystemPrompt(input.SystemPrompt, input.ProjectFacts)
-	messages := make([]*schema.Message, 0, len(input.Messages)+1)
-	messages = append(messages, schema.SystemMessage(instruction))
-	messages = append(messages, toSchemaMessages(input.Messages)...)
+	messages := providerMessages(SystemPrompt(input.SystemPrompt, input.ProjectFacts), input.Messages)
 	reader, err := bound.Stream(ctx, messages, options...)
 	if err != nil {
 		return nil, normalizeContextWindowError(err)
@@ -238,7 +235,24 @@ func toolInfo(port core.Tool) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{Name: port.Name(), Desc: port.Description(), ParamsOneOf: schema.NewParamsOneOfByJSONSchema(&converted)}, nil
 }
 
-// toSchemaMessages converts persisted messages into one provider request.
+// providerMessages folds persisted system context into the first provider system
+// message because many OpenAI-compatible APIs only reliably honor one.
+func providerMessages(instruction string, persisted []core.Message) []*schema.Message {
+	systemParts := []string{instruction}
+	nonSystem := make([]core.Message, 0, len(persisted))
+	for _, message := range persisted {
+		if message.Role == core.RoleSystem {
+			systemParts = append(systemParts, message.Content)
+			continue
+		}
+		nonSystem = append(nonSystem, message)
+	}
+	messages := make([]*schema.Message, 0, len(nonSystem)+1)
+	messages = append(messages, schema.SystemMessage(strings.Join(systemParts, "\n\n")))
+	return append(messages, toSchemaMessages(nonSystem)...)
+}
+
+// toSchemaMessages converts persisted non-system messages into one provider request.
 func toSchemaMessages(messages []core.Message) []*schema.Message {
 	result := make([]*schema.Message, 0, len(messages))
 	for _, message := range messages {

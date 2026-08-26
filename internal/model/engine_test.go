@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -19,12 +20,15 @@ import (
 )
 
 type scriptedModel struct {
-	chunks    []*schema.Message
-	streamErr error
-	recvErr   error
-	inputs    [][]*schema.Message
-	options   [][]model.Option
-	toolInfos [][]*schema.ToolInfo
+	chunks       []*schema.Message
+	chunksByCall [][]*schema.Message
+	streamErr    error
+	recvErr      error
+	recvErrs     []error
+	streamCalls  int
+	inputs       [][]*schema.Message
+	options      [][]model.Option
+	toolInfos    [][]*schema.ToolInfo
 }
 
 func (*scriptedModel) Generate(context.Context, []*schema.Message, ...model.Option) (*schema.Message, error) {
@@ -34,19 +38,28 @@ func (*scriptedModel) Generate(context.Context, []*schema.Message, ...model.Opti
 func (fixture *scriptedModel) Stream(_ context.Context, input []*schema.Message, options ...model.Option) (*schema.StreamReader[*schema.Message], error) {
 	fixture.inputs = append(fixture.inputs, append([]*schema.Message(nil), input...))
 	fixture.options = append(fixture.options, append([]model.Option(nil), options...))
+	fixture.streamCalls++
 	if fixture.streamErr != nil {
 		return nil, fixture.streamErr
 	}
-	if fixture.recvErr == nil {
-		return schema.StreamReaderFromArray(fixture.chunks), nil
+	chunks := fixture.chunks
+	if index := fixture.streamCalls - 1; index < len(fixture.chunksByCall) {
+		chunks = fixture.chunksByCall[index]
 	}
-	reader, writer := schema.Pipe[*schema.Message](len(fixture.chunks) + 1)
+	recvErr := fixture.recvErr
+	if index := fixture.streamCalls - 1; index < len(fixture.recvErrs) {
+		recvErr = fixture.recvErrs[index]
+	}
+	if recvErr == nil {
+		return schema.StreamReaderFromArray(chunks), nil
+	}
+	reader, writer := schema.Pipe[*schema.Message](len(chunks) + 1)
 	go func() {
 		defer writer.Close()
-		for _, chunk := range fixture.chunks {
+		for _, chunk := range chunks {
 			writer.Send(chunk, nil)
 		}
-		writer.Send(nil, fixture.recvErr)
+		writer.Send(nil, recvErr)
 	}()
 	return reader, nil
 }
@@ -181,6 +194,33 @@ func TestStepBindsToolsAndPreservesCompleteToolCalls(t *testing.T) {
 	}
 }
 
+func TestStepRetriesEmptyStreamEOFBeforeAnyDelta(t *testing.T) {
+	fixture := &scriptedModel{
+		recvErrs:     []error{io.EOF, nil},
+		chunksByCall: [][]*schema.Message{nil, {schema.AssistantMessage("recovered", nil)}},
+	}
+	engine, err := NewEngine(context.Background(), fixture, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := engine.StreamStep(context.Background(), core.ModelStepInput{Messages: []core.Message{{Role: core.RoleUser, Content: "hello"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var final *core.Message
+	for event := range events {
+		if event.Err != nil {
+			t.Fatal(event.Err)
+		}
+		if event.Final != nil {
+			final = event.Final
+		}
+	}
+	if fixture.streamCalls != 2 || final == nil || final.Content != "recovered" {
+		t.Fatalf("calls/final = %d/%#v", fixture.streamCalls, final)
+	}
+}
+
 func TestStepDoesNotExecuteTools(t *testing.T) {
 	fixture := &scriptedModel{chunks: []*schema.Message{
 		schema.AssistantMessage("", []schema.ToolCall{{ID: "call-1", Function: schema.FunctionCall{Name: "fixture_probe", Arguments: `{"value":"x"}`}}}),
@@ -239,8 +279,8 @@ func TestStepTransportsAsynchronousStreamErrors(t *testing.T) {
 			}
 		}
 	}
-	if deltas != 1 || finals != 0 || streamErrors != 1 {
-		t.Fatalf("deltas/finals/errors = %d/%d/%d", deltas, finals, streamErrors)
+	if deltas != 1 || finals != 0 || streamErrors != 1 || fixture.streamCalls != 1 {
+		t.Fatalf("deltas/finals/errors/calls = %d/%d/%d/%d", deltas, finals, streamErrors, fixture.streamCalls)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"pentgo/internal/core"
 
@@ -16,6 +17,8 @@ import (
 	"github.com/cloudwego/eino/schema"
 	einojsonschema "github.com/eino-contrib/jsonschema"
 )
+
+const modelStreamRetries = 2
 
 // Engine adapts one provider request into the host-owned ModelStepper contract.
 // It has no conversation, tool-execution, or session state: the host assembles a
@@ -78,51 +81,83 @@ func (engine *Engine) StreamStep(ctx context.Context, input core.ModelStepInput)
 	if reader == nil {
 		return nil, fmt.Errorf("model returned nil stream reader")
 	}
-
 	output := make(chan core.ModelStreamEvent, 16)
 	go func() {
 		defer close(output)
-		defer reader.Close()
-
-		chunks := make([]*schema.Message, 0, 8)
-		for {
-			chunk, recvErr := reader.Recv()
-			if errors.Is(recvErr, io.EOF) {
-				break
+		for attempt := 0; attempt <= modelStreamRetries; attempt++ {
+			if attempt != 0 {
+				var streamErr error
+				reader, streamErr = bound.Stream(ctx, messages, options...)
+				if streamErr != nil {
+					sendStreamEvent(ctx, output, core.ModelStreamEvent{Err: normalizeContextWindowError(streamErr)})
+					return
+				}
+				if reader == nil {
+					sendStreamEvent(ctx, output, core.ModelStreamEvent{Err: fmt.Errorf("model returned nil stream reader")})
+					return
+				}
 			}
-			if recvErr != nil {
-				sendStreamEvent(ctx, output, core.ModelStreamEvent{Err: normalizeContextWindowError(recvErr)})
-				return
+			chunks := make([]*schema.Message, 0, 8)
+			var recvErr error
+			for {
+				var chunk *schema.Message
+				chunk, recvErr = reader.Recv()
+				if errors.Is(recvErr, io.EOF) {
+					break
+				}
+				if recvErr != nil || chunk == nil {
+					if recvErr != nil && (len(chunks) != 0 || !errors.Is(recvErr, io.EOF)) {
+						sendStreamEvent(ctx, output, core.ModelStreamEvent{Err: normalizeContextWindowError(recvErr)})
+						reader.Close()
+						return
+					}
+					continue
+				}
+				chunks = append(chunks, chunk)
+				if !sendStreamEvent(ctx, output, core.ModelStreamEvent{Delta: fromSchemaMessage(chunk)}) {
+					reader.Close()
+					return
+				}
 			}
-			if chunk == nil {
+			reader.Close()
+			if len(chunks) == 0 && errors.Is(recvErr, io.EOF) && attempt < modelStreamRetries {
+				if !waitStreamRetry(ctx, attempt) {
+					return
+				}
 				continue
 			}
-			chunks = append(chunks, chunk)
-			if !sendStreamEvent(ctx, output, core.ModelStreamEvent{Delta: fromSchemaMessage(chunk)}) {
+			if len(chunks) == 0 {
+				sendStreamEvent(ctx, output, core.ModelStreamEvent{Err: fmt.Errorf("model stream ended without a message")})
 				return
 			}
-		}
-		if len(chunks) == 0 {
-			sendStreamEvent(ctx, output, core.ModelStreamEvent{Err: fmt.Errorf("model stream ended without a message")})
+			complete, concatErr := schema.ConcatMessages(chunks)
+			if concatErr != nil {
+				sendStreamEvent(ctx, output, core.ModelStreamEvent{Err: concatErr})
+				return
+			}
+			if complete == nil {
+				sendStreamEvent(ctx, output, core.ModelStreamEvent{Err: fmt.Errorf("model stream concatenated to nil message")})
+				return
+			}
+			final := fromSchemaMessage(complete)
+			finishReason := ""
+			if complete.ResponseMeta != nil {
+				finishReason = complete.ResponseMeta.FinishReason
+			}
+			sendStreamEvent(ctx, output, core.ModelStreamEvent{Final: &final, FinishReason: finishReason})
 			return
 		}
-		complete, concatErr := schema.ConcatMessages(chunks)
-		if concatErr != nil {
-			sendStreamEvent(ctx, output, core.ModelStreamEvent{Err: concatErr})
-			return
-		}
-		if complete == nil {
-			sendStreamEvent(ctx, output, core.ModelStreamEvent{Err: fmt.Errorf("model stream concatenated to nil message")})
-			return
-		}
-		final := fromSchemaMessage(complete)
-		finishReason := ""
-		if complete.ResponseMeta != nil {
-			finishReason = complete.ResponseMeta.FinishReason
-		}
-		sendStreamEvent(ctx, output, core.ModelStreamEvent{Final: &final, FinishReason: finishReason})
 	}()
 	return output, nil
+}
+
+func waitStreamRetry(ctx context.Context, attempt int) bool {
+	select {
+	case <-time.After(time.Duration(attempt+1) * 150 * time.Millisecond):
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func sendStreamEvent(ctx context.Context, output chan<- core.ModelStreamEvent, event core.ModelStreamEvent) bool {

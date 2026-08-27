@@ -164,6 +164,20 @@ func (session *Session) InterruptTurn(turnID, reason string, finishedAt time.Tim
 	return session.finishTurn(turnID, TurnInterrupted, reason, "", finishedAt)
 }
 
+// ResumeTurn restores an interrupted turn to running so its owning worker can
+// continue the same durable execution rather than create another user turn.
+func (session *Session) ResumeTurn(turnID string) error {
+	if session == nil || session.ActiveTurn == nil || session.ActiveTurn.ID != strings.TrimSpace(turnID) || session.ActiveTurn.Status != TurnInterrupted {
+		return fmt.Errorf("turn is not interrupted")
+	}
+	session.ActiveTurn.Status = TurnRunning
+	session.ActiveTurn.Error = ""
+	session.ActiveTurn.FinishedAt = nil
+	session.ActiveTurnID = session.ActiveTurn.ID
+	session.UpdatedAt = time.Now().UTC()
+	return nil
+}
+
 // FailTurn 记录非取消导致的 turn 失败，同时保持会话为 open 状态。
 func (session *Session) FailTurn(turnID, reason string, finishedAt time.Time) error {
 	return session.finishTurn(turnID, TurnFailed, reason, "", finishedAt)

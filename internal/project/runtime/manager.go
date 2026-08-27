@@ -51,7 +51,6 @@ type Manager struct {
 	deps             Dependencies
 	store            *projectmodel.ProjectStore
 	runtime          *ProjectRuntime
-	service          *TurnService
 	skills           *tools.Registry
 	localTools       core.ToolProvider
 	skillDiagnostics []tools.Diagnostic
@@ -250,14 +249,10 @@ func (coordinator *Manager) openStore(ctx context.Context, store *projectmodel.P
 		_ = projectRuntime.Close()
 		return err
 	}
-	checkpointSummarizer := NewModelCheckpointSummarizer(coordinator.deps.NewModel, coordinator.cfg.Model)
-	service := NewTurnService(nil, store, nil, TurnServiceConfig{
-		StepperFactory: func(runContext context.Context, _ *sessionstate.Session, runtime *ProjectRuntime) (core.ModelStepper, error) {
-			chatModel, err := coordinator.deps.NewModel(runContext, coordinator.cfg.Model)
-			if err != nil {
-				return nil, err
-			}
-			return llm.NewEngine(runContext, chatModel, nil)
+	summaryWriter := NewModelSummaryWriter(coordinator.deps.NewModel, coordinator.cfg.Model)
+	service := NewTurnService(TurnServiceConfig{
+		NewModel: func(runContext context.Context) (einomodel.ToolCallingChatModel, error) {
+			return coordinator.deps.NewModel(runContext, coordinator.cfg.Model)
 		},
 		SkillContext: func(request string) string {
 			return matchedSkillContext(coordinator.skills, request)
@@ -265,8 +260,10 @@ func (coordinator *Manager) openStore(ctx context.Context, store *projectmodel.P
 		Clock:        coordinator.deps.Clock,
 		MaxRequests:  coordinator.cfg.Project.MaxTurns,
 		SystemPrompt: llm.BaseSystemPrompt(),
-		Assembler:    NewContextAssembler(projectRuntime, coordinator.cfg.Project.Context, NewContextMeter(), checkpointSummarizer),
+		Context:      coordinator.cfg.Project.Context,
+		Summarizer:   summaryWriter,
 	})
+	projectRuntime.SetPauseHandler(service.PauseSession)
 	if err := projectRuntime.SetTurnHandler(func(runContext context.Context, session *sessionstate.Session, message string) error {
 		return service.RunTurn(runContext, projectRuntime, session, message)
 	}); err != nil {
@@ -276,7 +273,6 @@ func (coordinator *Manager) openStore(ctx context.Context, store *projectmodel.P
 	coordinator.mu.Lock()
 	coordinator.store = store
 	coordinator.runtime = projectRuntime
-	coordinator.service = service
 	coordinator.mu.Unlock()
 	if err := projectRuntime.RestoreSessions(); err != nil {
 		_ = coordinator.closeProjectLocked()
@@ -389,6 +385,23 @@ func (coordinator *Manager) PauseSession(sessionID string) error {
 	return runtime.PauseSession(sessionID)
 }
 
+// ResumeTurn continues a checkpointed interrupted turn in the current project.
+func (coordinator *Manager) ResumeTurn(ctx context.Context, sessionID string) <-chan error {
+	done := make(chan error, 1)
+	if coordinator == nil {
+		done <- fmt.Errorf("coordinator is nil")
+		return done
+	}
+	coordinator.mu.RLock()
+	runtime := coordinator.runtime
+	coordinator.mu.RUnlock()
+	if runtime == nil {
+		done <- fmt.Errorf("no project is open")
+		return done
+	}
+	return runtime.ResumeTurn(ctx, sessionID)
+}
+
 // Submit 将消息转发给当前运行时中的会话 worker。
 func (coordinator *Manager) Submit(ctx context.Context, sessionID, message string) <-chan error {
 	coordinator.mu.RLock()
@@ -493,7 +506,6 @@ func (coordinator *Manager) closeProjectLocked() error {
 	store := coordinator.store
 	coordinator.runtime = nil
 	coordinator.store = nil
-	coordinator.service = nil
 	coordinator.mu.Unlock()
 	var closeErr error
 	if runtime != nil {

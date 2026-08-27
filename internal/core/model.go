@@ -29,90 +29,13 @@ type Message struct {
 	ToolCalls        []ToolCall     `json:"tool_calls,omitempty"`
 }
 
-type SurfaceNodeKind string
-
-const (
-	SurfaceNodeSource     SurfaceNodeKind = "source"
-	SurfaceNodeCheckpoint SurfaceNodeKind = "checkpoint"
-	SurfaceNodePrunedTool SurfaceNodeKind = "pruned_tool"
-)
-
-type SurfaceNode struct {
-	ID             string
-	Position       int
-	Kind           SurfaceNodeKind
-	SourceStartSeq int
-	SourceEndSeq   int
-	Content        string
-	Generation     int64
-}
-
-type ContextSurface struct {
-	SessionID  string
-	Generation int64
-	Nodes      []SurfaceNode
-}
-
-type ContextMeasurement struct {
-	SystemTokens     int
-	ToolSchemaTokens int
-	SurfaceTokens    int
-	TotalTokens      int
-}
-
-type CheckpointInput struct {
-	SystemPrompt    string
-	Tools           []Tool
-	Nodes           []SurfaceNode
-	Messages        map[int]Message
-	PriorCheckpoint string
-	OutputTokenCap  int
-	Prompt          string
-}
-
-type CheckpointOutput struct {
-	Text      string
-	Truncated bool
-}
-
-type ContextActivity struct {
-	Kind    string
-	Message string
-}
-
-const (
-	ContextToolPruned        = "context_tool_pruned"
-	ContextCheckpointCreated = "context_checkpoint_created"
-	ContextRequestRejected   = "context_request_rejected"
-	ContextOverflowRetry     = "context_overflow_retry"
-)
-
-type CompactionLifecycle struct {
-	ID         string
-	SessionID  string
-	Generation int64
-	StartSeq   int
-	EndSeq     int
-	Status     string
-	Error      string
-}
-
-const (
-	CompactionStarted   = "started"
-	CompactionCommitted = "committed"
-	CompactionFailed    = "failed"
-)
-
 type ModelStepInput struct {
 	SessionID       string
 	Messages        []Message
 	SystemPrompt    string
 	ProjectFacts    string
 	Tools           []Tool
-	ContextWindow   int
 	MaxOutputTokens int
-	SurfaceNodes    []SurfaceNode
-	SurfaceMessages map[int]Message
 }
 
 type ModelStreamEvent struct {

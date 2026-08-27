@@ -10,7 +10,7 @@ import (
 )
 
 // schemaVersion 记录每个项目数据库应使用的 SQLite 布局版本。
-const schemaVersion = 8
+const schemaVersion = 11
 
 // schema 由 openSQLite 在单个事务中应用于新数据库。
 // 表使用规范化关系持久化事实，而非序列化状态块。
@@ -100,38 +100,21 @@ CREATE TABLE IF NOT EXISTS conversation_tool_calls (
         REFERENCES conversation_messages(session_id, seq) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS context_surface_nodes (
+CREATE TABLE IF NOT EXISTS runner_checkpoints (
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    id TEXT NOT NULL,
-    position INTEGER NOT NULL,
-    kind TEXT NOT NULL CHECK(kind IN ('source', 'checkpoint', 'pruned_tool')),
-    source_start_seq INTEGER NOT NULL,
-    source_end_seq INTEGER NOT NULL,
-    content TEXT NOT NULL DEFAULT '',
-    generation INTEGER NOT NULL,
-    PRIMARY KEY(session_id, id),
-    UNIQUE(session_id, position)
+    turn_id TEXT NOT NULL,
+    checkpoint_id TEXT NOT NULL,
+    payload BLOB NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY(session_id, turn_id, checkpoint_id)
 );
 
-CREATE TABLE IF NOT EXISTS context_surface_state (
+CREATE TABLE IF NOT EXISTS context_summaries (
     session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
-    generation INTEGER NOT NULL DEFAULT 0
+    covered_through_seq INTEGER NOT NULL CHECK(covered_through_seq > 0),
+    content TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
 );
-
-CREATE TABLE IF NOT EXISTS context_compactions (
-    id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    generation INTEGER NOT NULL,
-    source_start_seq INTEGER NOT NULL,
-    source_end_seq INTEGER NOT NULL,
-    status TEXT NOT NULL CHECK(status IN ('started', 'committed', 'failed')),
-    error TEXT NOT NULL DEFAULT '',
-    created_at INTEGER NOT NULL,
-    finished_at INTEGER
-);
-CREATE UNIQUE INDEX IF NOT EXISTS context_compactions_one_started_range
-    ON context_compactions(session_id, generation, source_start_seq, source_end_seq)
-    WHERE status = 'started';
 
 CREATE TABLE IF NOT EXISTS project_notices (
     notice_key TEXT PRIMARY KEY
@@ -157,6 +140,14 @@ func OpenSQLite(path string) (*sql.DB, error) {
 			_ = db.Close()
 			return nil, fmt.Errorf("initialize sqlite schema: %w", err)
 		}
+		if err := migrateLegacyCheckpoints(db); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		if err := removeLegacyContextSurface(db); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
 		if err := validateCurrentSchema(db); err != nil {
 			_ = db.Close()
 			return nil, err
@@ -175,6 +166,42 @@ func OpenSQLite(path string) (*sql.DB, error) {
 	_ = os.Remove(path + "-wal")
 	_ = os.Remove(path + "-shm")
 	return open()
+}
+
+func migrateLegacyCheckpoints(db *sql.DB) error {
+	var legacyCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'adk_checkpoints'`).Scan(&legacyCount); err != nil {
+		return fmt.Errorf("check legacy checkpoints: %w", err)
+	}
+	if legacyCount == 0 {
+		return nil
+	}
+	transaction, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin checkpoint migration: %w", err)
+	}
+	defer transaction.Rollback()
+	if _, err := transaction.Exec(`INSERT OR IGNORE INTO runner_checkpoints(session_id, turn_id, checkpoint_id, payload, updated_at) SELECT session_id, turn_id, checkpoint_id, payload, updated_at FROM adk_checkpoints`); err != nil {
+		return fmt.Errorf("copy legacy checkpoints: %w", err)
+	}
+	if _, err := transaction.Exec(`DROP TABLE adk_checkpoints`); err != nil {
+		return fmt.Errorf("remove legacy checkpoints: %w", err)
+	}
+	if err := transaction.Commit(); err != nil {
+		return fmt.Errorf("commit checkpoint migration: %w", err)
+	}
+	return nil
+}
+
+// removeLegacyContextSurface drops the retired node graph. The conversation
+// ledger remains intact and is used to rebuild rolling summaries.
+func removeLegacyContextSurface(db *sql.DB) error {
+	for _, table := range []string{"context_compactions", "context_surface_nodes", "context_surface_state"} {
+		if _, err := db.Exec("DROP TABLE IF EXISTS " + table); err != nil {
+			return fmt.Errorf("remove legacy context surface table %s: %w", table, err)
+		}
+	}
+	return nil
 }
 
 func validateCurrentSchema(queryer interface {

@@ -24,5 +24,6 @@ type Controller interface {
 	Events(string) <-chan sessionstate.Event
 	SkillDiagnostics() []tools.Diagnostic
 	PauseSession(string) error
+	ResumeTurn(context.Context, string) <-chan error
 	Submit(context.Context, string, string) <-chan error
 }

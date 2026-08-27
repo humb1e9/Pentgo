@@ -13,8 +13,7 @@ import (
 	"github.com/cloudwego/eino/adk/filesystem"
 )
 
-// Workspace 将 Eino 的文件系统和 Shell 工具限制在单个项目工作区内。
-// 每个文件请求都会先基于 root 解析，再交给本地后端执行。
+// Workspace provides unrestricted local file tools. root is the default base for relative paths and shell commands.
 type Workspace struct {
 	root  string
 	local *local.Local
@@ -54,27 +53,27 @@ func NewWorkspace(root string) (*Workspace, error) {
 	return &Workspace{root: root, local: backend}, nil
 }
 
-// LsInfo 在项目工作区内解析路径后列出文件信息。
+// LsInfo accepts absolute and workspace-relative paths.
 func (workspace *Workspace) LsInfo(ctx context.Context, request *filesystem.LsInfoRequest) ([]filesystem.FileInfo, error) {
-	path, err := workspace.resolve(request.Path)
+	path, err := workspace.resolveExternal(request.Path)
 	if err != nil {
 		return nil, err
 	}
 	return workspace.local.LsInfo(ctx, &filesystem.LsInfoRequest{Path: path})
 }
 
-// Read 读取相对于工作区的文件内容。
+// Read accepts absolute and workspace-relative paths so skills can read referenced files outside a project.
 func (workspace *Workspace) Read(ctx context.Context, request *filesystem.ReadRequest) (*filesystem.FileContent, error) {
-	path, err := workspace.resolve(request.FilePath)
+	path, err := workspace.resolveExternal(request.FilePath)
 	if err != nil {
 		return nil, err
 	}
 	return workspace.local.Read(ctx, &filesystem.ReadRequest{FilePath: path, Offset: request.Offset, Limit: request.Limit})
 }
 
-// GrepRaw 搜索相对于工作区的路径，且不修改传入请求。
+// GrepRaw accepts absolute and workspace-relative paths without modifying the request.
 func (workspace *Workspace) GrepRaw(ctx context.Context, request *filesystem.GrepRequest) ([]filesystem.GrepMatch, error) {
-	path, err := workspace.resolve(request.Path)
+	path, err := workspace.resolveExternal(request.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -83,9 +82,9 @@ func (workspace *Workspace) GrepRaw(ctx context.Context, request *filesystem.Gre
 	return workspace.local.GrepRaw(ctx, &copy)
 }
 
-// GlobInfo 展开相对于工作区的路径，且不修改传入请求。
+// GlobInfo accepts absolute and workspace-relative paths without modifying the request.
 func (workspace *Workspace) GlobInfo(ctx context.Context, request *filesystem.GlobInfoRequest) ([]filesystem.FileInfo, error) {
-	path, err := workspace.resolve(request.Path)
+	path, err := workspace.resolveExternal(request.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -94,18 +93,18 @@ func (workspace *Workspace) GlobInfo(ctx context.Context, request *filesystem.Gl
 	return workspace.local.GlobInfo(ctx, &copy)
 }
 
-// Write 仅向已解析的工作区相对路径写入内容。
+// Write accepts absolute and workspace-relative paths.
 func (workspace *Workspace) Write(ctx context.Context, request *filesystem.WriteRequest) error {
-	path, err := workspace.resolve(request.FilePath)
+	path, err := workspace.resolveExternal(request.FilePath)
 	if err != nil {
 		return err
 	}
 	return workspace.local.Write(ctx, &filesystem.WriteRequest{FilePath: path, Content: request.Content})
 }
 
-// Edit 仅在校验目标路径后执行 Eino 编辑操作。
+// Edit accepts absolute and workspace-relative paths.
 func (workspace *Workspace) Edit(ctx context.Context, request *filesystem.EditRequest) error {
-	path, err := workspace.resolve(request.FilePath)
+	path, err := workspace.resolveExternal(request.FilePath)
 	if err != nil {
 		return err
 	}
@@ -123,25 +122,25 @@ func (workspace *Workspace) Execute(ctx context.Context, request *filesystem.Exe
 	return workspace.local.Execute(ctx, &filesystem.ExecuteRequest{Command: "cd -- " + shellQuote(workspace.root) + " && " + request.Command, RunInBackendGround: request.RunInBackendGround})
 }
 
-// resolve 拒绝绝对路径、词法路径穿越和越出 root 的符号链接穿越。
-// 同时支持写入操作中尚不存在的末级路径。
-func (workspace *Workspace) resolve(value string) (string, error) {
-	if strings.TrimSpace(value) == "" {
-		return workspace.root, nil
+// resolveExternal resolves absolute and workspace-relative paths without enforcing a workspace boundary.
+func (workspace *Workspace) resolveExternal(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", fmt.Errorf("file path is required")
 	}
-	if filepath.IsAbs(value) {
-		return "", fmt.Errorf("path must be relative to the workspace root")
+	if value == "~" || strings.HasPrefix(value, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve home directory: %w", err)
+		}
+		value = filepath.Join(home, strings.TrimPrefix(value, "~/"))
 	}
-	candidate := filepath.Clean(filepath.Join(workspace.root, value))
-	if !within(workspace.root, candidate) {
-		return "", fmt.Errorf("path escapes the workspace root")
+	if !filepath.IsAbs(value) {
+		value = filepath.Join(workspace.root, value)
 	}
-	resolved, err := resolveExisting(candidate)
+	resolved, err := resolveExisting(filepath.Clean(value))
 	if err != nil {
 		return "", err
-	}
-	if !within(workspace.root, resolved) {
-		return "", fmt.Errorf("path resolves outside the workspace root")
 	}
 	return resolved, nil
 }

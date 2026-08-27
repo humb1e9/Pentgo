@@ -11,7 +11,6 @@ import (
 	"pentgo/internal/core"
 	"pentgo/internal/project"
 	projectmodel "pentgo/internal/project"
-	projectcontext "pentgo/internal/project/context"
 	sessionstate "pentgo/internal/project/session"
 	"pentgo/internal/project/turn"
 	builtins "pentgo/internal/tools"
@@ -31,6 +30,7 @@ type ProjectRuntime struct {
 	workspace *builtins.Workspace
 	tools     core.ToolProvider
 	turn      sessionstate.TurnFunc
+	pause     func(string) bool
 	sessions  map[string]*sessionRuntime
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -43,7 +43,6 @@ type ProjectRuntime struct {
 type sessionRuntime struct {
 	worker       *sessionstate.Worker
 	conversation *sessionstate.ConversationStore
-	surface      *projectcontext.ContextSurfaceStore
 }
 
 // OpenProjectRuntime 加载项目状态并打开工作区和证据 journal。调用方必须先设置
@@ -124,6 +123,16 @@ func (runtime *ProjectRuntime) SetToolProvider(tools core.ToolProvider) error {
 	}
 	runtime.tools = tools
 	return nil
+}
+
+// SetPauseHandler installs an optional checkpoint-aware pause operation.
+func (runtime *ProjectRuntime) SetPauseHandler(pause func(string) bool) {
+	if runtime == nil {
+		return
+	}
+	runtime.mu.Lock()
+	runtime.pause = pause
+	runtime.mu.Unlock()
 }
 
 // SetTurnHandler 安装每个 worker 执行已提交 turn 时调用的回调。
@@ -231,14 +240,8 @@ func (runtime *ProjectRuntime) openSessionLocked(session *sessionstate.Session) 
 	if err != nil {
 		return err
 	}
-	surface, err := runtime.store.OpenContextSurface(session.ID)
-	if err != nil {
-		_ = conversation.Close()
-		return err
-	}
 	worker, err := sessionstate.NewWorker(runtime.ctx, session, turn)
 	if err != nil {
-		_ = surface.Close()
 		_ = conversation.Close()
 		return err
 	}
@@ -247,11 +250,10 @@ func (runtime *ProjectRuntime) openSessionLocked(session *sessionstate.Session) 
 	if runtime.closed || runtime.sessions[session.ID] != nil {
 		worker.Stop()
 		go func() { <-worker.Done() }()
-		_ = surface.Close()
 		_ = conversation.Close()
 		return fmt.Errorf("session %q is already open", session.ID)
 	}
-	runtime.sessions[session.ID] = &sessionRuntime{worker: worker, conversation: conversation, surface: surface}
+	runtime.sessions[session.ID] = &sessionRuntime{worker: worker, conversation: conversation}
 	return nil
 }
 
@@ -264,7 +266,6 @@ func (runtime *ProjectRuntime) removeSessionLocked(id string) {
 	if session != nil {
 		session.worker.Stop()
 		<-session.worker.Done()
-		_ = session.surface.Close()
 		_ = session.conversation.Close()
 	}
 }
@@ -298,10 +299,33 @@ func (runtime *ProjectRuntime) PauseSession(sessionID string) error {
 	if session == nil {
 		return fmt.Errorf("session %q is not available", sessionID)
 	}
+	runtime.mu.RLock()
+	pause := runtime.pause
+	runtime.mu.RUnlock()
+	if pause != nil && pause(sessionID) {
+		return nil
+	}
 	if !session.worker.Pause() {
 		return fmt.Errorf("session %q has no running turn", sessionID)
 	}
 	return nil
+}
+
+// ResumeTurn continues an interrupted turn through the owning session worker.
+func (runtime *ProjectRuntime) ResumeTurn(ctx context.Context, sessionID string) <-chan error {
+	done := make(chan error, 1)
+	if runtime == nil {
+		done <- fmt.Errorf("project runtime is nil")
+		return done
+	}
+	runtime.mu.RLock()
+	session := runtime.sessions[sessionID]
+	runtime.mu.RUnlock()
+	if session == nil {
+		done <- fmt.Errorf("session %q is not available", sessionID)
+		return done
+	}
+	return session.worker.Resume(ctx)
 }
 
 // RenameSession 先在 worker 中执行重命名，再提交持久化变更。提交失败时，
@@ -367,9 +391,6 @@ func (runtime *ProjectRuntime) DeleteSession(sessionID string) error {
 	session.worker.Stop()
 	<-session.worker.Done()
 	var closeErr error
-	if err := session.surface.Close(); err != nil {
-		closeErr = errors.Join(closeErr, err)
-	}
 	if err := session.conversation.Close(); err != nil {
 		closeErr = errors.Join(closeErr, err)
 	}
@@ -480,21 +501,6 @@ func (runtime *ProjectRuntime) Conversation(sessionID string) *sessionstate.Conv
 		return nil
 	}
 	return session.conversation
-}
-
-// ContextSurface returns the live persistent model-context projection for an
-// open session, or nil when the session is unavailable.
-func (runtime *ProjectRuntime) ContextSurface(sessionID string) *projectcontext.ContextSurfaceStore {
-	if runtime == nil {
-		return nil
-	}
-	runtime.mu.RLock()
-	session := runtime.sessions[sessionID]
-	runtime.mu.RUnlock()
-	if session == nil {
-		return nil
-	}
-	return session.surface
 }
 
 // Project 返回当前项目元数据及派生索引的副本。
@@ -635,9 +641,6 @@ func (runtime *ProjectRuntime) Close() error {
 	for _, session := range sessions {
 		<-session.worker.Done()
 		if err := runtime.PersistState(session.worker.Snapshot()); closeErr == nil && err != nil {
-			closeErr = err
-		}
-		if err := session.surface.Close(); closeErr == nil && err != nil {
 			closeErr = err
 		}
 		if err := session.conversation.Close(); closeErr == nil && err != nil {

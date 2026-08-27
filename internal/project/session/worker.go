@@ -33,7 +33,16 @@ type workerRequest struct {
 	message string
 	name    string
 	rename  bool
+	resume  bool
 	done    chan error
+}
+
+type resumeTurnContextKey struct{}
+
+// ResumeTurnRequested reports whether the worker is continuing an interrupted turn.
+func ResumeTurnRequested(ctx context.Context) bool {
+	requested, _ := ctx.Value(resumeTurnContextKey{}).(bool)
+	return requested
 }
 
 // NewWorker creates a worker from a private session copy.
@@ -73,6 +82,36 @@ func (worker *Worker) Submit(ctx context.Context, message string) <-chan error {
 		ctx = context.Background()
 	}
 	request := workerRequest{ctx: ctx, message: message, done: done}
+	worker.stateMu.Lock()
+	if worker.closed.Load() {
+		worker.stateMu.Unlock()
+		done <- fmt.Errorf("session %q is closed", worker.session.ID)
+		return done
+	}
+	select {
+	case worker.input <- request:
+		worker.stateMu.Unlock()
+	case <-worker.done:
+		worker.stateMu.Unlock()
+		done <- fmt.Errorf("session %q is closed", worker.session.ID)
+	case <-ctx.Done():
+		worker.stateMu.Unlock()
+		done <- ctx.Err()
+	}
+	return done
+}
+
+// Resume queues continuation of the most recently interrupted turn.
+func (worker *Worker) Resume(ctx context.Context) <-chan error {
+	done := make(chan error, 1)
+	if worker == nil {
+		done <- fmt.Errorf("session worker is nil")
+		return done
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	request := workerRequest{ctx: ctx, resume: true, done: done}
 	worker.stateMu.Lock()
 	if worker.closed.Load() {
 		worker.stateMu.Unlock()
@@ -213,6 +252,18 @@ func (worker *Worker) run(ctx context.Context) {
 			if err := request.ctx.Err(); err != nil {
 				request.done <- err
 				continue
+			}
+			if request.resume {
+				if worker.session.ActiveTurn == nil {
+					request.done <- fmt.Errorf("session has no interrupted turn")
+					continue
+				}
+				if err := worker.session.ResumeTurn(worker.session.ActiveTurn.ID); err != nil {
+					request.done <- err
+					continue
+				}
+				request.message = worker.session.ActiveTurn.Message
+				request.ctx = context.WithValue(request.ctx, resumeTurnContextKey{}, true)
 			}
 			turnContext, cancel := context.WithCancel(request.ctx)
 			worker.stateMu.Lock()

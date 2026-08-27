@@ -80,6 +80,9 @@ type terminalModel struct {
 	ctx             context.Context
 	coordinator     Controller
 	input           textinput.Model
+	inputHistory    []string
+	historyIndex    int
+	historyDraft    string
 	viewport        viewport.Model
 	project         *projectmodel.Project
 	sessions        []*sessionstate.Session
@@ -137,9 +140,11 @@ func newTerminalModel(ctx context.Context, coordinator Controller, focused strin
 		runningTools: make(map[string]int),
 		width:        defaultWidth,
 		height:       defaultHeight,
+		historyIndex: -1,
 	}
 	model.layout()
 	model.refresh()
+	model.loadInputHistory()
 	if coordinator != nil {
 		for _, diagnostic := range coordinator.SkillDiagnostics() {
 			model.startupActivity = append(model.startupActivity, activityEntry{level: activityError, text: fmt.Sprintf("技能已跳过：%s：%s", diagnostic.Path, diagnostic.Reason)})
@@ -194,14 +199,30 @@ func (model *terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.refresh()
 		return model, nil
 	case tea.MouseMsg:
-		if typed.Type == tea.MouseLeft && typed.Action == tea.MouseActionPress && model.actionButtonHit(typed) {
-			return model, model.handleActionButton()
+		if typed.Type == tea.MouseLeft && typed.Action == tea.MouseActionPress {
+			if model.actionButtonHit(typed) {
+				return model, model.handleActionButton()
+			}
+			if model.composerHit(typed) {
+				return model, model.input.Focus()
+			}
+			model.input.Blur()
 		}
 		switch typed.Type {
 		case tea.MouseWheelUp:
-			model.viewport.ScrollUp(model.viewport.MouseWheelDelta)
+			if model.composerHit(typed) {
+				model.previousInput()
+			} else {
+				model.input.Blur()
+				model.viewport.ScrollUp(model.viewport.MouseWheelDelta)
+			}
 		case tea.MouseWheelDown:
-			model.viewport.ScrollDown(model.viewport.MouseWheelDelta)
+			if model.composerHit(typed) {
+				model.nextInput()
+			} else {
+				model.input.Blur()
+				model.viewport.ScrollDown(model.viewport.MouseWheelDelta)
+			}
 		}
 		return model, nil
 	case tea.KeyMsg:
@@ -210,35 +231,64 @@ func (model *terminalModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			model.toggleToolDetails()
 			return model, nil
 		case "up":
-			model.viewport.LineUp(1)
+			if model.input.Focused() {
+				model.previousInput()
+			} else {
+				model.viewport.LineUp(1)
+			}
 			return model, nil
 		case "down":
-			model.viewport.LineDown(1)
+			if model.input.Focused() {
+				model.nextInput()
+			} else {
+				model.viewport.LineDown(1)
+			}
 			return model, nil
-		case "pgup", "ctrl+u":
+		case "pgup":
+			if model.input.Focused() {
+				model.previousInput()
+			} else {
+				model.viewport.PageUp()
+			}
+			return model, nil
+		case "pgdown":
+			if model.input.Focused() {
+				model.nextInput()
+			} else {
+				model.viewport.PageDown()
+			}
+			return model, nil
+		case "ctrl+u":
 			model.viewport.PageUp()
 			return model, nil
-		case "pgdown", "ctrl+d":
+		case "ctrl+d":
 			model.viewport.PageDown()
 			return model, nil
 		case "home":
-			model.viewport.GotoTop()
-			return model, nil
+			if !model.input.Focused() {
+				model.viewport.GotoTop()
+				return model, nil
+			}
 		case "end":
-			model.viewport.GotoBottom()
-			return model, nil
+			if !model.input.Focused() {
+				model.viewport.GotoBottom()
+				return model, nil
+			}
 		case "ctrl+c":
 			return model, tea.Quit
 		case "enter", "ctrl+j":
 			line := strings.TrimSpace(model.input.Value())
 			if line == "" {
-				return model, nil
+				return model, model.handleActionButton()
 			}
 			model.input.Reset()
 			return model, model.handleLine(line)
 		}
 	}
 
+	if _, ok := message.(tea.KeyMsg); ok {
+		model.resetInputNavigation()
+	}
 	var inputCommand tea.Cmd
 	model.input, inputCommand = model.input.Update(message)
 	var viewportCommand tea.Cmd
@@ -279,7 +329,7 @@ func (model *terminalModel) renderHeader() string {
 // renderComposer puts the clickable send/pause action beside the input.
 func (model *terminalModel) renderComposer() string {
 	width := model.contentWidth()
-	hint := ansi.Truncate("PgUp/PgDn 浏览历史 · Ctrl+O 详情 · Ctrl+C 退出", max(8, width-2), "...")
+	hint := ansi.Truncate("↑↓ 历史 · PgUp/PgDn 对话", max(8, width-2), "...")
 	line := lipgloss.JoinHorizontal(lipgloss.Top, model.input.View(), " ", model.renderActionButton())
 	body := lipgloss.JoinVertical(lipgloss.Left, line, composerHintStyle.Render(hint))
 	return inputStyle.Width(width).Render(body)
@@ -461,6 +511,7 @@ func (model *terminalModel) handleLine(line string) tea.Cmd {
 		if model.focused == "" {
 			return model.startSessionWithMessage(line)
 		}
+		model.recordInput(line)
 		model.clearTurnFeedback()
 		return model.submit(model.focused, line)
 	}
@@ -506,6 +557,7 @@ func (model *terminalModel) handleSessionCommand(argument string) tea.Cmd {
 		} else if wasFocused {
 			model.focused = ""
 			model.clearTransientState()
+			model.loadInputHistory()
 			model.watchSession("")
 		} else {
 			model.addActivity(activityInfo, "会话已删除："+value)
@@ -516,6 +568,7 @@ func (model *terminalModel) handleSessionCommand(argument string) tea.Cmd {
 				if session.ID == verb {
 					model.focused = session.ID
 					model.clearTransientState()
+					model.loadInputHistory()
 					model.refresh()
 					return model.watchSession(session.ID)
 				}
@@ -538,6 +591,7 @@ func (model *terminalModel) startSession() tea.Cmd {
 	}
 	model.focused = session.ID
 	model.clearTransientState()
+	model.loadInputHistory()
 	model.refresh()
 	return model.watchSession(session.ID)
 }
@@ -551,8 +605,75 @@ func (model *terminalModel) startSessionWithMessage(message string) tea.Cmd {
 	}
 	model.focused = session.ID
 	model.clearTransientState()
+	model.loadInputHistory()
+	model.recordInput(message)
 	model.refresh()
 	return tea.Batch(model.watchSession(session.ID), model.submit(session.ID, message))
+}
+
+// loadInputHistory restores ordinary user messages for the focused session.
+func (model *terminalModel) loadInputHistory() {
+	model.inputHistory = nil
+	model.historyIndex = -1
+	model.historyDraft = ""
+	if model == nil || model.coordinator == nil || model.focused == "" {
+		return
+	}
+	for _, message := range model.coordinator.Messages(model.focused) {
+		if message.Role != core.RoleUser {
+			continue
+		}
+		value := strings.TrimSpace(message.Content)
+		if value != "" && !strings.HasPrefix(value, "/") {
+			model.inputHistory = append(model.inputHistory, value)
+		}
+	}
+}
+
+func (model *terminalModel) recordInput(value string) {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.HasPrefix(value, "/") {
+		return
+	}
+	if len(model.inputHistory) == 0 || model.inputHistory[len(model.inputHistory)-1] != value {
+		model.inputHistory = append(model.inputHistory, value)
+	}
+	model.historyIndex = -1
+	model.historyDraft = ""
+}
+
+func (model *terminalModel) resetInputNavigation() {
+	if model.historyIndex >= 0 {
+		model.historyIndex = -1
+		model.historyDraft = ""
+	}
+}
+
+func (model *terminalModel) previousInput() {
+	if len(model.inputHistory) == 0 {
+		return
+	}
+	if model.historyIndex < 0 {
+		model.historyDraft = model.input.Value()
+		model.historyIndex = len(model.inputHistory) - 1
+	} else if model.historyIndex > 0 {
+		model.historyIndex--
+	}
+	model.input.SetValue(model.inputHistory[model.historyIndex])
+}
+
+func (model *terminalModel) nextInput() {
+	if model.historyIndex < 0 {
+		return
+	}
+	if model.historyIndex < len(model.inputHistory)-1 {
+		model.historyIndex++
+		model.input.SetValue(model.inputHistory[model.historyIndex])
+		return
+	}
+	model.historyIndex = -1
+	model.input.SetValue(model.historyDraft)
+	model.historyDraft = ""
 }
 
 // focusedSession 在不再次查询运行时的情况下查找当前会话快照。
@@ -563,6 +684,11 @@ func (model *terminalModel) focusedSession() *sessionstate.Session {
 		}
 	}
 	return nil
+}
+
+func (model *terminalModel) composerHit(mouse tea.MouseMsg) bool {
+	startY := model.headerHeight() + model.viewport.Height
+	return mouse.X >= 0 && mouse.X < model.contentWidth() && mouse.Y >= startY && mouse.Y < startY+model.composerHeight()
 }
 
 func (model *terminalModel) actionButtonHit(mouse tea.MouseMsg) bool {
@@ -582,6 +708,11 @@ func (model *terminalModel) handleActionButton() tea.Cmd {
 	}
 	line := strings.TrimSpace(model.input.Value())
 	if line == "" {
+		for _, session := range model.sessions {
+			if session.ID == model.focused && session.ActiveTurn != nil && session.ActiveTurn.Status == sessionstate.TurnInterrupted {
+				return model.resumeTurn(session.ID)
+			}
+		}
 		return nil
 	}
 	model.input.Reset()
@@ -603,6 +734,14 @@ func (model *terminalModel) submit(sessionID, message string) tea.Cmd {
 	}
 }
 
+// resumeTurn asynchronously continues a checkpointed interrupted turn.
+func (model *terminalModel) resumeTurn(sessionID string) tea.Cmd {
+	return func() tea.Msg {
+		done := model.coordinator.ResumeTurn(model.ctx, sessionID)
+		return turnCompleteMsg{sessionID: sessionID, err: <-done}
+	}
+}
+
 // recordEvent 只追踪尚未结束的工具和非 conversation 的失败/中断状态，避免与已持久化消息重复。
 func (model *terminalModel) recordEvent(event sessionstate.Event) {
 	name := safeTerminalText(event.Message)
@@ -616,15 +755,6 @@ func (model *terminalModel) recordEvent(event sessionstate.Event) {
 		model.generating = true
 		if name != "" {
 			model.addStreamText(name)
-		}
-	case sessionstate.EventContextActivity:
-		if activity, ok := event.Data.(core.ContextActivity); ok {
-			switch activity.Kind {
-			case core.ContextRequestRejected:
-				model.addTurnError(name)
-			case core.ContextCheckpointCreated:
-				model.addActivity(activityStatus, "正在压缩上下文…")
-			}
 		}
 	case sessionstate.EventAssistantMessage:
 		model.generating = false

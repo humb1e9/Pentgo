@@ -35,7 +35,15 @@ func New(ctx context.Context, configuration Config) (model.ToolCallingChatModel,
 	if strings.EqualFold(configuration.Provider, "anthropic") {
 		return einoclaude.NewChatModel(ctx, &einoclaude.Config{APIKey: configuration.APIKey, BaseURL: &baseURL, Model: configuration.Model, MaxTokens: anthropicMaxTokens, HTTPClient: client})
 	}
-	return einoopenai.NewChatModel(ctx, &einoopenai.ChatModelConfig{APIKey: configuration.APIKey, BaseURL: baseURL, Model: configuration.Model, HTTPClient: client})
+	return einoopenai.NewChatModel(ctx, newOpenAIConfig(configuration, baseURL, client))
+}
+
+func newOpenAIConfig(configuration Config, baseURL string, client *http.Client) *einoopenai.ChatModelConfig {
+	config := &einoopenai.ChatModelConfig{APIKey: configuration.APIKey, BaseURL: baseURL, Model: configuration.Model, HTTPClient: client}
+	if configuration.Thinking {
+		config.ExtraFields = map[string]any{"enable_thinking": true}
+	}
+	return config
 }
 
 // retryTransport retries only pre-response transient connection failures. A

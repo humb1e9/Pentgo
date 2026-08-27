@@ -97,7 +97,8 @@ pentgo resume # 恢复已有项目并选择会话
     "provider": "openai",
     "base_url": "https://api.openai.com/v1",
     "model": "你的模型名",
-    "api_key": "你的密钥"
+    "api_key": "你的密钥",
+    "thinking": true
   },
   "tools": {
     "max_output_bytes": 65536,
@@ -112,15 +113,16 @@ pentgo resume # 恢复已有项目并选择会话
   },
   "project": {
     "max_turns": 1000,
-    "context": { "context_window": 256000 }
+    "context": { "context_window": 262144, "recent_messages": 32, "summary_max_tokens": 8192 }
   }
 }
 ```
 
 - `model.provider` 决定协议（`openai` / `anthropic`），连接参数全部平铺在 `model` 下。Anthropic 只需把 `provider` 换成 `anthropic` 并替换 `base_url` 与 `model`；其他兼容服务通常只需替换 `base_url` 和 `model`。
+- `model.thinking` 默认 `false`；设为 `true` 时，OpenAI 兼容请求会带上 `enable_thinking: true`。仅在所选网关/模型支持思考输出时开启。
 - `tools.local` 把本机命令暴露为模型工具：键名是模型看到的工具名，`command` 支持 `PATH` 命令或绝对路径。工具接收 `{"args":[...]}` 原生参数数组，不经过 shell；工具名不能与内置工具冲突。
 - `tools.mcp` 接入 stdio（`command`/`args`）或 HTTP/SSE（`type` + `url`）服务。所有来源的工具名必须唯一。
-- `project.max_turns` 限制单个用户请求内的模型调用次数（默认 1000）；`project.context.context_window` 是模型支持的最大上下文窗口（默认 256000），PentGo 会在 80% 预算处压缩。若中转接口的实际模型上限更小，应将此值同步调低。
+- `project.max_turns` 限制单个用户请求内的模型调用次数（默认 1000）；`project.context.context_window` 是实际模型请求的总输入 token 预算（默认 256000），包含 instruction、工具 schema、Facts、摘要和原始消息；`recent_messages` 保留最近原始消息的最大条数（默认 32），`summary_max_tokens` 限制滚动摘要最大输出（默认 8192）。
 
 ### 工作区与 Skills
 
@@ -147,15 +149,14 @@ internal/
 ├── model/             模型适配：OpenAI/Anthropic Eino 单步流、prompt
 ├── project/           项目域根：ProjectStore、ProjectFact、OpenSQLite、Open* 装配
 │   ├── session/       会话：Session/Worker 实体与 ConversationStore
-│   ├── context/       上下文：ContextAssembler/Compactor 与 ContextSurfaceStore
-│   ├── turn/          单轮：turn 执行流、EvidenceStore、项目事实工具
-│   └── runtime/       生命周期：Manager（工作区/项目/会话）、工具组合
+│   ├── turn/          单轮：EvidenceStore、项目事实工具与事件
+│   └── runtime/       生命周期：Manager、Eino turn service、滚动摘要与工具组合
 ├── terminal/          终端界面：bubbletea 视图、命令解析、事件渲染
 └── tools/             工具实现：工作区工具、本机 CLI、MCP 客户端、skills
 skills/                内置 Markdown skills（首次安装复制到用户数据目录）
 ```
 
-依赖方向：`bootstrap` 是唯一组装根；`project` 根只保留 `ProjectStore`、`ProjectFact` 与 `OpenSQLite`，各子包拥有自己的 store（会话消息在 `session`、上下文投影在 `context`、证据在 `turn`），`session` 与 `context` 不反向依赖 `project` 根。
+依赖方向：`bootstrap` 是唯一组装根；`project` 根拥有 SQLite 存储、原始 Conversation 和滚动摘要，`session` 管理会话 worker，`turn` 管理证据与项目事实。runtime 的 Eino middleware 组合摘要、最近原始消息和 Facts 后写入模型 state。
 
 ## 基础体验示例
 

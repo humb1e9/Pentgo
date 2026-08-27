@@ -11,6 +11,7 @@ type Config struct {
 	BaseURL  string `json:"base_url"`
 	Model    string `json:"model"`
 	APIKey   string `json:"api_key"`
+	Thinking bool   `json:"thinking"`
 }
 
 func DefaultConfig() Config {

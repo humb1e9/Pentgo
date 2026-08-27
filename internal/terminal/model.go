@@ -40,12 +40,11 @@ var (
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("240")).
 			Padding(0, 1)
-	composerHintStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	welcomeStyle      = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color("240")).
-				Foreground(lipgloss.Color("252")).
-				Padding(1, 2)
+	welcomeStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("240")).
+			Foreground(lipgloss.Color("252")).
+			Padding(1, 2)
 	mutedStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	activeStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("151")).Bold(true)
 	errorStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Bold(true)
@@ -127,7 +126,7 @@ func newTerminalModel(ctx context.Context, coordinator Controller, focused strin
 	}
 	input := textinput.New()
 	input.Prompt = "› "
-	input.Placeholder = "向 PentGo 描述任务或输入 /help"
+	input.Placeholder = "向PentGo描述任务"
 	input.CharLimit = 16 * 1024
 	input.PromptStyle = activeStyle
 	input.PlaceholderStyle = mutedStyle
@@ -304,7 +303,7 @@ func (model *terminalModel) View() string {
 	return model.mainView()
 }
 
-// mainView 组合紧凑上下文栏、conversation 视口和带快捷键提示的 composer。
+// mainView 组合紧凑上下文栏、conversation 视口和 composer。
 func (model *terminalModel) mainView() string {
 	return shellStyle.Render(lipgloss.JoinVertical(
 		lipgloss.Left,
@@ -329,10 +328,8 @@ func (model *terminalModel) renderHeader() string {
 // renderComposer puts the clickable send/pause action beside the input.
 func (model *terminalModel) renderComposer() string {
 	width := model.contentWidth()
-	hint := ansi.Truncate("↑↓ 历史 · PgUp/PgDn 对话", max(8, width-2), "...")
 	line := lipgloss.JoinHorizontal(lipgloss.Top, model.input.View(), " ", model.renderActionButton())
-	body := lipgloss.JoinVertical(lipgloss.Left, line, composerHintStyle.Render(hint))
-	return inputStyle.Width(width).Render(body)
+	return inputStyle.Width(width).Render(line)
 }
 
 func (model *terminalModel) renderActionButton() string {

@@ -7,11 +7,12 @@ import (
 
 // Config selects one model provider and contains its complete connection settings.
 type Config struct {
-	Provider string `json:"provider"`
-	BaseURL  string `json:"base_url"`
-	Model    string `json:"model"`
-	APIKey   string `json:"api_key"`
-	Thinking bool   `json:"thinking"`
+	Provider       string `json:"provider"`
+	BaseURL        string `json:"base_url"`
+	Model          string `json:"model"`
+	APIKey         string `json:"api_key"`
+	Thinking       bool   `json:"thinking"`
+	ThinkingEffort string `json:"thinking_effort"`
 }
 
 func DefaultConfig() Config {
@@ -32,5 +33,12 @@ func (config Config) Validate() error {
 	if strings.TrimSpace(config.APIKey) == "" {
 		return fmt.Errorf("model api_key is required")
 	}
+	if effort := config.normalizedThinkingEffort(); effort != "" && effort != "low" && effort != "medium" && effort != "high" {
+		return fmt.Errorf("model thinking_effort must be low, medium, or high")
+	}
 	return nil
+}
+
+func (config Config) normalizedThinkingEffort() string {
+	return strings.ToLower(strings.TrimSpace(config.ThinkingEffort))
 }

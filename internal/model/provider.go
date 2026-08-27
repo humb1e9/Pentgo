@@ -42,8 +42,20 @@ func newOpenAIConfig(configuration Config, baseURL string, client *http.Client) 
 	config := &einoopenai.ChatModelConfig{APIKey: configuration.APIKey, BaseURL: baseURL, Model: configuration.Model, HTTPClient: client}
 	if configuration.Thinking {
 		config.ExtraFields = map[string]any{"enable_thinking": true}
+		config.ReasoningEffort = thinkingEffort(configuration.normalizedThinkingEffort())
 	}
 	return config
+}
+
+func thinkingEffort(value string) einoopenai.ReasoningEffortLevel {
+	switch value {
+	case "low":
+		return einoopenai.ReasoningEffortLevelLow
+	case "high":
+		return einoopenai.ReasoningEffortLevelHigh
+	default:
+		return einoopenai.ReasoningEffortLevelMedium
+	}
 }
 
 // retryTransport retries only pre-response transient connection failures. A

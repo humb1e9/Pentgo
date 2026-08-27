@@ -98,7 +98,8 @@ pentgo resume # 恢复已有项目并选择会话
     "base_url": "https://api.openai.com/v1",
     "model": "你的模型名",
     "api_key": "你的密钥",
-    "thinking": true
+    "thinking": true,
+    "thinking_effort": "high"
   },
   "tools": {
     "max_output_bytes": 65536,
@@ -119,7 +120,7 @@ pentgo resume # 恢复已有项目并选择会话
 ```
 
 - `model.provider` 决定协议（`openai` / `anthropic`），连接参数全部平铺在 `model` 下。Anthropic 只需把 `provider` 换成 `anthropic` 并替换 `base_url` 与 `model`；其他兼容服务通常只需替换 `base_url` 和 `model`。
-- `model.thinking` 默认 `false`；设为 `true` 时，OpenAI 兼容请求会带上 `enable_thinking: true`。仅在所选网关/模型支持思考输出时开启。
+- `model.thinking` 默认 `false`；设为 `true` 时，OpenAI 兼容请求会带上 `enable_thinking: true`。`model.thinking_effort` 可设为 `low`、`medium` 或 `high`（默认 `medium`），会作为 `reasoning_effort` 发送。仅在所选网关/模型支持思考输出时开启。
 - `tools.local` 把本机命令暴露为模型工具：键名是模型看到的工具名，`command` 支持 `PATH` 命令或绝对路径。工具接收 `{"args":[...]}` 原生参数数组，不经过 shell；工具名不能与内置工具冲突。
 - `tools.mcp` 接入 stdio（`command`/`args`）或 HTTP/SSE（`type` + `url`）服务。所有来源的工具名必须唯一。
 - `project.max_turns` 限制单个用户请求内的模型调用次数（默认 1000）；`project.context.context_window` 是实际模型请求的总输入 token 预算（默认 256000），包含 instruction、工具 schema、Facts、摘要和原始消息；`recent_messages` 保留最近原始消息的最大条数（默认 32），`summary_max_tokens` 限制滚动摘要最大输出（默认 8192）。

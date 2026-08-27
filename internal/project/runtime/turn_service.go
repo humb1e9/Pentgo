@@ -202,7 +202,7 @@ func (service *TurnService) RunTurn(ctx context.Context, runtime *ProjectRuntime
 	return nil
 }
 
-// PauseSession requests runner cancellation at its next checkpoint-safe point.
+// PauseSession stops at the next safe point, escalating promptly when a model or tool is stuck.
 func (service *TurnService) PauseSession(sessionID string) bool {
 	if service == nil {
 		return false
@@ -213,7 +213,11 @@ func (service *TurnService) PauseSession(sessionID string) bool {
 	if cancel == nil {
 		return false
 	}
-	_, contributed := cancel(adk.WithAgentCancelMode(adk.CancelAfterChatModel | adk.CancelAfterToolCalls))
+	_, contributed := cancel(
+		adk.WithAgentCancelMode(adk.CancelAfterChatModel|adk.CancelAfterToolCalls),
+		adk.WithAgentCancelTimeout(time.Second),
+		adk.WithRecursive(),
+	)
 	return contributed
 }
 

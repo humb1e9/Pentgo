@@ -699,8 +699,10 @@ func (model *terminalModel) handleActionButton() tea.Cmd {
 	if model.turnRunning {
 		if err := model.coordinator.PauseSession(model.focused); err != nil && !errors.Is(err, context.Canceled) {
 			model.addActivity(activityError, err.Error())
-			model.refresh()
+		} else {
+			model.addActivity(activityStatus, "正在暂停…")
 		}
+		model.refresh()
 		return nil
 	}
 	line := strings.TrimSpace(model.input.Value())

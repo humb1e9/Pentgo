@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"pentgo/internal/tools"
 
-	projectturn "pentgo/internal/project/turn"
 	sessionstate "pentgo/internal/session"
 	builtins "pentgo/internal/tools"
 )
@@ -50,6 +49,6 @@ func (provider *runtimeToolProvider) Tools(context.Context) ([]tools.Tool, error
 	return tools, nil
 }
 
-func newProjectFactTools(facts *projectturn.ProjectFactLedger) []tools.Tool {
-	return projectturn.NewProjectFactTools(facts)
+func newProjectFactTools(facts *ProjectFactLedger) []tools.Tool {
+	return NewProjectFactTools(facts)
 }

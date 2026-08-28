@@ -1,4 +1,4 @@
-package turn
+package agent
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	contextpolicy "pentgo/internal/context"
 	projectmodel "pentgo/internal/project"
 	"pentgo/internal/tools"
 )
@@ -128,7 +129,7 @@ func (tool *listProjectFactsTool) Invoke(ctx context.Context, arguments map[stri
 	if err != nil {
 		return rejectedFactToolResult(err)
 	}
-	return RenderProjectFactIndex(facts), nil
+	return contextpolicy.RenderProjectFactIndex(facts), nil
 }
 
 func NewProjectFactTools(facts *ProjectFactLedger) []tools.Tool {

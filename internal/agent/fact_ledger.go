@@ -1,4 +1,4 @@
-package turn
+package agent
 
 import (
 	"context"
@@ -34,8 +34,8 @@ type ProjectFactLedger struct {
 	evidence EvidenceReferenceLookup
 }
 
-// NewProjectFactLedger creates a ledger with its required dependencies.
-func NewProjectFactLedger(repo ProjectFactRepository, evidence EvidenceReferenceLookup) *ProjectFactLedger {
+// NewProjectLedger creates a ledger with its required dependencies.
+func NewProjectLedger(repo ProjectFactRepository, evidence EvidenceReferenceLookup) *ProjectFactLedger {
 	return &ProjectFactLedger{repo: repo, evidence: evidence}
 }
 

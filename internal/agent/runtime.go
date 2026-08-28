@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
+	contextpolicy "pentgo/internal/context"
 	"pentgo/internal/evidence"
 	projectmodel "pentgo/internal/project"
-	"pentgo/internal/project/turn"
 	sessionstate "pentgo/internal/session"
 	"pentgo/internal/storage"
 	builtins "pentgo/internal/tools"
@@ -25,8 +25,8 @@ type ProjectRuntime struct {
 	commitMu  sync.Mutex
 	store     *storage.ProjectStore
 	project   *projectmodel.Project
-	facts     *turn.ProjectFactLedger
-	factIndex *turn.ProjectFactIndex
+	facts     *ProjectFactLedger
+	factIndex *contextpolicy.ProjectFactIndex
 	journal   *evidence.EvidenceStore
 	workspace *builtins.Workspace
 	tools     tools.Provider
@@ -83,8 +83,8 @@ func openProjectRuntimeWithSecrets(ctx context.Context, store *storage.ProjectSt
 	if err != nil {
 		return nil, err
 	}
-	facts := turn.NewProjectFactLedger(repository, journal)
-	factIndex := turn.NewProjectFactIndex(facts)
+	facts := NewProjectLedger(repository, journal)
+	factIndex := contextpolicy.NewProjectFactIndex(facts)
 	workspace, err := builtins.NewWorkspace(store.WorkspaceRoot())
 	if err != nil {
 		_ = journal.Close()
@@ -460,7 +460,7 @@ func (runtime *ProjectRuntime) Events(sessionID string) <-chan sessionstate.Even
 }
 
 // Emit 通过指定会话的 worker 发布进度事件。
-func (runtime *ProjectRuntime) Emit(sessionID string, event turn.Event) {
+func (runtime *ProjectRuntime) Emit(sessionID string, event sessionstate.Event) {
 	if runtime == nil {
 		return
 	}
@@ -515,7 +515,7 @@ func (runtime *ProjectRuntime) Project() *projectmodel.Project {
 }
 
 // ProjectFacts returns the project-scoped minimal fact ledger.
-func (runtime *ProjectRuntime) ProjectFacts() *turn.ProjectFactLedger {
+func (runtime *ProjectRuntime) ProjectFacts() *ProjectFactLedger {
 	if runtime == nil {
 		return nil
 	}
@@ -526,7 +526,7 @@ func (runtime *ProjectRuntime) ProjectFacts() *turn.ProjectFactLedger {
 
 // ProjectFactIndex returns the read-only Fact Index renderer used to capture
 // one stable snapshot at the start of every turn.
-func (runtime *ProjectRuntime) ProjectFactIndex() *turn.ProjectFactIndex {
+func (runtime *ProjectRuntime) ProjectFactIndex() *contextpolicy.ProjectFactIndex {
 	if runtime == nil {
 		return nil
 	}

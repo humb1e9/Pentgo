@@ -11,7 +11,6 @@ import (
 	contextpolicy "pentgo/internal/context"
 	llm "pentgo/internal/model"
 	projectmodel "pentgo/internal/project"
-	projectturn "pentgo/internal/project/turn"
 	sessionstate "pentgo/internal/session"
 	"pentgo/internal/storage"
 	"pentgo/internal/tools"
@@ -107,7 +106,7 @@ func (service *TurnService) RunTurn(ctx context.Context, runtime *ProjectRuntime
 		return finishError(err)
 	}
 	runtime.PublishSnapshot(session.ID)
-	runtime.Emit(session.ID, projectturn.Event{TurnID: turn.ID, Kind: projectturn.EventTurnStarted, Message: message})
+	runtime.Emit(session.ID, sessionstate.Event{TurnID: turn.ID, Kind: sessionstate.EventTurnStarted, Message: message})
 
 	projectTools, err := runtime.Tools(ctx)
 	if err != nil {
@@ -155,7 +154,7 @@ func (service *TurnService) RunTurn(ctx context.Context, runtime *ProjectRuntime
 	cancelOption, cancelRun := adk.WithCancel()
 	service.registerCancel(session.ID, cancelRun)
 	defer service.unregisterCancel(session.ID, cancelRun)
-	bridge, err := NewEventBridge(conversation, session.ID, turn.ID, func(event projectturn.Event) {
+	bridge, err := NewEventBridge(conversation, session.ID, turn.ID, func(event sessionstate.Event) {
 		runtime.Emit(session.ID, event)
 	})
 	if err != nil {
@@ -200,7 +199,7 @@ func (service *TurnService) RunTurn(ctx context.Context, runtime *ProjectRuntime
 		return fmt.Errorf("delete completed runner checkpoint: %w", err)
 	}
 	runtime.PublishSnapshot(session.ID)
-	runtime.Emit(session.ID, projectturn.Event{TurnID: turn.ID, Kind: projectturn.EventTurnFinished, Message: session.FinalSummary})
+	runtime.Emit(session.ID, sessionstate.Event{TurnID: turn.ID, Kind: sessionstate.EventTurnFinished, Message: session.FinalSummary})
 	return nil
 }
 
@@ -252,9 +251,9 @@ func (service *TurnService) finishError(runtime *ProjectRuntime, session *sessio
 	}
 	runtime.PublishSnapshot(session.ID)
 	if interrupted {
-		runtime.Emit(session.ID, projectturn.Event{TurnID: turnID, Kind: projectturn.EventTurnFinished, Message: "turn interrupted"})
+		runtime.Emit(session.ID, sessionstate.Event{TurnID: turnID, Kind: sessionstate.EventTurnFinished, Message: "turn interrupted"})
 	} else {
-		runtime.Emit(session.ID, projectturn.Event{TurnID: turnID, Kind: projectturn.EventTurnFailed, Message: turnErr.Error()})
+		runtime.Emit(session.ID, sessionstate.Event{TurnID: turnID, Kind: sessionstate.EventTurnFailed, Message: turnErr.Error()})
 	}
 	return turnErr
 }

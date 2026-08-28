@@ -6,7 +6,6 @@ import (
 	"io"
 	"pentgo/internal/session"
 
-	projectturn "pentgo/internal/project/turn"
 	sessionstate "pentgo/internal/session"
 
 	"github.com/cloudwego/eino/adk"
@@ -19,7 +18,7 @@ type EventBridge struct {
 	conversation *sessionstate.ConversationStore
 	sessionID    string
 	turnID       string
-	emit         func(projectturn.Event)
+	emit         func(sessionstate.Event)
 
 	persistedCalls   map[string]struct{}
 	persistedResults map[string]struct{}
@@ -29,7 +28,7 @@ type EventBridge struct {
 
 // NewEventBridge creates a bridge for one running turn. The caller remains
 // responsible for final session-state persistence and turn completion.
-func NewEventBridge(conversation *sessionstate.ConversationStore, sessionID, turnID string, emit func(projectturn.Event)) (*EventBridge, error) {
+func NewEventBridge(conversation *sessionstate.ConversationStore, sessionID, turnID string, emit func(sessionstate.Event)) (*EventBridge, error) {
 	if conversation == nil {
 		return nil, fmt.Errorf("agent event bridge conversation is nil")
 	}
@@ -139,7 +138,7 @@ func (bridge *EventBridge) message(event *adk.AgentEvent) (*schema.Message, sche
 			role = chunk.Role
 		}
 		if role == schema.Assistant && chunk.Content != "" {
-			bridge.emitEvent(projectturn.Event{Kind: projectturn.EventAssistantDelta, Message: chunk.Content, Data: fromEinoMessage(chunk)})
+			bridge.emitEvent(sessionstate.Event{Kind: sessionstate.EventAssistantDelta, Message: chunk.Content, Data: fromEinoMessage(chunk)})
 		}
 		chunks = append(chunks, chunk)
 	}
@@ -167,7 +166,7 @@ func (bridge *EventBridge) assistant(message session.Message) error {
 		if err := bridge.conversation.Append(message); err != nil {
 			return err
 		}
-		bridge.emitEvent(projectturn.Event{Kind: projectturn.EventAssistantMessage, Message: message.Content, Data: message})
+		bridge.emitEvent(sessionstate.Event{Kind: sessionstate.EventAssistantMessage, Message: message.Content, Data: message})
 		return nil
 	}
 	filtered := message
@@ -190,7 +189,7 @@ func (bridge *EventBridge) assistant(message session.Message) error {
 	}
 	bridge.pendingCalls = append(bridge.pendingCalls, filtered.ToolCalls...)
 	for _, call := range filtered.ToolCalls {
-		bridge.emitEvent(projectturn.Event{Kind: projectturn.EventToolStarted, Message: call.Name, Data: call})
+		bridge.emitEvent(sessionstate.Event{Kind: sessionstate.EventToolStarted, Message: call.Name, Data: call})
 	}
 	return nil
 }
@@ -236,14 +235,14 @@ func (bridge *EventBridge) flushResults() error {
 		return err
 	}
 	for _, message := range messages {
-		bridge.emitEvent(projectturn.Event{Kind: projectturn.EventToolFinished, Message: message.ToolName, Output: message.Content, Data: message})
+		bridge.emitEvent(sessionstate.Event{Kind: sessionstate.EventToolFinished, Message: message.ToolName, Output: message.Content, Data: message})
 	}
 	bridge.pendingCalls = nil
 	bridge.pendingResults = make(map[string]session.Message)
 	return nil
 }
 
-func (bridge *EventBridge) emitEvent(event projectturn.Event) {
+func (bridge *EventBridge) emitEvent(event sessionstate.Event) {
 	if bridge.emit == nil {
 		return
 	}

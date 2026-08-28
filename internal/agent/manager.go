@@ -6,9 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"net/url"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -524,33 +522,4 @@ func (coordinator *Manager) now() time.Time {
 		return time.Now().UTC()
 	}
 	return coordinator.deps.Clock().UTC()
-}
-
-// targetPattern 用于识别用户 intent 中的 URL 和类主机字符串。
-var targetPattern = regexp.MustCompile(`(?i)https?://[^\s<>"',，。；、]+|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}(?::[0-9]{1,5})?(?:/[^\s<>"',，。；、]*)?`)
-
-// extractTargets 将识别出的目标规范化后保存到会话，并删除仅主机或协议大小写、
-// URL 片段不同的重复项。
-func extractTargets(intent string) []string {
-	seen := make(map[string]bool)
-	result := make([]string, 0)
-	for _, raw := range targetPattern.FindAllString(intent, -1) {
-		candidate := raw
-		if !strings.Contains(candidate, "://") {
-			candidate = "https://" + candidate
-		}
-		parsed, err := url.Parse(candidate)
-		if err != nil || parsed.Hostname() == "" {
-			continue
-		}
-		parsed.Scheme = strings.ToLower(parsed.Scheme)
-		parsed.Host = strings.ToLower(parsed.Host)
-		parsed.Fragment = ""
-		canonical := parsed.String()
-		if !seen[canonical] {
-			seen[canonical] = true
-			result = append(result, canonical)
-		}
-	}
-	return result
 }

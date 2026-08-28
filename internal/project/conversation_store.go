@@ -3,7 +3,7 @@ package project
 import (
 	"fmt"
 
-	sessionstate "pentgo/internal/project/session"
+	sessionstate "pentgo/internal/session"
 )
 
 // OpenConversation opens an independent SQLite connection and loads the full

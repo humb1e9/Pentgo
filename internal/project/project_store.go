@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	sessionstate "pentgo/internal/project/session"
+	sessionstate "pentgo/internal/session"
 )
 
 // ErrNotProject 将缺失或格式错误的工作区与普通 SQLite 打开错误区分开，

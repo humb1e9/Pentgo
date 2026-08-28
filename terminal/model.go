@@ -17,7 +17,7 @@ import (
 
 	"pentgo/internal/core"
 	projectmodel "pentgo/internal/project"
-	sessionstate "pentgo/internal/project/session"
+	sessionstate "pentgo/internal/session"
 )
 
 // 默认终端尺寸。

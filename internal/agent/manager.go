@@ -17,7 +17,7 @@ import (
 	"pentgo/internal/core"
 	llm "pentgo/internal/model"
 	projectmodel "pentgo/internal/project"
-	sessionstate "pentgo/internal/project/session"
+	sessionstate "pentgo/internal/session"
 	"pentgo/internal/tools"
 
 	einomodel "github.com/cloudwego/eino/components/model"

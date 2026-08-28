@@ -6,8 +6,8 @@ import (
 	"io"
 
 	"pentgo/internal/core"
-	sessionstate "pentgo/internal/project/session"
 	projectturn "pentgo/internal/project/turn"
+	sessionstate "pentgo/internal/session"
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/schema"

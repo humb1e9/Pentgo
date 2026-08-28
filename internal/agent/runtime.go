@@ -12,8 +12,8 @@ import (
 	"pentgo/internal/evidence"
 	"pentgo/internal/project"
 	projectmodel "pentgo/internal/project"
-	sessionstate "pentgo/internal/project/session"
 	"pentgo/internal/project/turn"
+	sessionstate "pentgo/internal/session"
 	builtins "pentgo/internal/tools"
 )
 

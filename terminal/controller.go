@@ -5,7 +5,7 @@ import (
 
 	"pentgo/internal/core"
 	projectmodel "pentgo/internal/project"
-	sessionstate "pentgo/internal/project/session"
+	sessionstate "pentgo/internal/session"
 	"pentgo/internal/tools"
 )
 

@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"pentgo/internal/core"
-	sessionstate "pentgo/internal/project/session"
 	projectturn "pentgo/internal/project/turn"
+	sessionstate "pentgo/internal/session"
 	builtins "pentgo/internal/tools"
 )
 

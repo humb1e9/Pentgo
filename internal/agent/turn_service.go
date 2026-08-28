@@ -11,8 +11,8 @@ import (
 	"pentgo/internal/core"
 	llm "pentgo/internal/model"
 	projectmodel "pentgo/internal/project"
-	sessionstate "pentgo/internal/project/session"
 	projectturn "pentgo/internal/project/turn"
+	sessionstate "pentgo/internal/session"
 	"pentgo/internal/storage"
 
 	"github.com/cloudwego/eino/adk"

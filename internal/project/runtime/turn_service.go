@@ -13,6 +13,7 @@ import (
 	projectmodel "pentgo/internal/project"
 	sessionstate "pentgo/internal/project/session"
 	projectturn "pentgo/internal/project/turn"
+	"pentgo/internal/storage"
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/model"
@@ -143,7 +144,7 @@ func (service *TurnService) RunTurn(ctx context.Context, runtime *ProjectRuntime
 	if err != nil {
 		return finishError(err)
 	}
-	checkpointStore, err := NewSQLiteCheckpointStore(runtime.store.DatabasePath(), session.ID, turn.ID)
+	checkpointStore, err := storage.NewSQLiteCheckpointStore(runtime.store.DatabasePath(), session.ID, turn.ID)
 	if err != nil {
 		return finishError(err)
 	}

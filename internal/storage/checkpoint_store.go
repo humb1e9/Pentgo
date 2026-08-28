@@ -1,4 +1,4 @@
-package runtime
+package storage
 
 import (
 	"context"
@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	"pentgo/internal/project"
 
 	"github.com/cloudwego/eino/compose"
 )
@@ -30,7 +28,7 @@ func NewSQLiteCheckpointStore(databasePath, sessionID, turnID string) (*SQLiteCh
 	if databasePath == "" || sessionID == "" || turnID == "" {
 		return nil, fmt.Errorf("runner checkpoint scope is incomplete")
 	}
-	db, err := project.OpenSQLite(databasePath)
+	db, err := OpenSQLite(databasePath)
 	if err != nil {
 		return nil, fmt.Errorf("open runner checkpoint database: %w", err)
 	}

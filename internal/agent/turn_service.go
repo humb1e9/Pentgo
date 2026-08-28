@@ -8,12 +8,13 @@ import (
 	"sync"
 	"time"
 
-	"pentgo/internal/core"
+	contextpolicy "pentgo/internal/context"
 	llm "pentgo/internal/model"
 	projectmodel "pentgo/internal/project"
 	projectturn "pentgo/internal/project/turn"
 	sessionstate "pentgo/internal/session"
 	"pentgo/internal/storage"
+	"pentgo/internal/tools"
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/model"
@@ -28,7 +29,7 @@ type TurnService struct {
 	maxRequests   int
 	systemPrompt  string
 	contextConfig projectmodel.ContextConfig
-	summarizer    SummaryWriter
+	summarizer    contextpolicy.SummaryWriter
 	mu            sync.Mutex
 	cancellations map[string]adk.AgentCancelFunc
 }
@@ -40,7 +41,7 @@ type TurnServiceConfig struct {
 	MaxRequests  int
 	SystemPrompt string
 	Context      projectmodel.ContextConfig
-	Summarizer   SummaryWriter
+	Summarizer   contextpolicy.SummaryWriter
 }
 
 func NewTurnService(cfg TurnServiceConfig) *TurnService {
@@ -98,7 +99,7 @@ func (service *TurnService) RunTurn(ctx context.Context, runtime *ProjectRuntime
 		session.AddTargets(targets...)
 	}
 	if !resuming {
-		if err := conversation.Append(core.Message{Role: core.RoleUser, Content: message}); err != nil {
+		if err := conversation.Append(sessionstate.Message{Role: sessionstate.RoleUser, Content: message}); err != nil {
 			return finishError(err)
 		}
 	}
@@ -112,7 +113,7 @@ func (service *TurnService) RunTurn(ctx context.Context, runtime *ProjectRuntime
 	if err != nil {
 		return finishError(err)
 	}
-	tools, err := newRuntimeToolProvider(runtime, session, projectTools).Tools(ctx)
+	availableTools, err := newRuntimeToolProvider(runtime, session, projectTools).Tools(ctx)
 	if err != nil {
 		return finishError(err)
 	}
@@ -120,7 +121,7 @@ func (service *TurnService) RunTurn(ctx context.Context, runtime *ProjectRuntime
 	if service.skillContext != nil {
 		instruction = strings.TrimSpace(instruction + "\n\n" + service.skillContext(message))
 	}
-	contextWindow := NewContextWindow(runtime.store, service.contextConfig, service.summarizer, estimateTextTokens(llm.SystemPrompt(instruction, ""))+estimateToolTokens(tools))
+	contextWindow := contextpolicy.NewContextWindow(runtime.store, service.contextConfig, service.summarizer, contextpolicy.EstimateTextTokens(llm.SystemPrompt(instruction, ""))+contextpolicy.EstimateToolTokens(availableTools))
 	chatModel, err := service.newModel(ctx)
 	if err != nil {
 		return finishError(err)
@@ -136,7 +137,7 @@ func (service *TurnService) RunTurn(ctx context.Context, runtime *ProjectRuntime
 				SessionID:    session.ID,
 				Window:       contextWindow,
 				Conversation: conversation.Messages,
-				BuildTools:   func(context.Context) ([]core.Tool, error) { return tools, nil },
+				BuildTools:   func(context.Context) ([]tools.Tool, error) { return availableTools, nil },
 				Facts:        func(runCtx context.Context) (string, error) { return runtime.FactSnapshot(runCtx) },
 			}),
 		},
@@ -168,7 +169,7 @@ func (service *TurnService) RunTurn(ctx context.Context, runtime *ProjectRuntime
 		}
 		err = bridge.Consume(ctx, iterator)
 	} else {
-		err = bridge.Consume(ctx, runner.Run(ctx, toEinoMessages([]core.Message{{Role: core.RoleUser, Content: message}}), adk.WithCheckPointID(checkpointID), cancelOption))
+		err = bridge.Consume(ctx, runner.Run(ctx, toEinoMessages([]sessionstate.Message{{Role: sessionstate.RoleUser, Content: message}}), adk.WithCheckPointID(checkpointID), cancelOption))
 	}
 	if err != nil {
 		var cancelErr *adk.CancelError
@@ -179,7 +180,7 @@ func (service *TurnService) RunTurn(ctx context.Context, runtime *ProjectRuntime
 	}
 	messages := conversation.Messages()
 	for _, persisted := range messages {
-		if persisted.Role == core.RoleAssistant && len(persisted.ToolCalls) == 0 && strings.TrimSpace(persisted.Content) != "" {
+		if persisted.Role == sessionstate.RoleAssistant && len(persisted.ToolCalls) == 0 && strings.TrimSpace(persisted.Content) != "" {
 			session.FinalSummary = strings.TrimSpace(persisted.Content)
 		}
 	}

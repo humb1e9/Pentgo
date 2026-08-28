@@ -2,28 +2,27 @@ package agent
 
 import (
 	"encoding/json"
-
-	"pentgo/internal/core"
+	"pentgo/internal/session"
 
 	"github.com/cloudwego/eino/schema"
 )
 
 // toEinoMessage converts a provider-neutral message to Eino's message type.
-func toEinoMessage(message core.Message) *schema.Message {
+func toEinoMessage(message session.Message) *schema.Message {
 	switch message.Role {
-	case core.RoleSystem:
+	case session.RoleSystem:
 		converted := schema.SystemMessage(message.Content)
-		converted.Extra = core.CloneArguments(message.ToolArguments)
+		converted.Extra = session.CloneArguments(message.ToolArguments)
 		return converted
-	case core.RoleUser:
+	case session.RoleUser:
 		converted := schema.UserMessage(message.Content)
-		converted.Extra = core.CloneArguments(message.ToolArguments)
+		converted.Extra = session.CloneArguments(message.ToolArguments)
 		return converted
-	case core.RoleTool:
+	case session.RoleTool:
 		converted := schema.ToolMessage(message.Content, message.ToolCallID, schema.WithToolName(message.ToolName))
-		converted.Extra = core.CloneArguments(message.ToolArguments)
+		converted.Extra = session.CloneArguments(message.ToolArguments)
 		return converted
-	case core.RoleAssistant:
+	case session.RoleAssistant:
 		calls := make([]schema.ToolCall, 0, len(message.ToolCalls))
 		for _, call := range message.ToolCalls {
 			arguments := call.RawArguments
@@ -39,7 +38,7 @@ func toEinoMessage(message core.Message) *schema.Message {
 		}
 		converted := schema.AssistantMessage(message.Content, calls)
 		converted.ReasoningContent = message.ReasoningContent
-		converted.Extra = core.CloneArguments(message.ToolArguments)
+		converted.Extra = session.CloneArguments(message.ToolArguments)
 		return converted
 	default:
 		return &schema.Message{
@@ -48,12 +47,12 @@ func toEinoMessage(message core.Message) *schema.Message {
 			ReasoningContent: message.ReasoningContent,
 			ToolCallID:       message.ToolCallID,
 			ToolName:         message.ToolName,
-			Extra:            core.CloneArguments(message.ToolArguments),
+			Extra:            session.CloneArguments(message.ToolArguments),
 		}
 	}
 }
 
-func toEinoMessages(messages []core.Message) []*schema.Message {
+func toEinoMessages(messages []session.Message) []*schema.Message {
 	converted := make([]*schema.Message, 0, len(messages))
 	for _, message := range messages {
 		converted = append(converted, toEinoMessage(message))
@@ -62,22 +61,22 @@ func toEinoMessages(messages []core.Message) []*schema.Message {
 }
 
 // fromEinoMessage converts Eino messages without discarding raw tool arguments.
-func fromEinoMessage(message *schema.Message) core.Message {
+func fromEinoMessage(message *schema.Message) session.Message {
 	if message == nil {
-		return core.Message{}
+		return session.Message{}
 	}
-	converted := core.Message{
+	converted := session.Message{
 		Role:             string(message.Role),
 		Content:          message.Content,
 		ReasoningContent: message.ReasoningContent,
 		ToolCallID:       message.ToolCallID,
 		ToolName:         message.ToolName,
-		ToolArguments:    core.CloneArguments(message.Extra),
+		ToolArguments:    session.CloneArguments(message.Extra),
 	}
 	for _, call := range message.ToolCalls {
 		var arguments map[string]any
 		_ = json.Unmarshal([]byte(call.Function.Arguments), &arguments)
-		converted.ToolCalls = append(converted.ToolCalls, core.ToolCall{
+		converted.ToolCalls = append(converted.ToolCalls, session.ToolCall{
 			ID:           call.ID,
 			Name:         call.Function.Name,
 			Arguments:    arguments,
@@ -85,13 +84,13 @@ func fromEinoMessage(message *schema.Message) core.Message {
 		})
 	}
 	if converted.Role == "" {
-		converted.Role = core.RoleAssistant
+		converted.Role = session.RoleAssistant
 	}
 	return converted
 }
 
-func fromEinoMessages(messages []*schema.Message) []core.Message {
-	converted := make([]core.Message, 0, len(messages))
+func fromEinoMessages(messages []*schema.Message) []session.Message {
+	converted := make([]session.Message, 0, len(messages))
 	for _, message := range messages {
 		converted = append(converted, fromEinoMessage(message))
 	}

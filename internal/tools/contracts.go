@@ -1,4 +1,4 @@
-package core
+package tools
 
 import "context"
 
@@ -14,12 +14,12 @@ type ToolSchemaProvider interface {
 	InputSchema() map[string]any
 }
 
-// ToolProvider resolves tools available for one runtime context.
-type ToolProvider interface {
+// Provider resolves tools available for one runtime context.
+type Provider interface {
 	Tools(context.Context) ([]Tool, error)
 }
 
-// ToolCloser releases resources held by a tool provider.
-type ToolCloser interface {
+// Closer releases resources held by a tool provider.
+type Closer interface {
 	Close() error
 }

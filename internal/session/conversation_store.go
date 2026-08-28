@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-
-	"pentgo/internal/core"
 )
 
 // ConversationStore 以严格顺序追加一个会话的模型可见消息历史，
@@ -17,14 +15,14 @@ type ConversationStore struct {
 	db        *sql.DB
 	path      string
 	sessionID string
-	messages  []core.Message
+	messages  []Message
 	failed    error
 	closed    bool
 }
 
 // NewConversationStore constructs a conversation store bound to an existing
 // database connection. The root package uses it to open a session conversation.
-func NewConversationStore(db *sql.DB, path, sessionID string, messages []core.Message) *ConversationStore {
+func NewConversationStore(db *sql.DB, path, sessionID string, messages []Message) *ConversationStore {
 	return &ConversationStore{db: db, path: path, sessionID: sessionID, messages: messages}
 }
 
@@ -38,14 +36,14 @@ func (store *ConversationStore) Path() string {
 
 // Append 在加入内存回放缓存前提交消息。
 // 数据库失败会成为持续状态，因为缓存序列将因此与持久化数据分叉。
-func (store *ConversationStore) Append(message core.Message) error {
+func (store *ConversationStore) Append(message Message) error {
 	if store == nil || store.db == nil {
 		return fmt.Errorf("conversation store is nil")
 	}
 	if strings.TrimSpace(message.Role) == "" {
 		return fmt.Errorf("conversation message role is empty")
 	}
-	message = core.CloneMessage(message)
+	message = CloneMessage(message)
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if store.failed != nil {
@@ -76,19 +74,19 @@ func (store *ConversationStore) Append(message core.Message) error {
 // AppendBatch commits an ordered group of messages as one transaction before
 // publishing any of them to the in-memory replay cache. It is used for one
 // assistant tool-call batch's results so recovery never observes only a prefix.
-func (store *ConversationStore) AppendBatch(messages []core.Message) error {
+func (store *ConversationStore) AppendBatch(messages []Message) error {
 	if store == nil || store.db == nil {
 		return fmt.Errorf("conversation store is nil")
 	}
 	if len(messages) == 0 {
 		return nil
 	}
-	cloned := make([]core.Message, len(messages))
+	cloned := make([]Message, len(messages))
 	for index, message := range messages {
 		if strings.TrimSpace(message.Role) == "" {
 			return fmt.Errorf("conversation message role is empty")
 		}
-		cloned[index] = core.CloneMessage(message)
+		cloned[index] = CloneMessage(message)
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -121,7 +119,7 @@ func (store *ConversationStore) AppendBatch(messages []core.Message) error {
 
 // insertNextMessageTx 在与其工具调用相同的事务中分配 seq，
 // 从而在回放时保留精确的模型消息顺序。
-func insertNextMessageTx(tx *sql.Tx, sessionID string, message core.Message) (int, error) {
+func insertNextMessageTx(tx *sql.Tx, sessionID string, message Message) (int, error) {
 	argumentsJSON, err := marshalNullableJSON(message.ToolArguments)
 	if err != nil {
 		return 0, fmt.Errorf("encode conversation tool arguments: %w", err)
@@ -147,7 +145,7 @@ func insertNextMessageTx(tx *sql.Tx, sessionID string, message core.Message) (in
 
 // insertToolCallsTx 单独存储助手工具调用，以保留顺序和格式错误的原始参数，
 // 无需将整条消息序列化为 JSON。
-func insertToolCallsTx(tx *sql.Tx, sessionID string, sequence int, calls []core.ToolCall) error {
+func insertToolCallsTx(tx *sql.Tx, sessionID string, sequence int, calls []ToolCall) error {
 	for position, call := range calls {
 		callArguments, err := marshalNullableJSON(call.Arguments)
 		if err != nil {
@@ -178,15 +176,15 @@ func marshalNullableJSON(value map[string]any) (any, error) {
 }
 
 // Messages 返回深拷贝，避免模型适配器修改回放历史。
-func (store *ConversationStore) Messages() []core.Message {
+func (store *ConversationStore) Messages() []Message {
 	if store == nil {
 		return nil
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	messages := make([]core.Message, len(store.messages))
+	messages := make([]Message, len(store.messages))
 	for index, message := range store.messages {
-		messages[index] = core.CloneMessage(message)
+		messages[index] = CloneMessage(message)
 	}
 	return messages
 }
@@ -212,11 +210,11 @@ func (store *ConversationStore) Close() error {
 // 回放期间绝不调用历史工具。
 // LoadConversation rebuilds the ordered message history for one session from
 // the normalized tables. The root package uses it when opening a session.
-func LoadConversation(db *sql.DB, sessionID string) ([]core.Message, error) {
+func LoadConversation(db *sql.DB, sessionID string) ([]Message, error) {
 	return loadConversationQueryer(db, sessionID)
 }
 
-func loadConversationDB(db *sql.DB, sessionID string) ([]core.Message, error) {
+func loadConversationDB(db *sql.DB, sessionID string) ([]Message, error) {
 	return loadConversationQueryer(db, sessionID)
 }
 
@@ -224,7 +222,7 @@ func loadConversationDB(db *sql.DB, sessionID string) ([]core.Message, error) {
 // the transaction that captured a paired context-surface snapshot.
 func LoadConversationFrom(queryer interface {
 	Query(string, ...any) (*sql.Rows, error)
-}, sessionID string) ([]core.Message, error) {
+}, sessionID string) ([]Message, error) {
 	return loadConversationQueryer(queryer, sessionID)
 }
 
@@ -234,18 +232,18 @@ type conversationQueryer interface {
 
 // loadConversationQueryer reconstructs messages through either a database handle
 // or the transaction that captured the paired Context Surface snapshot.
-func loadConversationQueryer(db conversationQueryer, sessionID string) ([]core.Message, error) {
+func loadConversationQueryer(db conversationQueryer, sessionID string) ([]Message, error) {
 	rows, err := db.Query(`
 		SELECT seq, role, content, reasoning_content, tool_call_id, tool_name, tool_arguments_json
 		FROM conversation_messages WHERE session_id = ? ORDER BY seq`, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("read conversation: %w", err)
 	}
-	messages := make([]core.Message, 0)
+	messages := make([]Message, 0)
 	messageIndexes := make(map[int]int)
 	for rows.Next() {
 		var sequence int
-		var message core.Message
+		var message Message
 		var argumentsJSON sql.NullString
 		if err := rows.Scan(&sequence, &message.Role, &message.Content, &message.ReasoningContent, &message.ToolCallID, &message.ToolName, &argumentsJSON); err != nil {
 			return nil, fmt.Errorf("read conversation message: %w", err)
@@ -275,7 +273,7 @@ func loadConversationQueryer(db conversationQueryer, sessionID string) ([]core.M
 	defer rows.Close()
 	for rows.Next() {
 		var sequence int
-		var call core.ToolCall
+		var call ToolCall
 		var argumentsJSON sql.NullString
 		if err := rows.Scan(&sequence, &call.ID, &call.Name, &argumentsJSON, &call.RawArguments); err != nil {
 			return nil, fmt.Errorf("read conversation tool call: %w", err)

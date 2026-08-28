@@ -1,4 +1,30 @@
-package core
+package session
+
+// ToolCall is a model-requested tool invocation.
+type ToolCall struct {
+	ID           string         `json:"id,omitempty"`
+	Name         string         `json:"name"`
+	Arguments    map[string]any `json:"arguments,omitempty"`
+	RawArguments string         `json:"raw_arguments,omitempty"`
+}
+
+// Message is one model-visible conversation message.
+type Message struct {
+	Role             string         `json:"role"`
+	Content          string         `json:"content,omitempty"`
+	ReasoningContent string         `json:"reasoning_content,omitempty"`
+	ToolCallID       string         `json:"tool_call_id,omitempty"`
+	ToolName         string         `json:"tool_name,omitempty"`
+	ToolArguments    map[string]any `json:"tool_arguments,omitempty"`
+	ToolCalls        []ToolCall     `json:"tool_calls,omitempty"`
+}
+
+const (
+	RoleSystem    = "system"
+	RoleUser      = "user"
+	RoleAssistant = "assistant"
+	RoleTool      = "tool"
+)
 
 // CloneMessage returns an independent copy of a model message and its JSON-like
 // tool arguments.

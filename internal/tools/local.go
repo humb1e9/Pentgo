@@ -8,15 +8,13 @@ import (
 	"sort"
 	"strings"
 	"sync"
-
-	"pentgo/internal/core"
 )
 
 // LocalRegistry exposes user-configured local CLI tools through the same
-// core.Tool abstraction used by external MCP clients. It does not inspect,
+// Tool abstraction used by external MCP clients. It does not inspect,
 // resolve, or identity-check commands: users own their command configuration.
 type LocalRegistry struct {
-	tools []core.Tool
+	tools []Tool
 }
 
 // NewLocalRegistry registers every entry in configurations. Registration is
@@ -32,7 +30,7 @@ func NewLocalRegistry(configurations LocalTools, maximumOutputBytes int) *LocalR
 	}
 	sort.Strings(names)
 
-	registry := &LocalRegistry{tools: make([]core.Tool, 0, len(names))}
+	registry := &LocalRegistry{tools: make([]Tool, 0, len(names))}
 	for _, name := range names {
 		configuration := configurations[name]
 		description := strings.TrimSpace(configuration.Description)
@@ -45,11 +43,11 @@ func NewLocalRegistry(configurations LocalTools, maximumOutputBytes int) *LocalR
 }
 
 // Tools returns a defensive copy of the configured local tools.
-func (registry *LocalRegistry) Tools(context.Context) ([]core.Tool, error) {
+func (registry *LocalRegistry) Tools(context.Context) ([]Tool, error) {
 	if registry == nil {
 		return nil, nil
 	}
-	return append([]core.Tool(nil), registry.tools...), nil
+	return append([]Tool(nil), registry.tools...), nil
 }
 
 type localTool struct {
@@ -164,6 +162,6 @@ func (buffer *boundedBuffer) String() string {
 	return value
 }
 
-var _ core.ToolProvider = (*LocalRegistry)(nil)
-var _ core.Tool = (*localTool)(nil)
-var _ core.ToolSchemaProvider = (*localTool)(nil)
+var _ Provider = (*LocalRegistry)(nil)
+var _ Tool = (*localTool)(nil)
+var _ ToolSchemaProvider = (*localTool)(nil)

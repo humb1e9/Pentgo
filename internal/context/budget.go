@@ -6,7 +6,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"pentgo/internal/core"
+	"pentgo/internal/session"
+	"pentgo/internal/tools"
 )
 
 const (
@@ -27,7 +28,7 @@ func EstimateTextTokens(value string) int {
 	return nonASCIITokens + (asciiRunes+estimatedCharactersPerToken-1)/estimatedCharactersPerToken
 }
 
-func EstimateMessageTokens(messages []core.Message) int {
+func EstimateMessageTokens(messages []session.Message) int {
 	total := 0
 	for _, message := range messages {
 		parts := []string{message.Role, message.Content, message.ReasoningContent, message.ToolCallID, message.ToolName}
@@ -40,14 +41,14 @@ func EstimateMessageTokens(messages []core.Message) int {
 	return total
 }
 
-func EstimateToolTokens(tools []core.Tool) int {
+func EstimateToolTokens(projectTools []tools.Tool) int {
 	total := 0
-	for _, projectTool := range tools {
+	for _, projectTool := range projectTools {
 		if projectTool == nil {
 			continue
 		}
 		schema := map[string]any{"name": projectTool.Name(), "description": projectTool.Description(), "parameters": map[string]any{"type": "object"}}
-		if provider, ok := projectTool.(core.ToolSchemaProvider); ok && provider.InputSchema() != nil {
+		if provider, ok := projectTool.(tools.ToolSchemaProvider); ok && provider.InputSchema() != nil {
 			schema["parameters"] = provider.InputSchema()
 		}
 		encoded, err := json.Marshal(schema)

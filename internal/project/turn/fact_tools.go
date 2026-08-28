@@ -7,8 +7,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"pentgo/internal/core"
 	projectmodel "pentgo/internal/project"
+	"pentgo/internal/tools"
 )
 
 // upsertProjectFactTool creates or replaces one project fact. It only decodes
@@ -131,8 +131,8 @@ func (tool *listProjectFactsTool) Invoke(ctx context.Context, arguments map[stri
 	return RenderProjectFactIndex(facts), nil
 }
 
-func NewProjectFactTools(facts *ProjectFactLedger) []core.Tool {
-	return []core.Tool{
+func NewProjectFactTools(facts *ProjectFactLedger) []tools.Tool {
+	return []tools.Tool{
 		&upsertProjectFactTool{facts: facts},
 		&getProjectFactTool{facts: facts},
 		&listProjectFactsTool{facts: facts},

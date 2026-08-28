@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"pentgo/internal/session"
 
-	"pentgo/internal/core"
 	projectturn "pentgo/internal/project/turn"
 	sessionstate "pentgo/internal/session"
 
@@ -23,8 +23,8 @@ type EventBridge struct {
 
 	persistedCalls   map[string]struct{}
 	persistedResults map[string]struct{}
-	pendingCalls     []core.ToolCall
-	pendingResults   map[string]core.Message
+	pendingCalls     []session.ToolCall
+	pendingResults   map[string]session.Message
 }
 
 // NewEventBridge creates a bridge for one running turn. The caller remains
@@ -41,7 +41,7 @@ func NewEventBridge(conversation *sessionstate.ConversationStore, sessionID, tur
 				persistedCalls[call.ID] = struct{}{}
 			}
 		}
-		if message.Role == core.RoleTool && message.ToolCallID != "" {
+		if message.Role == session.RoleTool && message.ToolCallID != "" {
 			persistedResults[message.ToolCallID] = struct{}{}
 		}
 	}
@@ -52,7 +52,7 @@ func NewEventBridge(conversation *sessionstate.ConversationStore, sessionID, tur
 		emit:             emit,
 		persistedCalls:   persistedCalls,
 		persistedResults: persistedResults,
-		pendingResults:   make(map[string]core.Message),
+		pendingResults:   make(map[string]session.Message),
 	}, nil
 }
 
@@ -156,9 +156,9 @@ func (bridge *EventBridge) message(event *adk.AgentEvent) (*schema.Message, sche
 	return message, role, nil
 }
 
-func (bridge *EventBridge) assistant(message core.Message) error {
+func (bridge *EventBridge) assistant(message session.Message) error {
 	if message.Role == "" {
-		message.Role = core.RoleAssistant
+		message.Role = session.RoleAssistant
 	}
 	if len(message.ToolCalls) == 0 {
 		if err := bridge.flushResults(); err != nil {
@@ -195,7 +195,7 @@ func (bridge *EventBridge) assistant(message core.Message) error {
 	return nil
 }
 
-func (bridge *EventBridge) tool(message core.Message) error {
+func (bridge *EventBridge) tool(message session.Message) error {
 	if message.ToolCallID == "" {
 		return fmt.Errorf("tool result ID is empty")
 	}
@@ -205,7 +205,7 @@ func (bridge *EventBridge) tool(message core.Message) error {
 	if !bridge.awaiting(message.ToolCallID) {
 		return fmt.Errorf("tool result %q has no pending tool call", message.ToolCallID)
 	}
-	message.Role = core.RoleTool
+	message.Role = session.RoleTool
 	bridge.persistedResults[message.ToolCallID] = struct{}{}
 	bridge.pendingResults[message.ToolCallID] = message
 	return bridge.flushResults()
@@ -224,7 +224,7 @@ func (bridge *EventBridge) flushResults() error {
 	if len(bridge.pendingCalls) == 0 || len(bridge.pendingResults) != len(bridge.pendingCalls) {
 		return nil
 	}
-	messages := make([]core.Message, 0, len(bridge.pendingCalls))
+	messages := make([]session.Message, 0, len(bridge.pendingCalls))
 	for _, call := range bridge.pendingCalls {
 		message := bridge.pendingResults[call.ID]
 		if message.ToolName == "" {
@@ -239,7 +239,7 @@ func (bridge *EventBridge) flushResults() error {
 		bridge.emitEvent(projectturn.Event{Kind: projectturn.EventToolFinished, Message: message.ToolName, Output: message.Content, Data: message})
 	}
 	bridge.pendingCalls = nil
-	bridge.pendingResults = make(map[string]core.Message)
+	bridge.pendingResults = make(map[string]session.Message)
 	return nil
 }
 

@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	sessionstate "pentgo/internal/session"
 
-	"pentgo/internal/core"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // RuntimeTerminal 持有终端输入输出和程序生命周期，terminalModel 仅持有 Bubble Tea 显示状态。
@@ -157,9 +157,9 @@ func (terminal *RuntimeTerminal) selectResumeSession() (string, error) {
 	return "", fmt.Errorf("未找到会话 %q", choice)
 }
 
-func hasVisibleHistory(messages []core.Message) bool {
+func hasVisibleHistory(messages []sessionstate.Message) bool {
 	for _, message := range messages {
-		if message.Role != core.RoleSystem {
+		if message.Role != sessionstate.RoleSystem {
 			return true
 		}
 	}

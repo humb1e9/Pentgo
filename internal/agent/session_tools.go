@@ -3,8 +3,8 @@ package agent
 import (
 	"context"
 	"fmt"
+	"pentgo/internal/tools"
 
-	"pentgo/internal/core"
 	projectturn "pentgo/internal/project/turn"
 	sessionstate "pentgo/internal/session"
 	builtins "pentgo/internal/tools"
@@ -14,16 +14,16 @@ import (
 type runtimeToolProvider struct {
 	runtime      *ProjectRuntime
 	session      *sessionstate.Session
-	projectTools []core.Tool
+	projectTools []tools.Tool
 }
 
-func newRuntimeToolProvider(runtime *ProjectRuntime, session *sessionstate.Session, projectTools []core.Tool) *runtimeToolProvider {
-	return &runtimeToolProvider{runtime: runtime, session: session, projectTools: append([]core.Tool(nil), projectTools...)}
+func newRuntimeToolProvider(runtime *ProjectRuntime, session *sessionstate.Session, projectTools []tools.Tool) *runtimeToolProvider {
+	return &runtimeToolProvider{runtime: runtime, session: session, projectTools: append([]tools.Tool(nil), projectTools...)}
 }
 
 // Tools combines session built-ins, host-owned project-fact tools, and
 // project LocalRegistry / external MCP tools without allowing name shadowing.
-func (provider *runtimeToolProvider) Tools(context.Context) ([]core.Tool, error) {
+func (provider *runtimeToolProvider) Tools(context.Context) ([]tools.Tool, error) {
 	if provider == nil || provider.runtime == nil || provider.session == nil {
 		return nil, fmt.Errorf("runtime tool provider is incomplete")
 	}
@@ -50,6 +50,6 @@ func (provider *runtimeToolProvider) Tools(context.Context) ([]core.Tool, error)
 	return tools, nil
 }
 
-func newProjectFactTools(facts *projectturn.ProjectFactLedger) []core.Tool {
+func newProjectFactTools(facts *projectturn.ProjectFactLedger) []tools.Tool {
 	return projectturn.NewProjectFactTools(facts)
 }

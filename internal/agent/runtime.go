@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"pentgo/internal/tools"
 	"strings"
 	"sync"
 	"time"
 
-	"pentgo/internal/core"
 	"pentgo/internal/evidence"
 	projectmodel "pentgo/internal/project"
 	"pentgo/internal/project/turn"
@@ -29,7 +29,7 @@ type ProjectRuntime struct {
 	factIndex *turn.ProjectFactIndex
 	journal   *evidence.EvidenceStore
 	workspace *builtins.Workspace
-	tools     core.ToolProvider
+	tools     tools.Provider
 	turn      sessionstate.TurnFunc
 	pause     func(string) bool
 	sessions  map[string]*sessionRuntime
@@ -48,23 +48,23 @@ type sessionRuntime struct {
 
 // OpenProjectRuntime 加载项目状态并打开工作区和证据 journal。调用方必须先设置
 // turn handler，之后才能打开会话。
-func OpenProjectRuntime(ctx context.Context, store *storage.ProjectStore, tools core.ToolProvider) (*ProjectRuntime, error) {
-	return openProjectRuntime(ctx, store, tools)
+func OpenProjectRuntime(ctx context.Context, store *storage.ProjectStore, portsTools tools.Provider) (*ProjectRuntime, error) {
+	return openProjectRuntime(ctx, store, portsTools)
 }
 
 // OpenProjectRuntimeWithSecrets 额外在该运行时写入的证据中脱敏传入的敏感值。
-func OpenProjectRuntimeWithSecrets(ctx context.Context, store *storage.ProjectStore, tools core.ToolProvider, secrets ...string) (*ProjectRuntime, error) {
-	return openProjectRuntimeWithSecrets(ctx, store, tools, secrets...)
+func OpenProjectRuntimeWithSecrets(ctx context.Context, store *storage.ProjectStore, portsTools tools.Provider, secrets ...string) (*ProjectRuntime, error) {
+	return openProjectRuntimeWithSecrets(ctx, store, portsTools, secrets...)
 }
 
 // openProjectRuntime 保留供内部调用的非脱敏构造函数。
-func openProjectRuntime(ctx context.Context, store *storage.ProjectStore, tools core.ToolProvider) (*ProjectRuntime, error) {
-	return openProjectRuntimeWithSecrets(ctx, store, tools)
+func openProjectRuntime(ctx context.Context, store *storage.ProjectStore, portsTools tools.Provider) (*ProjectRuntime, error) {
+	return openProjectRuntimeWithSecrets(ctx, store, portsTools)
 }
 
 // openProjectRuntimeWithSecrets 按 Close 的逆序创建项目资源，
 // 从而在部分初始化失败时能够正确释放已打开的资源。
-func openProjectRuntimeWithSecrets(ctx context.Context, store *storage.ProjectStore, tools core.ToolProvider, secrets ...string) (*ProjectRuntime, error) {
+func openProjectRuntimeWithSecrets(ctx context.Context, store *storage.ProjectStore, portsTools tools.Provider, secrets ...string) (*ProjectRuntime, error) {
 	if store == nil {
 		return nil, fmt.Errorf("project store is nil")
 	}
@@ -98,7 +98,7 @@ func openProjectRuntimeWithSecrets(ctx context.Context, store *storage.ProjectSt
 		factIndex: factIndex,
 		journal:   journal,
 		workspace: workspace,
-		tools:     tools,
+		tools:     portsTools,
 		sessions:  make(map[string]*sessionRuntime),
 		ctx:       runtimeContext,
 		cancel:    cancel,
@@ -108,7 +108,7 @@ func openProjectRuntimeWithSecrets(ctx context.Context, store *storage.ProjectSt
 
 // SetToolProvider 必须在任一会话打开前安装项目级外部工具，
 // 确保恢复会话和新建会话看到稳定的 Provider。
-func (runtime *ProjectRuntime) SetToolProvider(tools core.ToolProvider) error {
+func (runtime *ProjectRuntime) SetToolProvider(portsTools tools.Provider) error {
 	if runtime == nil {
 		return fmt.Errorf("project runtime is nil")
 	}
@@ -122,7 +122,7 @@ func (runtime *ProjectRuntime) SetToolProvider(tools core.ToolProvider) error {
 	if len(runtime.sessions) != 0 {
 		return fmt.Errorf("project tools must be configured before sessions open")
 	}
-	runtime.tools = tools
+	runtime.tools = portsTools
 	return nil
 }
 
@@ -560,7 +560,7 @@ func (runtime *ProjectRuntime) Workspace() *builtins.Workspace {
 }
 
 // Tools 从已配置的项目 Provider 解析外部工具。
-func (runtime *ProjectRuntime) Tools(ctx context.Context) ([]core.Tool, error) {
+func (runtime *ProjectRuntime) Tools(ctx context.Context) ([]tools.Tool, error) {
 	if runtime == nil || runtime.tools == nil {
 		return nil, nil
 	}
@@ -648,7 +648,7 @@ func (runtime *ProjectRuntime) Close() error {
 			closeErr = err
 		}
 	}
-	if closer, ok := runtime.tools.(core.ToolCloser); ok {
+	if closer, ok := runtime.tools.(tools.Closer); ok {
 		if err := closer.Close(); closeErr == nil && err != nil {
 			closeErr = err
 		}

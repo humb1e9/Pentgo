@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/cloudwego/eino/adk/filesystem"
-	"pentgo/internal/core"
 )
 
 const workspaceToolOutputLimit = 64 * 1024
@@ -15,8 +14,8 @@ const workspaceToolOutputLimit = 64 * 1024
 // NewTools returns the deterministic set of host-callable workspace actions.
 // A nil workspace produces wrappers that return validation errors rather than
 // panicking; callers can still inspect their stable names and schemas.
-func NewTools(workspace *Workspace) []core.Tool {
-	return []core.Tool{
+func NewTools(workspace *Workspace) []Tool {
+	return []Tool{
 		&workspaceTool{workspace: workspace, name: "ls", description: "List files and directories. Absolute and workspace-relative paths are accepted.", schema: objectSchema(map[string]any{"path": stringProperty("Absolute or workspace-relative directory path")}), invoke: invokeLS},
 		&workspaceTool{workspace: workspace, name: "read_file", description: "Read text from a file. Absolute and workspace-relative paths are accepted.", schema: objectSchema(map[string]any{"file_path": stringProperty("Absolute or workspace-relative file path"), "offset": integerProperty("1-based starting line"), "limit": integerProperty("Maximum number of lines; zero means all")}, "file_path"), invoke: invokeRead},
 		&workspaceTool{workspace: workspace, name: "write_file", description: "Write text to a file. Absolute and workspace-relative paths are accepted.", schema: objectSchema(map[string]any{"file_path": stringProperty("Absolute or workspace-relative file path"), "content": stringProperty("Complete file content")}, "file_path", "content"), invoke: invokeWrite},

@@ -15,7 +15,6 @@ import (
 	"sync"
 	"unicode/utf8"
 
-	"pentgo/internal/core"
 	"pentgo/internal/evidence"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -28,7 +27,7 @@ var toolNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 // Client 持有一个已初始化的 MCP 客户端会话及其发现的工具。
 type Client struct {
 	session        *sdk.ClientSession
-	tools          []core.Tool
+	tools          []Tool
 	maxOutputBytes int
 	closeOnce      sync.Once
 	closeErr       error
@@ -46,7 +45,7 @@ type mcpTool struct {
 // Clients 持有一个项目运行时配置的全部 MCP 连接，并聚合每个具名连接。
 type Clients struct {
 	clients   map[string]*Client
-	tools     []core.Tool
+	tools     []Tool
 	closeOnce sync.Once
 	closeErr  error
 }
@@ -277,11 +276,11 @@ func (transport headerTransport) RoundTrip(request *http.Request) (*http.Respons
 }
 
 // Tools 返回 MCP 初始化期间发现的工具副本。
-func (client *Client) Tools(context.Context) ([]core.Tool, error) {
+func (client *Client) Tools(context.Context) ([]Tool, error) {
 	if client == nil {
 		return nil, fmt.Errorf("MCP client is nil")
 	}
-	return append([]core.Tool(nil), client.tools...), nil
+	return append([]Tool(nil), client.tools...), nil
 }
 
 // Close 仅释放一次 MCP 会话。
@@ -298,11 +297,11 @@ func (client *Client) Close() error {
 }
 
 // Tools 返回 ConnectAll 校验全局唯一性后的聚合工具副本。
-func (clients *Clients) Tools(context.Context) ([]core.Tool, error) {
+func (clients *Clients) Tools(context.Context) ([]Tool, error) {
 	if clients == nil {
 		return nil, fmt.Errorf("MCP clients are nil")
 	}
-	return append([]core.Tool(nil), clients.tools...), nil
+	return append([]Tool(nil), clients.tools...), nil
 }
 
 // Close 仅释放一次全部具名客户端，并返回首个关闭错误。
@@ -440,9 +439,9 @@ func mergeEnv(inherited []string, overrides map[string]string) []string {
 	return result
 }
 
-var _ core.ToolProvider = (*Client)(nil)
-var _ core.ToolCloser = (*Client)(nil)
-var _ core.ToolProvider = (*Clients)(nil)
-var _ core.ToolCloser = (*Clients)(nil)
-var _ core.Tool = (*mcpTool)(nil)
-var _ core.ToolSchemaProvider = (*mcpTool)(nil)
+var _ Provider = (*Client)(nil)
+var _ Closer = (*Client)(nil)
+var _ Provider = (*Clients)(nil)
+var _ Closer = (*Clients)(nil)
+var _ Tool = (*mcpTool)(nil)
+var _ ToolSchemaProvider = (*mcpTool)(nil)

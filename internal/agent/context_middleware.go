@@ -3,20 +3,21 @@ package agent
 import (
 	"context"
 	"fmt"
+	contextpolicy "pentgo/internal/context"
+	"pentgo/internal/session"
+	"pentgo/internal/tools"
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/tool"
-
-	"pentgo/internal/core"
 )
 
 // ContextMiddlewareConfig contains the per-run context dependencies.
 type ContextMiddlewareConfig struct {
 	SessionID    string
-	Window       *ContextWindow
-	Conversation func() []core.Message
-	ToolProvider core.ToolProvider
-	BuildTools   func(context.Context) ([]core.Tool, error)
+	Window       *contextpolicy.ContextWindow
+	Conversation func() []session.Message
+	ToolProvider tools.Provider
+	BuildTools   func(context.Context) ([]tools.Tool, error)
 	Facts        func(context.Context) (string, error)
 }
 
@@ -48,7 +49,7 @@ func (middleware *ContextMiddleware) BeforeAgent(ctx context.Context, runCtx *ad
 		if projectTool == nil {
 			return ctx, runCtx, fmt.Errorf("agent context tool is nil")
 		}
-		adapter, err := newCoreToolAdapter(projectTool)
+		adapter, err := newEinoToolAdapter(projectTool)
 		if err != nil {
 			return ctx, runCtx, err
 		}
@@ -80,7 +81,7 @@ func (middleware *ContextMiddleware) BeforeModelRewriteState(ctx context.Context
 	return ctx, state, nil
 }
 
-func (middleware *ContextMiddleware) resolveTools(ctx context.Context) ([]core.Tool, error) {
+func (middleware *ContextMiddleware) resolveTools(ctx context.Context) ([]tools.Tool, error) {
 	if middleware.config.BuildTools != nil {
 		return middleware.config.BuildTools(ctx)
 	}

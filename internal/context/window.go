@@ -7,14 +7,14 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"pentgo/internal/core"
 	"pentgo/internal/project"
+	"pentgo/internal/session"
 )
 
 // SummaryInput is the text-only request used to update a rolling context summary.
 type SummaryInput struct {
 	PriorSummary string
-	Messages     []core.Message
+	Messages     []session.Message
 	MaxTokens    int
 }
 
@@ -45,7 +45,7 @@ func NewContextWindow(store SummaryStore, cfg project.ContextConfig, summarizer 
 	return &ContextWindow{store: store, contextWindow: cfg.ContextWindow, fixedTokens: fixedTokens, recentMessages: cfg.RecentMessages, summaryTokens: cfg.SummaryMaxTokens, summarizer: summarizer, now: time.Now}
 }
 
-func (window *ContextWindow) Messages(ctx stdcontext.Context, sessionID string, conversation []core.Message, facts string) ([]core.Message, error) {
+func (window *ContextWindow) Messages(ctx stdcontext.Context, sessionID string, conversation []session.Message, facts string) ([]session.Message, error) {
 	if window == nil || window.store == nil {
 		return nil, fmt.Errorf("context window dependencies are incomplete")
 	}
@@ -65,9 +65,9 @@ func (window *ContextWindow) Messages(ctx stdcontext.Context, sessionID string, 
 	}
 	fixedTokens := window.fixedTokens
 	if strings.TrimSpace(facts) != "" {
-		fixedTokens += EstimateMessageTokens([]core.Message{{Role: core.RoleSystem, Content: "Project facts:\n" + strings.TrimSpace(facts)}})
+		fixedTokens += EstimateMessageTokens([]session.Message{{Role: session.RoleSystem, Content: "Project facts:\n" + strings.TrimSpace(facts)}})
 	}
-	summaryReserve := EstimateMessageTokens([]core.Message{{Role: core.RoleSystem, Content: "Conversation summary:\n"}}) + window.summaryTokens
+	summaryReserve := EstimateMessageTokens([]session.Message{{Role: session.RoleSystem, Content: "Conversation summary:\n"}}) + window.summaryTokens
 	if fixedTokens+summaryReserve >= window.contextWindow {
 		return nil, fmt.Errorf("fixed model context exceeds configured context_window")
 	}
@@ -108,12 +108,12 @@ func (window *ContextWindow) Messages(ctx stdcontext.Context, sessionID string, 
 		}
 		found = true
 	}
-	messages := make([]core.Message, 0, len(conversation)-keepFrom+2)
+	messages := make([]session.Message, 0, len(conversation)-keepFrom+2)
 	if strings.TrimSpace(facts) != "" {
-		messages = append(messages, core.Message{Role: core.RoleSystem, Content: "Project facts:\n" + strings.TrimSpace(facts)})
+		messages = append(messages, session.Message{Role: session.RoleSystem, Content: "Project facts:\n" + strings.TrimSpace(facts)})
 	}
 	if found && strings.TrimSpace(summary.Content) != "" {
-		messages = append(messages, core.Message{Role: core.RoleSystem, Content: "Conversation summary:\n" + strings.TrimSpace(summary.Content)})
+		messages = append(messages, session.Message{Role: session.RoleSystem, Content: "Conversation summary:\n" + strings.TrimSpace(summary.Content)})
 	}
 	messages = append(messages, cloneMessages(conversation[keepFrom:])...)
 	if window.fixedTokens+EstimateMessageTokens(messages) > window.contextWindow {
@@ -162,28 +162,28 @@ func truncateSummaryTokens(value string, limit int) string {
 	return string(runes[:low])
 }
 
-func toolSafeBoundary(messages []core.Message, index int) int {
-	for index > 0 && index < len(messages) && messages[index].Role == core.RoleTool {
+func toolSafeBoundary(messages []session.Message, index int) int {
+	for index > 0 && index < len(messages) && messages[index].Role == session.RoleTool {
 		index--
 	}
 	return index
 }
 
-func nextToolSafeBoundary(messages []core.Message, index int) int {
+func nextToolSafeBoundary(messages []session.Message, index int) int {
 	if index >= len(messages) {
 		return index
 	}
 	index++
-	for index < len(messages) && messages[index].Role == core.RoleTool {
+	for index < len(messages) && messages[index].Role == session.RoleTool {
 		index++
 	}
 	return index
 }
 
-func cloneMessages(messages []core.Message) []core.Message {
-	cloned := make([]core.Message, 0, len(messages))
+func cloneMessages(messages []session.Message) []session.Message {
+	cloned := make([]session.Message, 0, len(messages))
 	for _, message := range messages {
-		cloned = append(cloned, core.CloneMessage(message))
+		cloned = append(cloned, session.CloneMessage(message))
 	}
 	return cloned
 }

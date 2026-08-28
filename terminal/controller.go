@@ -3,7 +3,6 @@ package terminal
 import (
 	"context"
 
-	"pentgo/internal/core"
 	projectmodel "pentgo/internal/project"
 	sessionstate "pentgo/internal/session"
 	"pentgo/internal/tools"
@@ -20,7 +19,7 @@ type Controller interface {
 	DeleteSession(string) error
 	CurrentProject() (*projectmodel.Project, bool)
 	Sessions() []*sessionstate.Session
-	Messages(string) []core.Message
+	Messages(string) []sessionstate.Message
 	Events(string) <-chan sessionstate.Event
 	SkillDiagnostics() []tools.Diagnostic
 	PauseSession(string) error

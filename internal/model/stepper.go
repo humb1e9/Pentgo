@@ -9,11 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"pentgo/internal/core"
+	"pentgo/internal/session"
+	"pentgo/internal/tools"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	einoopenai "github.com/cloudwego/eino-ext/components/model/openai"
-	"github.com/cloudwego/eino/components/model"
+	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 	einojsonschema "github.com/eino-contrib/jsonschema"
 )
@@ -24,25 +25,25 @@ const modelStreamRetries = 2
 // It has no conversation, tool-execution, or session state: the host assembles a
 // request, persists the complete response, and executes requested tools.
 type Engine struct {
-	model model.ToolCallingChatModel
-	tools []core.Tool
+	model einomodel.ToolCallingChatModel
+	tools []tools.Tool
 }
 
 // NewEngine validates the default model-visible tools and saves only immutable
 // adapter dependencies. Callers may replace the default tools per StreamStep.
-func NewEngine(_ context.Context, chatModel model.ToolCallingChatModel, tools []core.Tool) (*Engine, error) {
+func NewEngine(_ context.Context, chatModel einomodel.ToolCallingChatModel, portsTools []tools.Tool) (*Engine, error) {
 	if chatModel == nil {
 		return nil, fmt.Errorf("eino chat model is nil")
 	}
-	if err := validateTools(tools); err != nil {
+	if err := validateTools(portsTools); err != nil {
 		return nil, err
 	}
-	return &Engine{model: chatModel, tools: append([]core.Tool(nil), tools...)}, nil
+	return &Engine{model: chatModel, tools: append([]tools.Tool(nil), portsTools...)}, nil
 }
 
 // StreamStep makes one streamed model request. It binds tool schemas but never
 // exposes invokable tools to Eino, so no tool can run inside this adapter.
-func (engine *Engine) StreamStep(ctx context.Context, input core.ModelStepInput) (<-chan core.ModelStreamEvent, error) {
+func (engine *Engine) StreamStep(ctx context.Context, input StepInput) (<-chan StreamEvent, error) {
 	if engine == nil || engine.model == nil {
 		return nil, fmt.Errorf("eino engine is nil")
 	}
@@ -50,7 +51,7 @@ func (engine *Engine) StreamStep(ctx context.Context, input core.ModelStepInput)
 		ctx = context.Background()
 	}
 
-	tools := append([]core.Tool(nil), engine.tools...)
+	tools := append([]tools.Tool(nil), engine.tools...)
 	if input.Tools != nil {
 		tools = input.Tools
 	}
@@ -69,9 +70,9 @@ func (engine *Engine) StreamStep(ctx context.Context, input core.ModelStepInput)
 		}
 	}
 
-	options := make([]model.Option, 0, 1)
+	options := make([]einomodel.Option, 0, 1)
 	if input.MaxOutputTokens > 0 {
-		options = append(options, model.WithMaxTokens(input.MaxOutputTokens))
+		options = append(options, einomodel.WithMaxTokens(input.MaxOutputTokens))
 	}
 	messages := providerMessages(SystemPrompt(input.SystemPrompt, input.ProjectFacts), input.Messages)
 	reader, err := bound.Stream(ctx, messages, options...)
@@ -81,7 +82,7 @@ func (engine *Engine) StreamStep(ctx context.Context, input core.ModelStepInput)
 	if reader == nil {
 		return nil, fmt.Errorf("model returned nil stream reader")
 	}
-	output := make(chan core.ModelStreamEvent, 16)
+	output := make(chan StreamEvent, 16)
 	go func() {
 		defer close(output)
 		for attempt := 0; attempt <= modelStreamRetries; attempt++ {
@@ -89,11 +90,11 @@ func (engine *Engine) StreamStep(ctx context.Context, input core.ModelStepInput)
 				var streamErr error
 				reader, streamErr = bound.Stream(ctx, messages, options...)
 				if streamErr != nil {
-					sendStreamEvent(ctx, output, core.ModelStreamEvent{Err: normalizeContextWindowError(streamErr)})
+					sendStreamEvent(ctx, output, StreamEvent{Err: normalizeContextWindowError(streamErr)})
 					return
 				}
 				if reader == nil {
-					sendStreamEvent(ctx, output, core.ModelStreamEvent{Err: fmt.Errorf("model returned nil stream reader")})
+					sendStreamEvent(ctx, output, StreamEvent{Err: fmt.Errorf("model returned nil stream reader")})
 					return
 				}
 			}
@@ -107,14 +108,14 @@ func (engine *Engine) StreamStep(ctx context.Context, input core.ModelStepInput)
 				}
 				if recvErr != nil || chunk == nil {
 					if recvErr != nil && (len(chunks) != 0 || !errors.Is(recvErr, io.EOF)) {
-						sendStreamEvent(ctx, output, core.ModelStreamEvent{Err: normalizeContextWindowError(recvErr)})
+						sendStreamEvent(ctx, output, StreamEvent{Err: normalizeContextWindowError(recvErr)})
 						reader.Close()
 						return
 					}
 					continue
 				}
 				chunks = append(chunks, chunk)
-				if !sendStreamEvent(ctx, output, core.ModelStreamEvent{Delta: fromSchemaMessage(chunk)}) {
+				if !sendStreamEvent(ctx, output, StreamEvent{Delta: fromSchemaMessage(chunk)}) {
 					reader.Close()
 					return
 				}
@@ -127,16 +128,16 @@ func (engine *Engine) StreamStep(ctx context.Context, input core.ModelStepInput)
 				continue
 			}
 			if len(chunks) == 0 {
-				sendStreamEvent(ctx, output, core.ModelStreamEvent{Err: fmt.Errorf("model stream ended without a message")})
+				sendStreamEvent(ctx, output, StreamEvent{Err: fmt.Errorf("model stream ended without a message")})
 				return
 			}
 			complete, concatErr := schema.ConcatMessages(chunks)
 			if concatErr != nil {
-				sendStreamEvent(ctx, output, core.ModelStreamEvent{Err: concatErr})
+				sendStreamEvent(ctx, output, StreamEvent{Err: concatErr})
 				return
 			}
 			if complete == nil {
-				sendStreamEvent(ctx, output, core.ModelStreamEvent{Err: fmt.Errorf("model stream concatenated to nil message")})
+				sendStreamEvent(ctx, output, StreamEvent{Err: fmt.Errorf("model stream concatenated to nil message")})
 				return
 			}
 			final := fromSchemaMessage(complete)
@@ -144,7 +145,7 @@ func (engine *Engine) StreamStep(ctx context.Context, input core.ModelStepInput)
 			if complete.ResponseMeta != nil {
 				finishReason = complete.ResponseMeta.FinishReason
 			}
-			sendStreamEvent(ctx, output, core.ModelStreamEvent{Final: &final, FinishReason: finishReason})
+			sendStreamEvent(ctx, output, StreamEvent{Final: &final, FinishReason: finishReason})
 			return
 		}
 	}()
@@ -160,7 +161,7 @@ func waitStreamRetry(ctx context.Context, attempt int) bool {
 	}
 }
 
-func sendStreamEvent(ctx context.Context, output chan<- core.ModelStreamEvent, event core.ModelStreamEvent) bool {
+func sendStreamEvent(ctx context.Context, output chan<- StreamEvent, event StreamEvent) bool {
 	select {
 	case output <- event:
 		return true
@@ -173,15 +174,15 @@ func sendStreamEvent(ctx context.Context, output chan<- core.ModelStreamEvent, e
 // overflow codes to the retryable host sentinel. Other provider failures keep
 // their original type and message for diagnostics and normal error handling.
 func normalizeContextWindowError(err error) error {
-	if err == nil || errors.Is(err, core.ErrContextWindowExceeded) {
+	if err == nil || errors.Is(err, ErrContextWindowExceeded) {
 		return err
 	}
 	var apiErr *einoopenai.APIError
 	if errors.As(err, &apiErr) && apiErr != nil && (isContextWindowCode(apiErr.Code) || isContextWindowCode(apiErr.Type)) {
-		return fmt.Errorf("%w: %v", core.ErrContextWindowExceeded, err)
+		return fmt.Errorf("%w: %v", ErrContextWindowExceeded, err)
 	}
 	if isAnthropicContextWindowError(err) {
-		return fmt.Errorf("%w: %v", core.ErrContextWindowExceeded, err)
+		return fmt.Errorf("%w: %v", ErrContextWindowExceeded, err)
 	}
 	return err
 }
@@ -221,7 +222,7 @@ func isContextWindowCode(value any) bool {
 }
 
 // validateTools rejects nil tools and duplicate names before model binding.
-func validateTools(portsTools []core.Tool) error {
+func validateTools(portsTools []tools.Tool) error {
 	seen := make(map[string]bool, len(portsTools))
 	for _, port := range portsTools {
 		if port == nil {
@@ -240,7 +241,7 @@ func validateTools(portsTools []core.Tool) error {
 }
 
 // toolInfos converts provider-neutral tool schemas to Eino model metadata.
-func toolInfos(portsTools []core.Tool) ([]*schema.ToolInfo, error) {
+func toolInfos(portsTools []tools.Tool) ([]*schema.ToolInfo, error) {
 	result := make([]*schema.ToolInfo, 0, len(portsTools))
 	for _, port := range portsTools {
 		info, err := toolInfo(port)
@@ -254,9 +255,9 @@ func toolInfos(portsTools []core.Tool) ([]*schema.ToolInfo, error) {
 
 // toolInfo preserves the provided JSON Schema; ordinary tools use an object
 // schema, ensuring every provider-neutral tool remains model-callable.
-func toolInfo(port core.Tool) (*schema.ToolInfo, error) {
+func toolInfo(port tools.Tool) (*schema.ToolInfo, error) {
 	inputSchema := map[string]any{"type": "object", "properties": map[string]any{}}
-	if provider, ok := port.(core.ToolSchemaProvider); ok && provider.InputSchema() != nil {
+	if provider, ok := port.(tools.ToolSchemaProvider); ok && provider.InputSchema() != nil {
 		inputSchema = provider.InputSchema()
 	}
 	data, err := json.Marshal(inputSchema)
@@ -272,11 +273,11 @@ func toolInfo(port core.Tool) (*schema.ToolInfo, error) {
 
 // providerMessages folds persisted system context into the first provider system
 // message because many OpenAI-compatible APIs only reliably honor one.
-func providerMessages(instruction string, persisted []core.Message) []*schema.Message {
+func providerMessages(instruction string, persisted []session.Message) []*schema.Message {
 	systemParts := []string{instruction}
-	nonSystem := make([]core.Message, 0, len(persisted))
+	nonSystem := make([]session.Message, 0, len(persisted))
 	for _, message := range persisted {
-		if message.Role == core.RoleSystem {
+		if message.Role == session.RoleSystem {
 			if !strings.HasPrefix(message.Content, "<pentgo-skill-catalog ") {
 				systemParts = append(systemParts, message.Content)
 			}
@@ -290,17 +291,17 @@ func providerMessages(instruction string, persisted []core.Message) []*schema.Me
 }
 
 // toSchemaMessages converts persisted non-system messages into one provider request.
-func toSchemaMessages(messages []core.Message) []*schema.Message {
+func toSchemaMessages(messages []session.Message) []*schema.Message {
 	result := make([]*schema.Message, 0, len(messages))
 	for _, message := range messages {
 		switch message.Role {
-		case core.RoleSystem:
+		case session.RoleSystem:
 			result = append(result, schema.SystemMessage(message.Content))
-		case core.RoleUser:
+		case session.RoleUser:
 			result = append(result, schema.UserMessage(message.Content))
-		case core.RoleTool:
+		case session.RoleTool:
 			result = append(result, schema.ToolMessage(message.Content, message.ToolCallID, schema.WithToolName(message.ToolName)))
-		case core.RoleAssistant:
+		case session.RoleAssistant:
 			calls := make([]schema.ToolCall, 0, len(message.ToolCalls))
 			for _, call := range message.ToolCalls {
 				arguments := call.RawArguments
@@ -322,18 +323,18 @@ func toSchemaMessages(messages []core.Message) []*schema.Message {
 
 // fromSchemaMessage preserves tool IDs, raw malformed JSON arguments, and
 // reasoning content so conversation persistence stays faithful to the provider.
-func fromSchemaMessage(message *schema.Message) core.Message {
-	converted := core.Message{Role: string(message.Role), Content: message.Content, ReasoningContent: message.ReasoningContent, ToolCallID: message.ToolCallID, ToolName: message.ToolName}
-	converted.ToolArguments = core.CloneArguments(message.Extra)
+func fromSchemaMessage(message *schema.Message) session.Message {
+	converted := session.Message{Role: string(message.Role), Content: message.Content, ReasoningContent: message.ReasoningContent, ToolCallID: message.ToolCallID, ToolName: message.ToolName}
+	converted.ToolArguments = session.CloneArguments(message.Extra)
 	for _, call := range message.ToolCalls {
 		arguments := make(map[string]any)
 		_ = json.Unmarshal([]byte(call.Function.Arguments), &arguments)
-		converted.ToolCalls = append(converted.ToolCalls, core.ToolCall{ID: call.ID, Name: call.Function.Name, Arguments: arguments, RawArguments: call.Function.Arguments})
+		converted.ToolCalls = append(converted.ToolCalls, session.ToolCall{ID: call.ID, Name: call.Function.Name, Arguments: arguments, RawArguments: call.Function.Arguments})
 	}
 	if converted.Role == "" {
-		converted.Role = core.RoleAssistant
+		converted.Role = session.RoleAssistant
 	}
 	return converted
 }
 
-var _ core.ModelStepper = (*Engine)(nil)
+var _ Stepper = (*Engine)(nil)

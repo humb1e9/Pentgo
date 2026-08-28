@@ -4,28 +4,27 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-
-	"pentgo/internal/core"
+	"pentgo/internal/tools"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 	einjsonschema "github.com/eino-contrib/jsonschema"
 )
 
-type coreToolAdapter struct {
-	tool core.Tool
+type einoToolAdapter struct {
+	tool tools.Tool
 }
 
-func newCoreToolAdapter(inner core.Tool) (tool.InvokableTool, error) {
+func newEinoToolAdapter(inner tools.Tool) (tool.InvokableTool, error) {
 	if inner == nil {
 		return nil, fmt.Errorf("tool is nil")
 	}
-	return &coreToolAdapter{tool: inner}, nil
+	return &einoToolAdapter{tool: inner}, nil
 }
 
-func (adapter *coreToolAdapter) Info(context.Context) (*schema.ToolInfo, error) {
+func (adapter *einoToolAdapter) Info(context.Context) (*schema.ToolInfo, error) {
 	inputSchema := map[string]any{"type": "object", "properties": map[string]any{}}
-	if provider, ok := adapter.tool.(core.ToolSchemaProvider); ok {
+	if provider, ok := adapter.tool.(tools.ToolSchemaProvider); ok {
 		if provided := provider.InputSchema(); provided != nil {
 			inputSchema = provided
 		}
@@ -45,7 +44,7 @@ func (adapter *coreToolAdapter) Info(context.Context) (*schema.ToolInfo, error) 
 	}, nil
 }
 
-func (adapter *coreToolAdapter) InvokableRun(ctx context.Context, argumentsInJSON string, _ ...tool.Option) (string, error) {
+func (adapter *einoToolAdapter) InvokableRun(ctx context.Context, argumentsInJSON string, _ ...tool.Option) (string, error) {
 	var arguments map[string]any
 	if err := json.Unmarshal([]byte(argumentsInJSON), &arguments); err != nil {
 		return "", fmt.Errorf("decode tool arguments: %w", err)
@@ -56,4 +55,4 @@ func (adapter *coreToolAdapter) InvokableRun(ctx context.Context, argumentsInJSO
 	return adapter.tool.Invoke(ctx, arguments)
 }
 
-var _ tool.InvokableTool = (*coreToolAdapter)(nil)
+var _ tool.InvokableTool = (*einoToolAdapter)(nil)

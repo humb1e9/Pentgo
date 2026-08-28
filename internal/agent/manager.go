@@ -14,9 +14,10 @@ import (
 	"sync"
 	"time"
 
-	"pentgo/internal/core"
+	contextpolicy "pentgo/internal/context"
 	llm "pentgo/internal/model"
 	projectmodel "pentgo/internal/project"
+	"pentgo/internal/session"
 	sessionstate "pentgo/internal/session"
 	"pentgo/internal/storage"
 	"pentgo/internal/tools"
@@ -39,7 +40,7 @@ type Dependencies struct {
 	Clock              func() time.Time
 	NewModel           func(context.Context, llm.Config) (einomodel.ToolCallingChatModel, error)
 	SkillsFS           fs.FS
-	DiscoverLocalTools func(tools.LocalTools, int) core.ToolProvider
+	DiscoverLocalTools func(tools.LocalTools, int) tools.Provider
 }
 
 // Manager 负责打开和关闭一个目录的 ProjectRuntime。它是 CLI 使用的门面，
@@ -53,7 +54,7 @@ type Manager struct {
 	store            *storage.ProjectStore
 	runtime          *ProjectRuntime
 	skills           *tools.Registry
-	localTools       core.ToolProvider
+	localTools       tools.Provider
 	skillDiagnostics []tools.Diagnostic
 	skillAvailable   bool
 }
@@ -69,7 +70,7 @@ func NewManager(cfg Config, outputRoot string, deps Dependencies) *Manager {
 		}
 	}
 	if deps.DiscoverLocalTools == nil {
-		deps.DiscoverLocalTools = func(configurations tools.LocalTools, maximumOutputBytes int) core.ToolProvider {
+		deps.DiscoverLocalTools = func(configurations tools.LocalTools, maximumOutputBytes int) tools.Provider {
 			return tools.NewLocalRegistry(configurations, maximumOutputBytes)
 		}
 	}
@@ -225,7 +226,7 @@ func (coordinator *Manager) openStore(ctx context.Context, store *storage.Projec
 		_ = projectRuntime.Close()
 		return err
 	}
-	var externalTools core.ToolProvider
+	var externalTools tools.Provider
 	if len(coordinator.cfg.Tools.MCP) != 0 {
 		mcpClients, connectErr := tools.ConnectAll(ctx, coordinator.cfg.Tools.MCP, projectRuntime.Evidence(), coordinator.cfg.Tools.MaxOutputBytes, store.Root(), store.TmpDir())
 		if connectErr != nil {
@@ -250,7 +251,7 @@ func (coordinator *Manager) openStore(ctx context.Context, store *storage.Projec
 		_ = projectRuntime.Close()
 		return err
 	}
-	summaryWriter := NewModelSummaryWriter(coordinator.deps.NewModel, coordinator.cfg.Model)
+	summaryWriter := contextpolicy.NewModelSummaryWriter(coordinator.deps.NewModel, coordinator.cfg.Model)
 	service := NewTurnService(TurnServiceConfig{
 		NewModel: func(runContext context.Context) (einomodel.ToolCallingChatModel, error) {
 			return coordinator.deps.NewModel(runContext, coordinator.cfg.Model)
@@ -457,7 +458,7 @@ func (coordinator *Manager) Events(sessionID string) <-chan sessionstate.Event {
 }
 
 // Messages 返回有序的持久化 conversation，供 UI 渲染或模型回放。
-func (coordinator *Manager) Messages(sessionID string) []core.Message {
+func (coordinator *Manager) Messages(sessionID string) []session.Message {
 	coordinator.mu.RLock()
 	runtime := coordinator.runtime
 	coordinator.mu.RUnlock()

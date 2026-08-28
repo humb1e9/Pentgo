@@ -15,7 +15,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"pentgo/internal/core"
 	projectmodel "pentgo/internal/project"
 	sessionstate "pentgo/internal/session"
 )
@@ -405,7 +404,7 @@ func (model *terminalModel) renderConversation() {
 	}
 	lines := make([]string, 0)
 	for _, message := range model.coordinator.Messages(model.focused) {
-		if message.Role == core.RoleSystem {
+		if message.Role == sessionstate.RoleSystem {
 			continue
 		}
 		lines = append(lines, renderMessage(message, model.contentWidth(), model.showToolDetails, model.runningTools))
@@ -617,7 +616,7 @@ func (model *terminalModel) loadInputHistory() {
 		return
 	}
 	for _, message := range model.coordinator.Messages(model.focused) {
-		if message.Role != core.RoleUser {
+		if message.Role != sessionstate.RoleUser {
 			continue
 		}
 		value := strings.TrimSpace(message.Content)
@@ -862,16 +861,16 @@ func (model *terminalModel) hasActivity(level activityLevel, value string) bool 
 
 // renderMessage 以角色标题和缩进正文呈现持久化消息，并按详情开关折叠工具内容。
 // runningTools 是可选的临时状态，仅由终端模型传入；纯渲染测试可省略它。
-func renderMessage(message core.Message, width int, showToolDetails bool, runningTools ...map[string]int) string {
+func renderMessage(message sessionstate.Message, width int, showToolDetails bool, runningTools ...map[string]int) string {
 	bodyWidth := max(10, width-2)
 	running := map[string]int(nil)
 	if len(runningTools) != 0 {
 		running = runningTools[0]
 	}
 	switch message.Role {
-	case core.RoleUser:
+	case sessionstate.RoleUser:
 		return renderConversationBlock(userStyle.Render("YOU"), message.Content, bodyWidth, 0, userBodyStyle)
-	case core.RoleAssistant:
+	case sessionstate.RoleAssistant:
 		content := strings.TrimSpace(safeTerminalText(message.Content))
 		parts := make([]string, 0, 2)
 		if len(message.ToolCalls) != 0 {
@@ -884,14 +883,14 @@ func renderMessage(message core.Message, width int, showToolDetails bool, runnin
 			return mutedStyle.Render("PENTGO  ...")
 		}
 		return strings.Join(parts, "\n")
-	case core.RoleTool:
+	case sessionstate.RoleTool:
 		return renderToolResult(message, bodyWidth, showToolDetails)
 	}
 	return mutedStyle.Render(safeTerminalText(message.Content))
 }
 
 // renderToolCalls keeps tool planning scannable, marks only currently running calls, and reveals arguments in detail mode.
-func renderToolCalls(calls []core.ToolCall, width int, showDetails bool, runningTools map[string]int) string {
+func renderToolCalls(calls []sessionstate.ToolCall, width int, showDetails bool, runningTools map[string]int) string {
 	lines := make([]string, 0, len(calls)*2)
 	for _, call := range calls {
 		name := safeTerminalText(call.Name)
@@ -911,7 +910,7 @@ func renderToolCalls(calls []core.ToolCall, width int, showDetails bool, running
 }
 
 // renderToolResult renders a one-line audit summary by default and bounded output in detail mode.
-func renderToolResult(message core.Message, width int, showDetails bool) string {
+func renderToolResult(message sessionstate.Message, width int, showDetails bool) string {
 	name := safeTerminalText(message.ToolName)
 	if name == "" {
 		name = "工具"
@@ -925,7 +924,7 @@ func renderToolResult(message core.Message, width int, showDetails bool) string 
 	}
 	parts := []string{toolStyle.Render("TOOL RESULT"), toolBodyStyle.Render(name)}
 	if len(message.ToolArguments) != 0 {
-		parts = append(parts, renderConversationBlock(mutedStyle.Render("Arguments:"), formatToolArguments(core.ToolCall{Arguments: message.ToolArguments}), width, 8, toolBodyStyle))
+		parts = append(parts, renderConversationBlock(mutedStyle.Render("Arguments:"), formatToolArguments(sessionstate.ToolCall{Arguments: message.ToolArguments}), width, 8, toolBodyStyle))
 	}
 	parts = append(parts, renderConversationBlock(mutedStyle.Render("Output:"), content, width, 8, toolBodyStyle))
 	return strings.Join(parts, "\n")
@@ -941,7 +940,7 @@ func toolSummary(content string, width int) string {
 }
 
 // formatToolArguments returns provider raw JSON when present, otherwise stable indented JSON.
-func formatToolArguments(call core.ToolCall) string {
+func formatToolArguments(call sessionstate.ToolCall) string {
 	if strings.TrimSpace(call.RawArguments) != "" {
 		return strings.TrimSpace(safeTerminalText(call.RawArguments))
 	}

@@ -3,40 +3,40 @@ package agent
 import (
 	"context"
 	"fmt"
+	"pentgo/internal/tools"
 	"sync"
 
-	"pentgo/internal/core"
 	builtins "pentgo/internal/tools"
 )
 
 // combinedToolProvider joins built-in and external MCP providers before a
 // session starts. runtimeToolProvider remains responsible for evidence wrapping.
 type combinedToolProvider struct {
-	providers []core.ToolProvider
-	closers   []core.ToolCloser
+	providers []tools.Provider
+	closers   []tools.Closer
 	closeOnce sync.Once
 	closeErr  error
 }
 
-func combineToolProviders(providers ...core.ToolProvider) *combinedToolProvider {
+func combineToolProviders(providers ...tools.Provider) *combinedToolProvider {
 	combined := &combinedToolProvider{}
 	for _, provider := range providers {
 		if provider == nil {
 			continue
 		}
 		combined.providers = append(combined.providers, provider)
-		if closer, ok := provider.(core.ToolCloser); ok {
+		if closer, ok := provider.(tools.Closer); ok {
 			combined.closers = append(combined.closers, closer)
 		}
 	}
 	return combined
 }
 
-func (provider *combinedToolProvider) Tools(ctx context.Context) ([]core.Tool, error) {
+func (provider *combinedToolProvider) Tools(ctx context.Context) ([]tools.Tool, error) {
 	if provider == nil {
 		return nil, nil
 	}
-	tools := make([]core.Tool, 0)
+	discoveredTools := make([]tools.Tool, 0)
 	seen := make(map[string]bool)
 	for _, source := range provider.providers {
 		discovered, err := source.Tools(ctx)
@@ -52,16 +52,16 @@ func (provider *combinedToolProvider) Tools(ctx context.Context) ([]core.Tool, e
 				return nil, fmt.Errorf("tool name collision: %s", name)
 			}
 			seen[name] = true
-			tools = append(tools, tool)
+			discoveredTools = append(discoveredTools, tool)
 		}
 	}
-	return append([]core.Tool(nil), tools...), nil
+	return append([]tools.Tool(nil), discoveredTools...), nil
 }
 
 // validateProjectTools rejects names that would collide with tools added for
 // every session. It runs before session restoration so a project never opens
 // with a provider that is guaranteed to fail on its first turn.
-func validateProjectTools(ctx context.Context, provider core.ToolProvider) error {
+func validateProjectTools(ctx context.Context, provider tools.Provider) error {
 	if provider == nil {
 		return nil
 	}
@@ -99,5 +99,5 @@ func (provider *combinedToolProvider) Close() error {
 	return provider.closeErr
 }
 
-var _ core.ToolProvider = (*combinedToolProvider)(nil)
-var _ core.ToolCloser = (*combinedToolProvider)(nil)
+var _ tools.Provider = (*combinedToolProvider)(nil)
+var _ tools.Closer = (*combinedToolProvider)(nil)

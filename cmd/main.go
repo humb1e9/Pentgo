@@ -10,8 +10,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"pentgo/internal/bootstrap"
-	"pentgo/internal/terminal"
+	"pentgo/app"
+	"pentgo/terminal"
 )
 
 // main 启动项目终端，并将进程信号收敛到运行时根 context。
@@ -51,9 +51,9 @@ func runCommand(ctx context.Context, args []string, input io.Reader, stdout, std
 	if stderr == nil {
 		stderr = io.Discard
 	}
-	cfg, err := bootstrap.Load()
+	cfg, err := app.Load()
 	if err != nil {
-		if errors.Is(err, bootstrap.ErrConfigCreated) {
+		if errors.Is(err, app.ErrConfigCreated) {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
@@ -65,12 +65,12 @@ func runCommand(ctx context.Context, args []string, input io.Reader, stdout, std
 		fmt.Fprintln(stderr, "error: resolve working directory:", err)
 		return 1
 	}
-	skillsDir, err := bootstrap.SkillsDir()
+	skillsDir, err := app.SkillsDir()
 	if err != nil {
 		fmt.Fprintln(stderr, "error: resolve skills directory:", err)
 		return 1
 	}
-	runtime := bootstrap.NewApplication(cfg, workingDir, os.DirFS(skillsDir))
+	runtime := app.NewApplication(cfg, workingDir, os.DirFS(skillsDir))
 	terminal := terminal.NewRuntimeTerminal(runtime, input, stdout)
 	var runErr error
 	if command.resume {

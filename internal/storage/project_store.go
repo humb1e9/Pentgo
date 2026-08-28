@@ -1,4 +1,4 @@
-package project
+package storage
 
 import (
 	"crypto/rand"
@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	projectmodel "pentgo/internal/project"
 	sessionstate "pentgo/internal/session"
 )
 
@@ -81,7 +82,7 @@ func createProjectStore(root, name, projectID string, now time.Time) (*ProjectSt
 	} else {
 		now = now.UTC()
 	}
-	project := &Project{ID: strings.TrimSpace(projectID), Name: name, CreatedAt: now, UpdatedAt: now}
+	project := &projectmodel.Project{ID: strings.TrimSpace(projectID), Name: name, CreatedAt: now, UpdatedAt: now}
 	if err := store.saveProject(project); err != nil {
 		_ = store.Close()
 		return nil, err
@@ -176,11 +177,11 @@ func (store *ProjectStore) TmpDir() string { return filepath.Join(store.Root(), 
 
 // LoadProject 读取项目元数据，并从会话行推导会话摘要索引，
 // 而不信任重复持久化的列表。
-func (store *ProjectStore) LoadProject() (*Project, error) {
+func (store *ProjectStore) LoadProject() (*projectmodel.Project, error) {
 	if store == nil || store.db == nil {
 		return nil, fmt.Errorf("project store is nil")
 	}
-	var project Project
+	var project projectmodel.Project
 	var createdAt, updatedAt int64
 	if err := store.db.QueryRow("SELECT id, name, created_at, updated_at FROM projects WHERE singleton = 1").Scan(&project.ID, &project.Name, &createdAt, &updatedAt); err != nil {
 		return nil, fmt.Errorf("load project: %w", err)
@@ -192,9 +193,9 @@ func (store *ProjectStore) LoadProject() (*Project, error) {
 		return nil, fmt.Errorf("load project sessions: %w", err)
 	}
 	defer rows.Close()
-	project.Sessions = []SessionSummary{}
+	project.Sessions = []projectmodel.SessionSummary{}
 	for rows.Next() {
-		var summary SessionSummary
+		var summary projectmodel.SessionSummary
 		var value int64
 		if err := rows.Scan(&summary.ID, &value); err != nil {
 			return nil, fmt.Errorf("load project session: %w", err)
@@ -315,7 +316,7 @@ func (store *ProjectStore) SaveSession(session *sessionstate.Session) error {
 
 // CommitSession 在一个事务中持久化会话和项目元数据，
 // 确保可重建的项目索引不会领先于会话状态。
-func (store *ProjectStore) CommitSession(session *sessionstate.Session, project *Project) error {
+func (store *ProjectStore) CommitSession(session *sessionstate.Session, project *projectmodel.Project) error {
 	if store == nil || store.db == nil || session == nil || project == nil || !validID(session.ID) {
 		return fmt.Errorf("session commit is invalid")
 	}
@@ -471,7 +472,7 @@ func (store *ProjectStore) DeleteSession(id string) error {
 }
 
 // SaveProjectIndex 为管理调用方写入唯一项目元数据。
-func (store *ProjectStore) SaveProjectIndex(project *Project) error {
+func (store *ProjectStore) SaveProjectIndex(project *projectmodel.Project) error {
 	if store == nil || store.db == nil || project == nil || strings.TrimSpace(project.ID) == "" || strings.TrimSpace(project.Name) == "" {
 		return fmt.Errorf("project is invalid")
 	}
@@ -481,7 +482,7 @@ func (store *ProjectStore) SaveProjectIndex(project *Project) error {
 }
 
 // saveProject 使用独立事务封装项目行持久化。
-func (store *ProjectStore) saveProject(project *Project) error {
+func (store *ProjectStore) saveProject(project *projectmodel.Project) error {
 	tx, err := store.db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin project save: %w", err)
@@ -497,7 +498,7 @@ func (store *ProjectStore) saveProject(project *Project) error {
 }
 
 // saveProjectTx 更新或插入唯一项目元数据行。
-func saveProjectTx(tx *sql.Tx, project *Project) error {
+func saveProjectTx(tx *sql.Tx, project *projectmodel.Project) error {
 	if project == nil || strings.TrimSpace(project.ID) == "" || strings.TrimSpace(project.Name) == "" {
 		return fmt.Errorf("project is invalid")
 	}

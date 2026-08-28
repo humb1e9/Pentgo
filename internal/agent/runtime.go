@@ -10,10 +10,10 @@ import (
 
 	"pentgo/internal/core"
 	"pentgo/internal/evidence"
-	"pentgo/internal/project"
 	projectmodel "pentgo/internal/project"
 	"pentgo/internal/project/turn"
 	sessionstate "pentgo/internal/session"
+	"pentgo/internal/storage"
 	builtins "pentgo/internal/tools"
 )
 
@@ -23,7 +23,7 @@ type ProjectRuntime struct {
 	mu        sync.RWMutex
 	lifecycle sync.Mutex
 	commitMu  sync.Mutex
-	store     *project.ProjectStore
+	store     *storage.ProjectStore
 	project   *projectmodel.Project
 	facts     *turn.ProjectFactLedger
 	factIndex *turn.ProjectFactIndex
@@ -48,23 +48,23 @@ type sessionRuntime struct {
 
 // OpenProjectRuntime 加载项目状态并打开工作区和证据 journal。调用方必须先设置
 // turn handler，之后才能打开会话。
-func OpenProjectRuntime(ctx context.Context, store *project.ProjectStore, tools core.ToolProvider) (*ProjectRuntime, error) {
+func OpenProjectRuntime(ctx context.Context, store *storage.ProjectStore, tools core.ToolProvider) (*ProjectRuntime, error) {
 	return openProjectRuntime(ctx, store, tools)
 }
 
 // OpenProjectRuntimeWithSecrets 额外在该运行时写入的证据中脱敏传入的敏感值。
-func OpenProjectRuntimeWithSecrets(ctx context.Context, store *project.ProjectStore, tools core.ToolProvider, secrets ...string) (*ProjectRuntime, error) {
+func OpenProjectRuntimeWithSecrets(ctx context.Context, store *storage.ProjectStore, tools core.ToolProvider, secrets ...string) (*ProjectRuntime, error) {
 	return openProjectRuntimeWithSecrets(ctx, store, tools, secrets...)
 }
 
 // openProjectRuntime 保留供内部调用的非脱敏构造函数。
-func openProjectRuntime(ctx context.Context, store *project.ProjectStore, tools core.ToolProvider) (*ProjectRuntime, error) {
+func openProjectRuntime(ctx context.Context, store *storage.ProjectStore, tools core.ToolProvider) (*ProjectRuntime, error) {
 	return openProjectRuntimeWithSecrets(ctx, store, tools)
 }
 
 // openProjectRuntimeWithSecrets 按 Close 的逆序创建项目资源，
 // 从而在部分初始化失败时能够正确释放已打开的资源。
-func openProjectRuntimeWithSecrets(ctx context.Context, store *project.ProjectStore, tools core.ToolProvider, secrets ...string) (*ProjectRuntime, error) {
+func openProjectRuntimeWithSecrets(ctx context.Context, store *storage.ProjectStore, tools core.ToolProvider, secrets ...string) (*ProjectRuntime, error) {
 	if store == nil {
 		return nil, fmt.Errorf("project store is nil")
 	}
@@ -536,7 +536,7 @@ func (runtime *ProjectRuntime) ProjectFactIndex() *turn.ProjectFactIndex {
 }
 
 // Store 为需要访问存储的应用服务暴露项目存储对象。
-func (runtime *ProjectRuntime) Store() *project.ProjectStore {
+func (runtime *ProjectRuntime) Store() *storage.ProjectStore {
 	if runtime == nil {
 		return nil
 	}

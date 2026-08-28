@@ -1,4 +1,4 @@
-package project
+package storage
 
 import (
 	"context"
@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	projectmodel "pentgo/internal/project"
 )
 
 // ErrFactNotFound identifies a missing project fact.
@@ -33,7 +35,7 @@ func (store *ProjectStore) OpenProjectFactRepository() (*ProjectFactRepository, 
 }
 
 // Upsert inserts or replaces a single fact row for the repository's project.
-func (repo *ProjectFactRepository) Upsert(ctx context.Context, fact ProjectFact) error {
+func (repo *ProjectFactRepository) Upsert(ctx context.Context, fact projectmodel.ProjectFact) error {
 	if repo == nil || repo.db == nil {
 		return fmt.Errorf("project fact repository is nil")
 	}
@@ -59,14 +61,14 @@ ON CONFLICT(project_id, fact_key) DO UPDATE SET
 
 // Get returns the fact for the given key. Returns false when the key does not
 // exist.
-func (repo *ProjectFactRepository) Get(ctx context.Context, key string) (ProjectFact, bool, error) {
+func (repo *ProjectFactRepository) Get(ctx context.Context, key string) (projectmodel.ProjectFact, bool, error) {
 	if repo == nil || repo.db == nil {
-		return ProjectFact{}, false, fmt.Errorf("project fact repository is nil")
+		return projectmodel.ProjectFact{}, false, fmt.Errorf("project fact repository is nil")
 	}
 	if err := ctx.Err(); err != nil {
-		return ProjectFact{}, false, err
+		return projectmodel.ProjectFact{}, false, err
 	}
-	var fact ProjectFact
+	var fact projectmodel.ProjectFact
 	var ref sql.NullInt64
 	var updatedAt int64
 	err := repo.db.QueryRowContext(ctx,
@@ -74,10 +76,10 @@ func (repo *ProjectFactRepository) Get(ctx context.Context, key string) (Project
 		repo.projectID, key,
 	).Scan(&fact.Key, &fact.Value, &ref, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return ProjectFact{}, false, nil
+		return projectmodel.ProjectFact{}, false, nil
 	}
 	if err != nil {
-		return ProjectFact{}, false, fmt.Errorf("get project fact: %w", err)
+		return projectmodel.ProjectFact{}, false, fmt.Errorf("get project fact: %w", err)
 	}
 	if ref.Valid {
 		value := int(ref.Int64)
@@ -89,7 +91,7 @@ func (repo *ProjectFactRepository) Get(ctx context.Context, key string) (Project
 
 // List returns all facts for the repository's project, sorted by key
 // ascending. The returned slice is always non-nil.
-func (repo *ProjectFactRepository) List(ctx context.Context) ([]ProjectFact, error) {
+func (repo *ProjectFactRepository) List(ctx context.Context) ([]projectmodel.ProjectFact, error) {
 	if repo == nil || repo.db == nil {
 		return nil, fmt.Errorf("project fact repository is nil")
 	}
@@ -104,9 +106,9 @@ func (repo *ProjectFactRepository) List(ctx context.Context) ([]ProjectFact, err
 		return nil, fmt.Errorf("list project facts: %w", err)
 	}
 	defer rows.Close()
-	var facts []ProjectFact
+	var facts []projectmodel.ProjectFact
 	for rows.Next() {
-		var fact ProjectFact
+		var fact projectmodel.ProjectFact
 		var ref sql.NullInt64
 		var updatedAt int64
 		if err := rows.Scan(&fact.Key, &fact.Value, &ref, &updatedAt); err != nil {
@@ -123,7 +125,7 @@ func (repo *ProjectFactRepository) List(ctx context.Context) ([]ProjectFact, err
 		return nil, fmt.Errorf("list project facts rows: %w", err)
 	}
 	if facts == nil {
-		facts = []ProjectFact{}
+		facts = []projectmodel.ProjectFact{}
 	}
 	return facts, nil
 }

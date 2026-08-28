@@ -18,6 +18,7 @@ import (
 	llm "pentgo/internal/model"
 	projectmodel "pentgo/internal/project"
 	sessionstate "pentgo/internal/session"
+	"pentgo/internal/storage"
 	"pentgo/internal/tools"
 
 	einomodel "github.com/cloudwego/eino/components/model"
@@ -49,7 +50,7 @@ type Manager struct {
 	cfg              Config
 	root             string
 	deps             Dependencies
-	store            *projectmodel.ProjectStore
+	store            *storage.ProjectStore
 	runtime          *ProjectRuntime
 	skills           *tools.Registry
 	localTools       core.ToolProvider
@@ -96,7 +97,7 @@ func (coordinator *Manager) SkillDiagnostics() []tools.Diagnostic {
 }
 
 // claimSkillDiagnostics exposes each unchanged scan result only once per project.
-func (coordinator *Manager) claimSkillDiagnostics(store *projectmodel.ProjectStore) error {
+func (coordinator *Manager) claimSkillDiagnostics(store *storage.ProjectStore) error {
 	if coordinator == nil || store == nil {
 		return nil
 	}
@@ -133,7 +134,7 @@ func (coordinator *Manager) CreateProject(ctx context.Context, name string) (*pr
 	if coordinator.HasProject() {
 		return nil, fmt.Errorf("a project is already open")
 	}
-	store, err := projectmodel.CreateProjectStore(coordinator.root, name, coordinator.now())
+	store, err := storage.CreateProjectStore(coordinator.root, name, coordinator.now())
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +169,7 @@ func (coordinator *Manager) OpenOrCreateWorkspace(ctx context.Context) (*project
 	if !errors.Is(err, ErrProjectNotFound) {
 		return nil, false, err
 	}
-	store, err := projectmodel.CreateProjectStoreAt(coordinator.workspaceRoot(), filepath.Base(filepath.Clean(coordinator.root)), coordinator.now())
+	store, err := storage.CreateProjectStoreAt(coordinator.workspaceRoot(), filepath.Base(filepath.Clean(coordinator.root)), coordinator.now())
 	if err != nil {
 		return nil, false, err
 	}
@@ -184,8 +185,8 @@ func (coordinator *Manager) openCurrentProjectLocked(ctx context.Context) (*proj
 		return coordinator.CurrentProjectValue(), nil
 	}
 	for _, root := range []string{coordinator.workspaceRoot(), coordinator.root} {
-		store, err := projectmodel.OpenProjectStore(root)
-		if errors.Is(err, projectmodel.ErrNotProject) {
+		store, err := storage.OpenProjectStore(root)
+		if errors.Is(err, storage.ErrNotProject) {
 			continue
 		}
 		if err != nil {
@@ -206,7 +207,7 @@ func (coordinator *Manager) workspaceRoot() string {
 
 // openStore 装配证据脱敏、MCP 连接、模型构造、可选技能和恢复的会话 worker。
 // 延迟清理确保部分构建失败的运行时不会遗留打开的存储或客户端进程。
-func (coordinator *Manager) openStore(ctx context.Context, store *projectmodel.ProjectStore) (openErr error) {
+func (coordinator *Manager) openStore(ctx context.Context, store *storage.ProjectStore) (openErr error) {
 	defer func() {
 		if openErr != nil {
 			_ = store.Close()

@@ -1,4 +1,4 @@
-package turn
+package evidence
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"pentgo/internal/project"
+	"pentgo/internal/storage"
 )
 
 // ErrWrite 包装首次持久化 journal 写入失败，避免存储进入失败状态后，
@@ -44,7 +44,7 @@ func OpenEvidenceStore(path string, secrets ...string) (*EvidenceStore, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, fmt.Errorf("evidence database path is empty")
 	}
-	db, err := project.OpenSQLite(path)
+	db, err := storage.OpenSQLite(path)
 	if err != nil {
 		return nil, err
 	}
@@ -222,4 +222,13 @@ func (store *EvidenceStore) redact(value string) string {
 		value = strings.ReplaceAll(value, secret, "[redacted]")
 	}
 	return value
+}
+
+func timeValue(value time.Time) int64 { return value.UTC().UnixNano() }
+func parseTime(value int64) time.Time { return time.Unix(0, value).UTC() }
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }

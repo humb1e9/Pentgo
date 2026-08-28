@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"pentgo/internal/core"
+	"pentgo/internal/evidence"
 	"pentgo/internal/project"
 	projectmodel "pentgo/internal/project"
 	sessionstate "pentgo/internal/project/session"
@@ -26,7 +27,7 @@ type ProjectRuntime struct {
 	project   *projectmodel.Project
 	facts     *turn.ProjectFactLedger
 	factIndex *turn.ProjectFactIndex
-	journal   *turn.EvidenceStore
+	journal   *evidence.EvidenceStore
 	workspace *builtins.Workspace
 	tools     core.ToolProvider
 	turn      sessionstate.TurnFunc
@@ -78,7 +79,7 @@ func openProjectRuntimeWithSecrets(ctx context.Context, store *project.ProjectSt
 	if err != nil {
 		return nil, err
 	}
-	journal, err := turn.OpenEvidenceStore(store.DatabasePath(), secrets...)
+	journal, err := evidence.OpenEvidenceStore(store.DatabasePath(), secrets...)
 	if err != nil {
 		return nil, err
 	}
@@ -543,7 +544,7 @@ func (runtime *ProjectRuntime) Store() *project.ProjectStore {
 }
 
 // Evidence 返回项目持有的审计 journal。
-func (runtime *ProjectRuntime) Evidence() *turn.EvidenceStore {
+func (runtime *ProjectRuntime) Evidence() *evidence.EvidenceStore {
 	if runtime == nil {
 		return nil
 	}

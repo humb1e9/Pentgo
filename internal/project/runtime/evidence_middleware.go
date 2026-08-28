@@ -7,7 +7,7 @@ import (
 	"io"
 	"strings"
 
-	"pentgo/internal/project/turn"
+	"pentgo/internal/evidence"
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/tool"
@@ -17,15 +17,15 @@ import (
 // evidenceMiddleware records every tool result before exposing it to the model.
 type evidenceMiddleware struct {
 	*adk.BaseChatModelAgentMiddleware
-	store *turn.EvidenceStore
+	store *evidence.EvidenceStore
 }
 
 // NewEvidenceMiddleware constructs the evidence-first tool middleware.
-func NewEvidenceMiddleware(store *turn.EvidenceStore) adk.ChatModelAgentMiddleware {
+func NewEvidenceMiddleware(store *evidence.EvidenceStore) adk.ChatModelAgentMiddleware {
 	return &evidenceMiddleware{BaseChatModelAgentMiddleware: &adk.BaseChatModelAgentMiddleware{}, store: store}
 }
 
-func newEvidenceMiddleware(store *turn.EvidenceStore) *evidenceMiddleware {
+func newEvidenceMiddleware(store *evidence.EvidenceStore) *evidenceMiddleware {
 	return &evidenceMiddleware{BaseChatModelAgentMiddleware: &adk.BaseChatModelAgentMiddleware{}, store: store}
 }
 

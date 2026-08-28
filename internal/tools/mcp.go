@@ -16,7 +16,7 @@ import (
 	"unicode/utf8"
 
 	"pentgo/internal/core"
-	"pentgo/internal/project/turn"
+	"pentgo/internal/evidence"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -78,7 +78,7 @@ func ConfigSecrets(configurations MCPServers) []string {
 
 // ConnectAll 启动全部具名 MCP 服务。远端工具名称必须在已配置服务中全局唯一，
 // 并以原名称暴露给模型。
-func ConnectAll(ctx context.Context, configurations MCPServers, evidence *turn.EvidenceStore, maxOutputBytes int, projectRoot, tmpDir string) (*Clients, error) {
+func ConnectAll(ctx context.Context, configurations MCPServers, evidence *evidence.EvidenceStore, maxOutputBytes int, projectRoot, tmpDir string) (*Clients, error) {
 	if len(configurations) == 0 {
 		return nil, nil
 	}
@@ -119,7 +119,7 @@ func ConnectAll(ctx context.Context, configurations MCPServers, evidence *turn.E
 
 // ConnectStdio 为显式需要本地标准输入输出服务的调用方保留。
 // ConnectStdio 使用项目专属路径启动一个本地 MCP 服务进程。
-func ConnectStdio(ctx context.Context, cfg MCPConfig, evidence *turn.EvidenceStore, maxOutputBytes int, projectRoot, tmpDir string) (*Client, error) {
+func ConnectStdio(ctx context.Context, cfg MCPConfig, evidence *evidence.EvidenceStore, maxOutputBytes int, projectRoot, tmpDir string) (*Client, error) {
 	if cfg.Transport() != "stdio" {
 		return nil, fmt.Errorf("MCP transport is %q, not stdio", cfg.Transport())
 	}
@@ -161,7 +161,7 @@ func ConnectStdio(ctx context.Context, cfg MCPConfig, evidence *turn.EvidenceSto
 
 // Connect 根据配置的传输方式打开一个 MCP 服务。
 // Connect 在标准输入输出、HTTP 和旧版 SSE 传输方式之间选择。
-func Connect(ctx context.Context, cfg MCPConfig, evidence *turn.EvidenceStore, maxOutputBytes int, projectRoot, tmpDir string) (*Client, error) {
+func Connect(ctx context.Context, cfg MCPConfig, evidence *evidence.EvidenceStore, maxOutputBytes int, projectRoot, tmpDir string) (*Client, error) {
 	switch cfg.Transport() {
 	case "stdio":
 		return ConnectStdio(ctx, cfg, evidence, maxOutputBytes, projectRoot, tmpDir)
@@ -175,7 +175,7 @@ func Connect(ctx context.Context, cfg MCPConfig, evidence *turn.EvidenceStore, m
 }
 
 // ConnectHTTP 使用配置的请求头打开 Streamable HTTP MCP 会话。
-func ConnectHTTP(ctx context.Context, cfg MCPConfig, evidence *turn.EvidenceStore, maxOutputBytes int) (*Client, error) {
+func ConnectHTTP(ctx context.Context, cfg MCPConfig, evidence *evidence.EvidenceStore, maxOutputBytes int) (*Client, error) {
 	endpoint, err := validEndpoint(cfg.URL)
 	if err != nil {
 		return nil, err
@@ -184,7 +184,7 @@ func ConnectHTTP(ctx context.Context, cfg MCPConfig, evidence *turn.EvidenceStor
 }
 
 // ConnectSSE 使用配置的请求头打开旧版 SSE MCP 会话。
-func ConnectSSE(ctx context.Context, cfg MCPConfig, evidence *turn.EvidenceStore, maxOutputBytes int) (*Client, error) {
+func ConnectSSE(ctx context.Context, cfg MCPConfig, evidence *evidence.EvidenceStore, maxOutputBytes int) (*Client, error) {
 	endpoint, err := validEndpoint(cfg.URL)
 	if err != nil {
 		return nil, err
@@ -194,7 +194,7 @@ func ConnectSSE(ctx context.Context, cfg MCPConfig, evidence *turn.EvidenceStore
 
 // connectTransport 初始化共享的 MCP 协议会话，并一次性获取工具目录。
 // 初始化失败时通过 SDK 会话关闭底层传输。
-func connectTransport(ctx context.Context, transport sdk.Transport, evidence *turn.EvidenceStore, maxOutputBytes int) (*Client, error) {
+func connectTransport(ctx context.Context, transport sdk.Transport, evidence *evidence.EvidenceStore, maxOutputBytes int) (*Client, error) {
 	if evidence == nil {
 		return nil, fmt.Errorf("MCP evidence store is nil")
 	}

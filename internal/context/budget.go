@@ -1,4 +1,4 @@
-package runtime
+package context
 
 import (
 	"encoding/json"
@@ -15,7 +15,7 @@ const (
 	toolSchemaTokenOverhead     = 8
 )
 
-func estimateTextTokens(value string) int {
+func EstimateTextTokens(value string) int {
 	asciiRunes, nonASCIITokens := 0, 0
 	for _, runeValue := range value {
 		if runeValue < utf8.RuneSelf {
@@ -27,7 +27,7 @@ func estimateTextTokens(value string) int {
 	return nonASCIITokens + (asciiRunes+estimatedCharactersPerToken-1)/estimatedCharactersPerToken
 }
 
-func estimateMessageTokens(messages []core.Message) int {
+func EstimateMessageTokens(messages []core.Message) int {
 	total := 0
 	for _, message := range messages {
 		parts := []string{message.Role, message.Content, message.ReasoningContent, message.ToolCallID, message.ToolName}
@@ -35,12 +35,12 @@ func estimateMessageTokens(messages []core.Message) int {
 			encoded, _ := json.Marshal(call.Arguments)
 			parts = append(parts, call.ID, call.Name, call.RawArguments, string(encoded))
 		}
-		total += estimateTextTokens(strings.Join(parts, "\n")) + messageTokenOverhead
+		total += EstimateTextTokens(strings.Join(parts, "\n")) + messageTokenOverhead
 	}
 	return total
 }
 
-func estimateToolTokens(tools []core.Tool) int {
+func EstimateToolTokens(tools []core.Tool) int {
 	total := 0
 	for _, projectTool := range tools {
 		if projectTool == nil {
@@ -54,7 +54,7 @@ func estimateToolTokens(tools []core.Tool) int {
 		if err != nil {
 			encoded = []byte(fmt.Sprintf("%s %s", projectTool.Name(), projectTool.Description()))
 		}
-		total += estimateTextTokens(string(encoded)) + toolSchemaTokenOverhead
+		total += EstimateTextTokens(string(encoded)) + toolSchemaTokenOverhead
 	}
 	return total
 }

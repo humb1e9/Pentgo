@@ -1,7 +1,7 @@
-package runtime
+package context
 
 import (
-	"context"
+	stdcontext "context"
 	"fmt"
 	"strings"
 	"time"
@@ -20,12 +20,18 @@ type SummaryInput struct {
 
 // SummaryWriter compresses an older conversation prefix without exposing tools.
 type SummaryWriter interface {
-	Summarize(context.Context, SummaryInput) (string, error)
+	Summarize(stdcontext.Context, SummaryInput) (string, error)
+}
+
+// SummaryStore persists the rolling summary for one session.
+type SummaryStore interface {
+	LoadContextSummary(stdcontext.Context, string) (project.ContextSummary, bool, error)
+	SaveContextSummary(stdcontext.Context, project.ContextSummary) error
 }
 
 // ContextWindow assembles a durable summary with a recent raw-message window.
 type ContextWindow struct {
-	store          *project.ProjectStore
+	store          SummaryStore
 	contextWindow  int
 	fixedTokens    int
 	recentMessages int
@@ -34,17 +40,17 @@ type ContextWindow struct {
 	now            func() time.Time
 }
 
-func NewContextWindow(store *project.ProjectStore, cfg project.ContextConfig, summarizer SummaryWriter, fixedTokens int) *ContextWindow {
+func NewContextWindow(store SummaryStore, cfg project.ContextConfig, summarizer SummaryWriter, fixedTokens int) *ContextWindow {
 	cfg = project.Config{Context: cfg}.Effective().Context
 	return &ContextWindow{store: store, contextWindow: cfg.ContextWindow, fixedTokens: fixedTokens, recentMessages: cfg.RecentMessages, summaryTokens: cfg.SummaryMaxTokens, summarizer: summarizer, now: time.Now}
 }
 
-func (window *ContextWindow) Messages(ctx context.Context, sessionID string, conversation []core.Message, facts string) ([]core.Message, error) {
+func (window *ContextWindow) Messages(ctx stdcontext.Context, sessionID string, conversation []core.Message, facts string) ([]core.Message, error) {
 	if window == nil || window.store == nil {
 		return nil, fmt.Errorf("context window dependencies are incomplete")
 	}
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = stdcontext.Background()
 	}
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
@@ -59,9 +65,9 @@ func (window *ContextWindow) Messages(ctx context.Context, sessionID string, con
 	}
 	fixedTokens := window.fixedTokens
 	if strings.TrimSpace(facts) != "" {
-		fixedTokens += estimateMessageTokens([]core.Message{{Role: core.RoleSystem, Content: "Project facts:\n" + strings.TrimSpace(facts)}})
+		fixedTokens += EstimateMessageTokens([]core.Message{{Role: core.RoleSystem, Content: "Project facts:\n" + strings.TrimSpace(facts)}})
 	}
-	summaryReserve := estimateMessageTokens([]core.Message{{Role: core.RoleSystem, Content: "Conversation summary:\n"}}) + window.summaryTokens
+	summaryReserve := EstimateMessageTokens([]core.Message{{Role: core.RoleSystem, Content: "Conversation summary:\n"}}) + window.summaryTokens
 	if fixedTokens+summaryReserve >= window.contextWindow {
 		return nil, fmt.Errorf("fixed model context exceeds configured context_window")
 	}
@@ -73,7 +79,7 @@ func (window *ContextWindow) Messages(ctx context.Context, sessionID string, con
 		keepFrom = summary.CoveredThroughSeq
 	}
 	keepFrom = toolSafeBoundary(conversation, keepFrom)
-	for estimateMessageTokens(conversation[keepFrom:]) > window.contextWindow-fixedTokens-summaryReserve {
+	for EstimateMessageTokens(conversation[keepFrom:]) > window.contextWindow-fixedTokens-summaryReserve {
 		next := nextToolSafeBoundary(conversation, keepFrom)
 		if next <= keepFrom {
 			return nil, fmt.Errorf("recent model context exceeds configured context_window")
@@ -110,7 +116,7 @@ func (window *ContextWindow) Messages(ctx context.Context, sessionID string, con
 		messages = append(messages, core.Message{Role: core.RoleSystem, Content: "Conversation summary:\n" + strings.TrimSpace(summary.Content)})
 	}
 	messages = append(messages, cloneMessages(conversation[keepFrom:])...)
-	if window.fixedTokens+estimateMessageTokens(messages) > window.contextWindow {
+	if window.fixedTokens+EstimateMessageTokens(messages) > window.contextWindow {
 		return nil, fmt.Errorf("assembled model context exceeds configured context_window")
 	}
 	return messages, nil
@@ -140,14 +146,14 @@ func fallbackSummary(input SummaryInput) string {
 
 func truncateSummaryTokens(value string, limit int) string {
 	value = strings.TrimSpace(value)
-	if limit <= 0 || estimateTextTokens(value) <= limit {
+	if limit <= 0 || EstimateTextTokens(value) <= limit {
 		return value
 	}
 	runes := []rune(value)
 	low, high := 0, len(runes)
 	for low < high {
 		middle := (low + high + 1) / 2
-		if estimateTextTokens(string(runes[:middle])) <= limit {
+		if EstimateTextTokens(string(runes[:middle])) <= limit {
 			low = middle
 		} else {
 			high = middle - 1

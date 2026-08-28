@@ -1,4 +1,4 @@
-package runtime
+package context
 
 import (
 	"context"
@@ -7,22 +7,21 @@ import (
 	"strings"
 
 	"pentgo/internal/core"
-	"pentgo/internal/model"
 	llm "pentgo/internal/model"
 
 	einomodel "github.com/cloudwego/eino/components/model"
 )
 
 // SummaryModelFactory creates the short-lived tool-free model used only to update a rolling summary.
-type SummaryModelFactory func(context.Context, model.Config) (einomodel.ToolCallingChatModel, error)
+type SummaryModelFactory func(context.Context, llm.Config) (einomodel.ToolCallingChatModel, error)
 
 type modelSummaryWriter struct {
 	newModel SummaryModelFactory
-	config   model.Config
+	config   llm.Config
 }
 
 // NewModelSummaryWriter returns a lazy text-only summary writer.
-func NewModelSummaryWriter(factory SummaryModelFactory, configuration model.Config) SummaryWriter {
+func NewModelSummaryWriter(factory SummaryModelFactory, configuration llm.Config) SummaryWriter {
 	if factory == nil {
 		return nil
 	}

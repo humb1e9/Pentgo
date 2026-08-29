@@ -94,9 +94,6 @@ func (service *TurnService) RunTurn(ctx context.Context, runtime *ProjectRuntime
 	finishError := func(turnErr error) error {
 		return service.finishError(runtime, session, turn.ID, turnErr)
 	}
-	if targets := extractTargets(message); len(targets) != 0 {
-		session.AddTargets(targets...)
-	}
 	if !resuming {
 		if err := conversation.Append(sessionstate.Message{Role: sessionstate.RoleUser, Content: message}); err != nil {
 			return finishError(err)

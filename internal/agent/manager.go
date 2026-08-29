@@ -311,16 +311,13 @@ func (coordinator *Manager) CurrentProjectValue() *projectmodel.Project {
 	return project
 }
 
-// NewSession 打开新的运行时会话；调用方未显式提供目标时，从 intent 中提取目标。
+// NewSession 打开新的运行时会话；目标由调用方显式提供。
 func (coordinator *Manager) NewSession(intent string, targets ...string) (*sessionstate.Session, error) {
 	coordinator.mu.RLock()
 	runtime := coordinator.runtime
 	coordinator.mu.RUnlock()
 	if runtime == nil {
 		return nil, fmt.Errorf("no project is open")
-	}
-	if len(targets) == 0 {
-		targets = extractTargets(intent)
 	}
 	session, err := runtime.NewSession(intent, targets...)
 	if err != nil {

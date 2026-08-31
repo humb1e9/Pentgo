@@ -2,7 +2,11 @@
 
 ## 介绍
 
-PentGo 是一个运行在终端里的持久化 AI Agent 工作台。它让你在一个目录中与模型连续协作：模型可以读写工作区文件、运行命令、调用你接入的工具，并在退出后恢复会话和项目记录。
+PentGo 是一个运行在终端中的持久化渗透测试 AI Agent。用户以自然语言描述已授权的测试目标和功能点后，模型结合匹配的 Skill、当前可用工具和会话上下文，制定分阶段的测试步骤并根据工具结果持续调整策略。
+
+PentGo 统一接入工作区能力、本地 CLI 和 MCP 工具。每次工具调用结果会先保存为带 `evidence_ref` 的证据，再反馈给模型继续分析；会话、轮次、消息、项目事实、证据、上下文摘要和执行 checkpoint 都持久化在项目 SQLite 数据库中，因此任务可以暂停、恢复和复核。
+
+对于“对某站点进行渗透测试”这类范围过大的请求，模型会先推荐可选测试方向、说明前置条件和风险，等待用户明确测试范围；对于 SQL 注入、登录绕过等功能点明确的请求，模型会围绕该目标执行低风险、可复核的验证流程。
 
 > **仅限已获得明确授权的目标、数据和环境。**
 
@@ -143,21 +147,22 @@ pentgo resume # 恢复已有项目并选择会话
 ## 项目结构
 
 ```text
-cmd/                    进程入口：信号处理与依赖装配
+cmd/                    进程入口
+app/                    启动、配置、路径与依赖装配
+terminal/               Bubble Tea 终端界面
 internal/
-├── bootstrap/         组装根：用户配置读取、路径解析、Application 装配
-├── core/              共享协议：Message、Tool、ModelStepper 等值类型
-├── model/             模型适配：OpenAI/Anthropic Eino 单步流、prompt
-├── project/           项目域根：ProjectStore、ProjectFact、OpenSQLite、Open* 装配
-│   ├── session/       会话：Session/Worker 实体与 ConversationStore
-│   ├── turn/          单轮：EvidenceStore、项目事实工具与事件
-│   └── runtime/       生命周期：Manager、Eino turn service、滚动摘要与工具组合
-├── terminal/          终端界面：bubbletea 视图、命令解析、事件渲染
-└── tools/             工具实现：工作区工具、本机 CLI、MCP 客户端、skills
-skills/                内置 Markdown skills（首次安装复制到用户数据目录）
+├── model/              模型配置、Eino 适配、流式 Stepper 与 Prompt
+├── agent/              Agent 编排、轮次、事件、工具适配、暂停与恢复
+├── context/            token 预算、历史摘要与项目事实索引
+├── tools/              工作区工具、本地 CLI、MCP 客户端与 Skill Registry
+├── evidence/           工具结果证据记录、查询与输出脱敏
+├── session/            会话、轮次、消息、事件与 ConversationStore
+├── storage/            SQLite、ProjectStore、checkpoint、事实与摘要持久化
+└── project/            项目、配置、项目事实等领域对象
+skills/                 内置 Markdown Skills（首次安装复制到用户数据目录）
 ```
 
-依赖方向：`bootstrap` 是唯一组装根；`project` 根拥有 SQLite 存储、原始 Conversation 和滚动摘要，`session` 管理会话 worker，`turn` 管理证据与项目事实。runtime 的 Eino middleware 组合摘要、最近原始消息和 Facts 后写入模型 state。
+依赖方向：`cmd → app → agent`；`terminal → app/controller`；`agent → model/context/tools/evidence/session/storage/project`；`storage → project`。`model`、`tools` 和 `session` 分别拥有各自的核心契约；`agent` 负责组合与编排，不直接拥有 SQLite、MCP 或终端实现。
 
 ## 基础体验示例
 

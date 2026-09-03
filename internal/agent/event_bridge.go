@@ -6,8 +6,6 @@ import (
 	"io"
 	"pentgo/internal/session"
 
-	sessionstate "pentgo/internal/session"
-
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/schema"
 )
@@ -15,10 +13,10 @@ import (
 // EventBridge persists the durable parts of an agent event stream and
 // forwards its displayable progress to the existing turn event sink.
 type EventBridge struct {
-	conversation *sessionstate.ConversationStore
+	conversation *session.ConversationStore
 	sessionID    string
 	turnID       string
-	emit         func(sessionstate.Event)
+	emit         func(session.Event)
 
 	persistedCalls   map[string]struct{}
 	persistedResults map[string]struct{}
@@ -28,7 +26,7 @@ type EventBridge struct {
 
 // NewEventBridge creates a bridge for one running turn. The caller remains
 // responsible for final session-state persistence and turn completion.
-func NewEventBridge(conversation *sessionstate.ConversationStore, sessionID, turnID string, emit func(sessionstate.Event)) (*EventBridge, error) {
+func NewEventBridge(conversation *session.ConversationStore, sessionID, turnID string, emit func(session.Event)) (*EventBridge, error) {
 	if conversation == nil {
 		return nil, fmt.Errorf("agent event bridge conversation is nil")
 	}
@@ -138,7 +136,7 @@ func (bridge *EventBridge) message(event *adk.AgentEvent) (*schema.Message, sche
 			role = chunk.Role
 		}
 		if role == schema.Assistant && chunk.Content != "" {
-			bridge.emitEvent(sessionstate.Event{Kind: sessionstate.EventAssistantDelta, Message: chunk.Content})
+			bridge.emitEvent(session.Event{Kind: session.EventAssistantDelta, Message: chunk.Content})
 		}
 		chunks = append(chunks, chunk)
 	}
@@ -166,7 +164,7 @@ func (bridge *EventBridge) assistant(message session.Message) error {
 		if err := bridge.conversation.Append(message); err != nil {
 			return err
 		}
-		bridge.emitEvent(sessionstate.Event{Kind: sessionstate.EventAssistantMessage, Message: message.Content})
+		bridge.emitEvent(session.Event{Kind: session.EventAssistantMessage, Message: message.Content})
 		return nil
 	}
 	filtered := message
@@ -189,7 +187,7 @@ func (bridge *EventBridge) assistant(message session.Message) error {
 	}
 	bridge.pendingCalls = append(bridge.pendingCalls, filtered.ToolCalls...)
 	for _, call := range filtered.ToolCalls {
-		bridge.emitEvent(sessionstate.Event{Kind: sessionstate.EventToolStarted, Message: call.Name})
+		bridge.emitEvent(session.Event{Kind: session.EventToolStarted, Message: call.Name})
 	}
 	return nil
 }
@@ -235,14 +233,14 @@ func (bridge *EventBridge) flushResults() error {
 		return err
 	}
 	for _, message := range messages {
-		bridge.emitEvent(sessionstate.Event{Kind: sessionstate.EventToolFinished, Message: message.ToolName})
+		bridge.emitEvent(session.Event{Kind: session.EventToolFinished, Message: message.ToolName})
 	}
 	bridge.pendingCalls = nil
 	bridge.pendingResults = make(map[string]session.Message)
 	return nil
 }
 
-func (bridge *EventBridge) emitEvent(event sessionstate.Event) {
+func (bridge *EventBridge) emitEvent(event session.Event) {
 	if bridge.emit == nil {
 		return
 	}

@@ -13,7 +13,6 @@ import (
 	projectmodel "pentgo/internal/project"
 	sessionstate "pentgo/internal/session"
 	"pentgo/internal/storage"
-	builtins "pentgo/internal/tools"
 )
 
 // ProjectRuntime 是项目级资源的唯一所有者。会话状态保留在各自的 sessionstate.Worker 中；
@@ -26,7 +25,7 @@ type ProjectRuntime struct {
 	project   *projectmodel.Project
 	facts     *ProjectFactLedger
 	journal   *evidence.EvidenceStore
-	workspace *builtins.Workspace
+	workspace *tools.Workspace
 	tools     tools.Provider
 	turn      sessionstate.TurnFunc
 	pause     func(string) bool
@@ -66,7 +65,7 @@ func OpenProjectRuntime(ctx context.Context, store *storage.ProjectStore, portsT
 		return nil, err
 	}
 	facts := NewProjectLedger(repository, journal)
-	workspace, err := builtins.NewWorkspace(store.WorkspaceRoot())
+	workspace, err := tools.NewWorkspace(store.WorkspaceRoot())
 	if err != nil {
 		_ = journal.Close()
 		return nil, err

@@ -6,7 +6,6 @@ import (
 	"pentgo/internal/tools"
 
 	sessionstate "pentgo/internal/session"
-	builtins "pentgo/internal/tools"
 )
 
 // runtimeToolProvider builds tools visible to one session turn.
@@ -30,21 +29,21 @@ func (provider *runtimeToolProvider) Tools(context.Context) ([]tools.Tool, error
 	if facts == nil {
 		return nil, fmt.Errorf("project fact store is unavailable")
 	}
-	tools := builtins.NewTools(provider.runtime.workspace)
-	tools = append(tools, NewProjectFactTools(facts)...)
-	seen := make(map[string]bool, len(tools)+len(provider.projectTools))
-	for _, tool := range tools {
+	hostTools := tools.NewTools(provider.runtime.workspace)
+	hostTools = append(hostTools, NewProjectFactTools(facts)...)
+	seen := make(map[string]bool, len(hostTools)+len(provider.projectTools))
+	for _, tool := range hostTools {
 		seen[tool.Name()] = true
 	}
 	for _, projectTool := range provider.projectTools {
 		if projectTool == nil {
 			return nil, fmt.Errorf("project tool is nil")
 		}
-		if builtins.IsName(projectTool.Name()) || seen[projectTool.Name()] {
+		if tools.IsName(projectTool.Name()) || seen[projectTool.Name()] {
 			return nil, fmt.Errorf("tool name collision: %s", projectTool.Name())
 		}
 		seen[projectTool.Name()] = true
-		tools = append(tools, projectTool)
+		hostTools = append(hostTools, projectTool)
 	}
-	return tools, nil
+	return hostTools, nil
 }

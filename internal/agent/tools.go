@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"pentgo/internal/tools"
 	"sync"
-
-	builtins "pentgo/internal/tools"
 )
 
 // combinedToolProvider joins built-in and external MCP providers before a
@@ -65,20 +63,20 @@ func validateProjectTools(ctx context.Context, provider tools.Provider) error {
 	if provider == nil {
 		return nil
 	}
-	tools, err := provider.Tools(ctx)
+	discovered, err := provider.Tools(ctx)
 	if err != nil {
 		return err
 	}
 	reserved := map[string]bool{
-		builtins.FactUpsertName: true,
-		builtins.FactGetName:    true,
-		builtins.FactListName:   true,
+		tools.FactUpsertName: true,
+		tools.FactGetName:    true,
+		tools.FactListName:   true,
 	}
-	for _, tool := range tools {
+	for _, tool := range discovered {
 		if tool == nil {
 			return fmt.Errorf("tool provider returned nil tool")
 		}
-		if builtins.IsName(tool.Name()) || reserved[tool.Name()] {
+		if tools.IsName(tool.Name()) || reserved[tool.Name()] {
 			return fmt.Errorf("tool name collision: %s", tool.Name())
 		}
 	}

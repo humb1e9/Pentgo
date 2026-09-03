@@ -15,7 +15,6 @@ import (
 	contextpolicy "pentgo/internal/context"
 	llm "pentgo/internal/model"
 	projectmodel "pentgo/internal/project"
-	"pentgo/internal/session"
 	sessionstate "pentgo/internal/session"
 	"pentgo/internal/storage"
 	"pentgo/internal/tools"
@@ -391,7 +390,7 @@ func (coordinator *Manager) Events(sessionID string) <-chan sessionstate.Event {
 }
 
 // Messages 返回有序的持久化 conversation，供 UI 渲染或模型回放。
-func (coordinator *Manager) Messages(sessionID string) []session.Message {
+func (coordinator *Manager) Messages(sessionID string) []sessionstate.Message {
 	coordinator.mu.RLock()
 	runtime := coordinator.runtime
 	coordinator.mu.RUnlock()

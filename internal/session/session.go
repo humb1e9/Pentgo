@@ -35,7 +35,6 @@ type Turn struct {
 type Session struct {
 	ID           string    `json:"id"`
 	Name         string    `json:"name"`
-	Targets      []string  `json:"targets,omitempty"`
 	Intent       string    `json:"intent"`
 	Turns        int       `json:"turns"`
 	ActiveTurn   *Turn     `json:"active_turn,omitempty"`
@@ -55,7 +54,7 @@ func NewSession(id, intent string, startedAt time.Time) *Session {
 	} else {
 		startedAt = startedAt.UTC()
 	}
-	return &Session{ID: strings.TrimSpace(id), Name: sessionName(intent), Intent: intent, StartedAt: startedAt, UpdatedAt: startedAt, Targets: []string{}}
+	return &Session{ID: strings.TrimSpace(id), Name: sessionName(intent), Intent: intent, StartedAt: startedAt, UpdatedAt: startedAt}
 }
 
 // Rename 更新用户可见的会话名称及修改时间。
@@ -82,29 +81,6 @@ func (session *Session) Rename(name string) error {
 	session.Name = name
 	session.UpdatedAt = time.Now().UTC()
 	return nil
-}
-
-// AddTargets 追加去重、规范化后的目标。
-// 返回值表示会话状态是否发生变化。
-func (session *Session) AddTargets(targets ...string) bool {
-	if session == nil {
-		return false
-	}
-	seen := make(map[string]bool, len(session.Targets))
-	for _, target := range session.Targets {
-		seen[target] = true
-	}
-	changed := false
-	for _, target := range targets {
-		target = strings.TrimSpace(target)
-		if target == "" || seen[target] {
-			continue
-		}
-		session.Targets = append(session.Targets, target)
-		seen[target] = true
-		changed = true
-	}
-	return changed
 }
 
 // BeginTurn 启动会话中唯一允许执行的 turn。
@@ -188,7 +164,6 @@ func CloneSession(source *Session) *Session {
 		return nil
 	}
 	cloned := *source
-	cloned.Targets = append([]string(nil), source.Targets...)
 	if source.ActiveTurn != nil {
 		turn := *source.ActiveTurn
 		if source.ActiveTurn.FinishedAt != nil {

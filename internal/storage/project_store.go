@@ -219,25 +219,6 @@ func loadSessionQuery(queryer interface {
 	}
 	session.StartedAt = parseTime(startedAt)
 	session.UpdatedAt = parseTime(updatedAt)
-	rows, err := queryer.Query("SELECT target FROM session_targets WHERE session_id = ? ORDER BY position", id)
-	if err != nil {
-		return nil, fmt.Errorf("load session %q targets: %w", id, err)
-	}
-	for rows.Next() {
-		var target string
-		if err := rows.Scan(&target); err != nil {
-			rows.Close()
-			return nil, fmt.Errorf("load session %q target: %w", id, err)
-		}
-		session.Targets = append(session.Targets, target)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, fmt.Errorf("load session %q targets: %w", id, err)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, fmt.Errorf("load session %q targets: %w", id, err)
-	}
 	if lastTurnID.Valid {
 		turn, err := loadTurn(queryer, lastTurnID.String)
 		if err != nil {
@@ -375,22 +356,6 @@ func saveSessionTx(tx *sql.Tx, session *sessionstate.Session) error {
 		); err != nil {
 			return fmt.Errorf("save session turn: %w", err)
 		}
-	}
-	if _, err := tx.Exec("DELETE FROM session_targets WHERE session_id = ?", session.ID); err != nil {
-		return fmt.Errorf("replace session targets: %w", err)
-	}
-	seen := make(map[string]bool)
-	position := 0
-	for _, target := range session.Targets {
-		target = strings.TrimSpace(target)
-		if target == "" || seen[target] {
-			continue
-		}
-		seen[target] = true
-		if _, err := tx.Exec("INSERT INTO session_targets(session_id, position, target) VALUES(?, ?, ?)", session.ID, position, target); err != nil {
-			return fmt.Errorf("save session target: %w", err)
-		}
-		position++
 	}
 	return nil
 }

@@ -169,7 +169,7 @@ func (runtime *ProjectRuntime) RestoreSessions() error {
 }
 
 // NewSession 启动 worker 并原子持久化其初始会话记录。
-func (runtime *ProjectRuntime) NewSession(intent string, targets ...string) (*sessionstate.Session, error) {
+func (runtime *ProjectRuntime) NewSession(intent string) (*sessionstate.Session, error) {
 	if runtime == nil {
 		return nil, fmt.Errorf("project runtime is nil")
 	}
@@ -186,7 +186,6 @@ func (runtime *ProjectRuntime) NewSession(intent string, targets ...string) (*se
 		return nil, fmt.Errorf("project turn handler is not configured")
 	}
 	session := sessionstate.NewSession("", intent, time.Now().UTC())
-	session.AddTargets(targets...)
 	if err := runtime.openSessionLocked(session); err != nil {
 		return nil, err
 	}

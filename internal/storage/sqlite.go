@@ -32,14 +32,6 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS sessions_updated_at ON sessions(updated_at DESC, id);
 
-CREATE TABLE IF NOT EXISTS session_targets (
-    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    position INTEGER NOT NULL CHECK (position >= 0),
-    target TEXT NOT NULL,
-    PRIMARY KEY (session_id, position),
-    UNIQUE (session_id, target)
-);
-
 CREATE TABLE IF NOT EXISTS turns (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,

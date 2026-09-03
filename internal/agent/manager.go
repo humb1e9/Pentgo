@@ -260,15 +260,15 @@ func (coordinator *Manager) CurrentProject() (*projectmodel.Project, bool) {
 	return runtime.Project(), true
 }
 
-// NewSession 打开新的运行时会话；目标由调用方显式提供。
-func (coordinator *Manager) NewSession(intent string, targets ...string) (*sessionstate.Session, error) {
+// NewSession 打开新的运行时会话。
+func (coordinator *Manager) NewSession(intent string) (*sessionstate.Session, error) {
 	coordinator.mu.RLock()
 	runtime := coordinator.runtime
 	coordinator.mu.RUnlock()
 	if runtime == nil {
 		return nil, fmt.Errorf("no project is open")
 	}
-	session, err := runtime.NewSession(intent, targets...)
+	session, err := runtime.NewSession(intent)
 	if err != nil {
 		return nil, err
 	}

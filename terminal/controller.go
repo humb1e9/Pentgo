@@ -14,7 +14,7 @@ type Controller interface {
 	OpenCurrentProject(context.Context) (*projectmodel.Project, error)
 	OpenOrCreateWorkspace(context.Context) (*projectmodel.Project, bool, error)
 	CloseProject() error
-	NewSession(string, ...string) (*sessionstate.Session, error)
+	NewSession(string) (*sessionstate.Session, error)
 	ResumeSession(string) (*sessionstate.Session, error)
 	DeleteSession(string) error
 	CurrentProject() (*projectmodel.Project, bool)

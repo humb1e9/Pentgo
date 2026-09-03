@@ -672,16 +672,6 @@ func (model *terminalModel) nextInput() {
 	model.historyDraft = ""
 }
 
-// focusedSession 在不再次查询运行时的情况下查找当前会话快照。
-func (model *terminalModel) focusedSession() *sessionstate.Session {
-	for _, session := range model.sessions {
-		if session.ID == model.focused {
-			return session
-		}
-	}
-	return nil
-}
-
 func (model *terminalModel) composerHit(mouse tea.MouseMsg) bool {
 	startY := model.headerHeight() + model.viewport.Height
 	return mouse.X >= 0 && mouse.X < model.contentWidth() && mouse.Y >= startY && mouse.Y < startY+model.composerHeight()
@@ -796,12 +786,7 @@ func (model *terminalModel) finishRunningTool(name string) {
 }
 
 // dismissStartupActivity removes one-time startup diagnostics before the first user action.
-func (model *terminalModel) dismissStartupActivity() {
-	if len(model.startupActivity) == 0 {
-		return
-	}
-	model.startupActivity = nil
-}
+func (model *terminalModel) dismissStartupActivity() { model.startupActivity = nil }
 
 // clearTransientState isolates command feedback and live execution state to the current focused session.
 func (model *terminalModel) clearTransientState() {
@@ -845,18 +830,8 @@ func (model *terminalModel) addActivity(level activityLevel, value string) {
 	}
 	model.activity = append(model.activity, activityEntry{level: level, text: value})
 	if len(model.activity) > 24 {
-		model.activity = append([]activityEntry(nil), model.activity[len(model.activity)-24:]...)
+		model.activity = model.activity[len(model.activity)-24:]
 	}
-}
-
-func (model *terminalModel) hasActivity(level activityLevel, value string) bool {
-	value = safeTerminalText(value)
-	for _, entry := range model.activity {
-		if entry.level == level && entry.text == value {
-			return true
-		}
-	}
-	return false
 }
 
 // renderMessage 以角色标题和缩进正文呈现持久化消息，并按详情开关折叠工具内容。
@@ -992,12 +967,4 @@ func renderConversationBlock(title, content string, width, lineLimit int, bodySt
 func indentLines(value string, spaces int) string {
 	indent := strings.Repeat(" ", spaces)
 	return indent + strings.ReplaceAll(value, "\n", "\n"+indent)
-}
-
-// max 返回较大的整数，用于限制布局尺寸。
-func max(left, right int) int {
-	if left > right {
-		return left
-	}
-	return right
 }

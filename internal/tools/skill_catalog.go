@@ -1,11 +1,10 @@
 package tools
 
 import (
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io/fs"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -34,7 +33,6 @@ type Diagnostic struct {
 // ScanResult is the complete result of a registry scan.
 type ScanResult struct {
 	Catalog     []Skill
-	Digest      string
 	Diagnostics []Diagnostic
 }
 
@@ -43,27 +41,15 @@ var ErrUnknownSkill = errors.New("unknown skill")
 
 // Registry stores scanned metadata and paths, but never full skill bodies.
 type Registry struct {
-	mu          sync.RWMutex
-	source      fs.FS
-	catalog     []Skill
-	paths       map[string]string
-	digest      string
-	diagnostics []Diagnostic
+	mu      sync.RWMutex
+	source  fs.FS
+	catalog []Skill
+	paths   map[string]string
 }
 
 // NewRegistry binds a registry to source. Skills are discovered by Scan.
 func NewRegistry(source fs.FS) *Registry {
 	return &Registry{source: source, paths: make(map[string]string)}
-}
-
-// HasSkills reports whether the last scan found at least one valid skill.
-func (registry *Registry) HasSkills() bool {
-	if registry == nil {
-		return false
-	}
-	registry.mu.RLock()
-	defer registry.mu.RUnlock()
-	return len(registry.catalog) != 0
 }
 
 // Scan reads Markdown frontmatter and atomically replaces all registry state.
@@ -107,9 +93,8 @@ func (registry *Registry) Scan() ScanResult {
 		catalog = append(catalog, Skill{Name: name, Description: description})
 		paths[name] = path
 	}
-	sort.Slice(catalog, func(i, j int) bool { return catalog[i].Name < catalog[j].Name })
+	slices.SortFunc(catalog, func(a, b Skill) int { return strings.Compare(a.Name, b.Name) })
 	result.Catalog = catalog
-	result.Digest = catalogDigest(catalog)
 	registry.replace(result, paths)
 	return cloneScanResult(result)
 }
@@ -122,8 +107,6 @@ func (registry *Registry) replace(result ScanResult, paths map[string]string) {
 	for name, path := range paths {
 		registry.paths[name] = path
 	}
-	registry.digest = result.Digest
-	registry.diagnostics = append([]Diagnostic(nil), result.Diagnostics...)
 }
 
 func cloneScanResult(result ScanResult) ScanResult {
@@ -132,50 +115,10 @@ func cloneScanResult(result ScanResult) ScanResult {
 	return result
 }
 
-// Catalog returns a defensive copy of sorted scanned metadata.
-func (registry *Registry) Catalog() []Skill {
-	if registry == nil {
-		return nil
-	}
-	registry.mu.RLock()
-	defer registry.mu.RUnlock()
-	return append([]Skill(nil), registry.catalog...)
-}
-
-// Diagnostics returns a defensive copy of the last scan diagnostics.
-func (registry *Registry) Diagnostics() []Diagnostic {
-	if registry == nil {
-		return nil
-	}
-	registry.mu.RLock()
-	defer registry.mu.RUnlock()
-	return append([]Diagnostic(nil), registry.diagnostics...)
-}
-
-// Digest returns the stable digest of the last scanned catalog.
-func (registry *Registry) Digest() string {
-	if registry == nil {
-		return ""
-	}
-	registry.mu.RLock()
-	defer registry.mu.RUnlock()
-	return registry.digest
-}
-
-// Names returns sorted names accepted by Load.
-func (registry *Registry) Names() []string {
-	catalog := registry.Catalog()
-	names := make([]string, 0, len(catalog))
-	for _, skill := range catalog {
-		names = append(names, skill.Name)
-	}
-	return names
-}
-
 // Matches returns up to limit relevant skills ranked by a conservative fuzzy score.
 func (registry *Registry) Matches(request string, limit int) []Skill {
 	request = strings.ToLower(strings.TrimSpace(request))
-	if request == "" || limit <= 0 {
+	if registry == nil || request == "" || limit <= 0 {
 		return nil
 	}
 	type candidate struct {
@@ -183,16 +126,18 @@ func (registry *Registry) Matches(request string, limit int) []Skill {
 		score int
 	}
 	candidates := make([]candidate, 0)
-	for _, skill := range registry.Catalog() {
+	registry.mu.RLock()
+	for _, skill := range registry.catalog {
 		if score := skillMatchScore(request, skill); score >= 4 {
 			candidates = append(candidates, candidate{skill: skill, score: score})
 		}
 	}
-	sort.Slice(candidates, func(i, j int) bool {
-		if candidates[i].score == candidates[j].score {
-			return candidates[i].skill.Name < candidates[j].skill.Name
+	registry.mu.RUnlock()
+	slices.SortFunc(candidates, func(a, b candidate) int {
+		if a.score == b.score {
+			return strings.Compare(a.skill.Name, b.skill.Name)
 		}
-		return candidates[i].score > candidates[j].score
+		return b.score - a.score
 	})
 	if len(candidates) > limit {
 		candidates = candidates[:limit]
@@ -337,17 +282,6 @@ func normalizeDescription(description string) string {
 		limit--
 	}
 	return description[:limit] + "..."
-}
-
-func catalogDigest(catalog []Skill) string {
-	if len(catalog) == 0 {
-		return ""
-	}
-	hash := sha256.New()
-	for _, skill := range catalog {
-		fmt.Fprintf(hash, "%s\n%s\n", skill.Name, skill.Description)
-	}
-	return fmt.Sprintf("%x", hash.Sum(nil))
 }
 
 // bound truncates an injected document to the maximum skill size.

@@ -138,7 +138,7 @@ func (bridge *EventBridge) message(event *adk.AgentEvent) (*schema.Message, sche
 			role = chunk.Role
 		}
 		if role == schema.Assistant && chunk.Content != "" {
-			bridge.emitEvent(sessionstate.Event{Kind: sessionstate.EventAssistantDelta, Message: chunk.Content, Data: fromEinoMessage(chunk)})
+			bridge.emitEvent(sessionstate.Event{Kind: sessionstate.EventAssistantDelta, Message: chunk.Content})
 		}
 		chunks = append(chunks, chunk)
 	}
@@ -166,7 +166,7 @@ func (bridge *EventBridge) assistant(message session.Message) error {
 		if err := bridge.conversation.Append(message); err != nil {
 			return err
 		}
-		bridge.emitEvent(sessionstate.Event{Kind: sessionstate.EventAssistantMessage, Message: message.Content, Data: message})
+		bridge.emitEvent(sessionstate.Event{Kind: sessionstate.EventAssistantMessage, Message: message.Content})
 		return nil
 	}
 	filtered := message
@@ -189,7 +189,7 @@ func (bridge *EventBridge) assistant(message session.Message) error {
 	}
 	bridge.pendingCalls = append(bridge.pendingCalls, filtered.ToolCalls...)
 	for _, call := range filtered.ToolCalls {
-		bridge.emitEvent(sessionstate.Event{Kind: sessionstate.EventToolStarted, Message: call.Name, Data: call})
+		bridge.emitEvent(sessionstate.Event{Kind: sessionstate.EventToolStarted, Message: call.Name})
 	}
 	return nil
 }
@@ -235,7 +235,7 @@ func (bridge *EventBridge) flushResults() error {
 		return err
 	}
 	for _, message := range messages {
-		bridge.emitEvent(sessionstate.Event{Kind: sessionstate.EventToolFinished, Message: message.ToolName, Output: message.Content, Data: message})
+		bridge.emitEvent(sessionstate.Event{Kind: sessionstate.EventToolFinished, Message: message.ToolName})
 	}
 	bridge.pendingCalls = nil
 	bridge.pendingResults = make(map[string]session.Message)

@@ -16,8 +16,7 @@ type ContextMiddlewareConfig struct {
 	SessionID    string
 	Window       *contextpolicy.ContextWindow
 	Conversation func() []session.Message
-	ToolProvider tools.Provider
-	BuildTools   func(context.Context) ([]tools.Tool, error)
+	Tools        []tools.Tool
 	Facts        func(context.Context) (string, error)
 }
 
@@ -27,12 +26,6 @@ type ContextMiddleware struct {
 	config ContextMiddlewareConfig
 }
 
-type runtimeToolsKey struct{}
-
-func NewContextMiddleware(config ContextMiddlewareConfig) *ContextMiddleware {
-	return &ContextMiddleware{BaseChatModelAgentMiddleware: &adk.BaseChatModelAgentMiddleware{}, config: config}
-}
-
 func (middleware *ContextMiddleware) BeforeAgent(ctx context.Context, runCtx *adk.ChatModelAgentContext) (context.Context, *adk.ChatModelAgentContext, error) {
 	if middleware == nil || middleware.config.Window == nil {
 		return ctx, runCtx, fmt.Errorf("agent context window is not configured")
@@ -40,12 +33,8 @@ func (middleware *ContextMiddleware) BeforeAgent(ctx context.Context, runCtx *ad
 	if runCtx == nil {
 		return ctx, nil, fmt.Errorf("agent run context is nil")
 	}
-	tools, err := middleware.resolveTools(ctx)
-	if err != nil {
-		return ctx, runCtx, err
-	}
 	base := append([]tool.BaseTool(nil), runCtx.Tools...)
-	for _, projectTool := range tools {
+	for _, projectTool := range middleware.config.Tools {
 		if projectTool == nil {
 			return ctx, runCtx, fmt.Errorf("agent context tool is nil")
 		}
@@ -56,7 +45,7 @@ func (middleware *ContextMiddleware) BeforeAgent(ctx context.Context, runCtx *ad
 		base = append(base, adapter)
 	}
 	runCtx.Tools = base
-	return context.WithValue(ctx, runtimeToolsKey{}, tools), runCtx, nil
+	return ctx, runCtx, nil
 }
 
 func (middleware *ContextMiddleware) BeforeModelRewriteState(ctx context.Context, state *adk.ChatModelAgentState, _ *adk.ModelContext) (context.Context, *adk.ChatModelAgentState, error) {
@@ -79,16 +68,6 @@ func (middleware *ContextMiddleware) BeforeModelRewriteState(ctx context.Context
 	}
 	state.Messages = toEinoMessages(messages)
 	return ctx, state, nil
-}
-
-func (middleware *ContextMiddleware) resolveTools(ctx context.Context) ([]tools.Tool, error) {
-	if middleware.config.BuildTools != nil {
-		return middleware.config.BuildTools(ctx)
-	}
-	if middleware.config.ToolProvider != nil {
-		return middleware.config.ToolProvider.Tools(ctx)
-	}
-	return nil, nil
 }
 
 func (middleware *ContextMiddleware) resolveFacts(ctx context.Context) (string, error) {

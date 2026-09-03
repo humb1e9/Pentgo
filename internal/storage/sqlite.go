@@ -9,9 +9,6 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// schemaVersion 记录每个项目数据库应使用的 SQLite 布局版本。
-const schemaVersion = 11
-
 // schema 由 openSQLite 在单个事务中应用于新数据库。
 // 表使用规范化关系持久化事实，而非序列化状态块。
 const schema = `
@@ -26,11 +23,9 @@ CREATE TABLE IF NOT EXISTS projects (
 CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    target TEXT NOT NULL DEFAULT '',
     intent TEXT NOT NULL DEFAULT '',
     turn_count INTEGER NOT NULL DEFAULT 0 CHECK (turn_count >= 0),
     last_turn_id TEXT REFERENCES turns(id) DEFERRABLE INITIALLY DEFERRED,
-    active_turn_id TEXT REFERENCES turns(id) DEFERRABLE INITIALLY DEFERRED,
     final_summary TEXT NOT NULL DEFAULT '',
     started_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
@@ -140,14 +135,6 @@ func OpenSQLite(path string) (*sql.DB, error) {
 			_ = db.Close()
 			return nil, fmt.Errorf("initialize sqlite schema: %w", err)
 		}
-		if err := migrateLegacyCheckpoints(db); err != nil {
-			_ = db.Close()
-			return nil, err
-		}
-		if err := removeLegacyContextSurface(db); err != nil {
-			_ = db.Close()
-			return nil, err
-		}
 		if err := validateCurrentSchema(db); err != nil {
 			_ = db.Close()
 			return nil, err
@@ -168,47 +155,15 @@ func OpenSQLite(path string) (*sql.DB, error) {
 	return open()
 }
 
-func migrateLegacyCheckpoints(db *sql.DB) error {
-	var legacyCount int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'adk_checkpoints'`).Scan(&legacyCount); err != nil {
-		return fmt.Errorf("check legacy checkpoints: %w", err)
-	}
-	if legacyCount == 0 {
-		return nil
-	}
-	transaction, err := db.Begin()
-	if err != nil {
-		return fmt.Errorf("begin checkpoint migration: %w", err)
-	}
-	defer transaction.Rollback()
-	if _, err := transaction.Exec(`INSERT OR IGNORE INTO runner_checkpoints(session_id, turn_id, checkpoint_id, payload, updated_at) SELECT session_id, turn_id, checkpoint_id, payload, updated_at FROM adk_checkpoints`); err != nil {
-		return fmt.Errorf("copy legacy checkpoints: %w", err)
-	}
-	if _, err := transaction.Exec(`DROP TABLE adk_checkpoints`); err != nil {
-		return fmt.Errorf("remove legacy checkpoints: %w", err)
-	}
-	if err := transaction.Commit(); err != nil {
-		return fmt.Errorf("commit checkpoint migration: %w", err)
-	}
-	return nil
-}
-
-// removeLegacyContextSurface drops the retired node graph. The conversation
-// ledger remains intact and is used to rebuild rolling summaries.
-func removeLegacyContextSurface(db *sql.DB) error {
-	for _, table := range []string{"context_compactions", "context_surface_nodes", "context_surface_state"} {
-		if _, err := db.Exec("DROP TABLE IF EXISTS " + table); err != nil {
-			return fmt.Errorf("remove legacy context surface table %s: %w", table, err)
-		}
-	}
-	return nil
-}
-
 func validateCurrentSchema(queryer interface {
 	QueryRow(string, ...any) *sql.Row
 }) error {
 	var reasoningColumns int
 	if err := queryer.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('conversation_messages') WHERE name = 'reasoning_content'`).Scan(&reasoningColumns); err != nil || reasoningColumns != 1 {
+		return fmt.Errorf("current schema check failed")
+	}
+	var retiredSessionColumns int
+	if err := queryer.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name IN ('target', 'active_turn_id')`).Scan(&retiredSessionColumns); err != nil || retiredSessionColumns != 0 {
 		return fmt.Errorf("current schema check failed")
 	}
 	var legacyFacts int

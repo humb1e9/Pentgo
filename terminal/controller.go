@@ -9,7 +9,7 @@ import (
 )
 
 // Controller is the complete runtime surface consumed by the terminal UI.
-// bootstrap.Application implements it; the UI never opens SQLite, models, or tools.
+// agent.Manager implements it; the UI never opens SQLite, models, or tools.
 type Controller interface {
 	OpenCurrentProject(context.Context) (*projectmodel.Project, error)
 	OpenOrCreateWorkspace(context.Context) (*projectmodel.Project, bool, error)

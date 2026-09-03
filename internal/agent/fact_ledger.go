@@ -8,13 +8,6 @@ import (
 	projectmodel "pentgo/internal/project"
 )
 
-// ProjectFactUpsert is the typed command for upserting a project fact.
-type ProjectFactUpsert struct {
-	Key         string
-	Value       string
-	EvidenceRef *int
-}
-
 // ProjectFactRepository is the storage boundary for project facts.
 type ProjectFactRepository interface {
 	Upsert(context.Context, projectmodel.ProjectFact) error
@@ -41,20 +34,16 @@ func NewProjectLedger(repo ProjectFactRepository, evidence EvidenceReferenceLook
 
 // Upsert validates the command, checks evidence existence, and delegates to
 // the repository. A nil evidence ref is accepted; missing refs are rejected.
-func (ledger *ProjectFactLedger) Upsert(ctx context.Context, cmd ProjectFactUpsert) error {
+func (ledger *ProjectFactLedger) Upsert(ctx context.Context, fact projectmodel.ProjectFact) error {
 	if ledger == nil || ledger.repo == nil {
 		return fmt.Errorf("project fact ledger is incomplete")
 	}
 	var evidenceRef *int
-	if cmd.EvidenceRef != nil {
-		value := *cmd.EvidenceRef
+	if fact.EvidenceRef != nil {
+		value := *fact.EvidenceRef
 		evidenceRef = &value
 	}
-	fact := projectmodel.ProjectFact{
-		Key:         cmd.Key,
-		Value:       cmd.Value,
-		EvidenceRef: evidenceRef,
-	}
+	fact.EvidenceRef = evidenceRef
 	if err := projectmodel.ValidateProjectFact(fact); err != nil {
 		return err
 	}

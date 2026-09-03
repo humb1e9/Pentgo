@@ -2,8 +2,9 @@ package tools
 
 import (
 	"fmt"
+	"maps"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -86,10 +87,5 @@ func (config Config) Validate() error {
 }
 
 func sortedLocalNames(values LocalTools) []string {
-	names := make([]string, 0, len(values))
-	for name := range values {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
+	return slices.Sorted(maps.Keys(values))
 }

@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	contextpolicy "pentgo/internal/context"
 	"pentgo/internal/evidence"
 	projectmodel "pentgo/internal/project"
 	sessionstate "pentgo/internal/session"
@@ -26,7 +25,6 @@ type ProjectRuntime struct {
 	store     *storage.ProjectStore
 	project   *projectmodel.Project
 	facts     *ProjectFactLedger
-	factIndex *contextpolicy.ProjectFactIndex
 	journal   *evidence.EvidenceStore
 	workspace *builtins.Workspace
 	tools     tools.Provider
@@ -46,25 +44,9 @@ type sessionRuntime struct {
 	conversation *sessionstate.ConversationStore
 }
 
-// OpenProjectRuntime 加载项目状态并打开工作区和证据 journal。调用方必须先设置
-// turn handler，之后才能打开会话。
-func OpenProjectRuntime(ctx context.Context, store *storage.ProjectStore, portsTools tools.Provider) (*ProjectRuntime, error) {
-	return openProjectRuntime(ctx, store, portsTools)
-}
-
-// OpenProjectRuntimeWithSecrets 额外在该运行时写入的证据中脱敏传入的敏感值。
-func OpenProjectRuntimeWithSecrets(ctx context.Context, store *storage.ProjectStore, portsTools tools.Provider, secrets ...string) (*ProjectRuntime, error) {
-	return openProjectRuntimeWithSecrets(ctx, store, portsTools, secrets...)
-}
-
-// openProjectRuntime 保留供内部调用的非脱敏构造函数。
-func openProjectRuntime(ctx context.Context, store *storage.ProjectStore, portsTools tools.Provider) (*ProjectRuntime, error) {
-	return openProjectRuntimeWithSecrets(ctx, store, portsTools)
-}
-
-// openProjectRuntimeWithSecrets 按 Close 的逆序创建项目资源，
-// 从而在部分初始化失败时能够正确释放已打开的资源。
-func openProjectRuntimeWithSecrets(ctx context.Context, store *storage.ProjectStore, portsTools tools.Provider, secrets ...string) (*ProjectRuntime, error) {
+// OpenProjectRuntime 按 Close 的逆序加载项目资源，并在 Evidence 中脱敏可选敏感值。
+// 调用方必须先设置 turn handler，之后才能打开会话。
+func OpenProjectRuntime(ctx context.Context, store *storage.ProjectStore, portsTools tools.Provider, secrets ...string) (*ProjectRuntime, error) {
 	if store == nil {
 		return nil, fmt.Errorf("project store is nil")
 	}
@@ -84,7 +66,6 @@ func openProjectRuntimeWithSecrets(ctx context.Context, store *storage.ProjectSt
 		return nil, err
 	}
 	facts := NewProjectLedger(repository, journal)
-	factIndex := contextpolicy.NewProjectFactIndex(facts)
 	workspace, err := builtins.NewWorkspace(store.WorkspaceRoot())
 	if err != nil {
 		_ = journal.Close()
@@ -95,7 +76,6 @@ func openProjectRuntimeWithSecrets(ctx context.Context, store *storage.ProjectSt
 		store:     store,
 		project:   project,
 		facts:     facts,
-		factIndex: factIndex,
 		journal:   journal,
 		workspace: workspace,
 		tools:     portsTools,
@@ -329,42 +309,6 @@ func (runtime *ProjectRuntime) ResumeTurn(ctx context.Context, sessionID string)
 	return session.worker.Resume(ctx)
 }
 
-// RenameSession 先在 worker 中执行重命名，再提交持久化变更。提交失败时，
-// 内存状态和持久化状态都会回滚至原名称。
-func (runtime *ProjectRuntime) RenameSession(sessionID, name string) error {
-	if runtime == nil {
-		return fmt.Errorf("project runtime is nil")
-	}
-	runtime.lifecycle.Lock()
-	defer runtime.lifecycle.Unlock()
-	runtime.mu.RLock()
-	session := runtime.sessions[sessionID]
-	runtime.mu.RUnlock()
-	if session == nil {
-		return fmt.Errorf("session %q is not open", sessionID)
-	}
-	original := session.worker.Snapshot()
-	if original == nil {
-		return fmt.Errorf("session %q is unavailable", sessionID)
-	}
-	if err := <-session.worker.Rename(name); err != nil {
-		return err
-	}
-	renamed := session.worker.Snapshot()
-	runtime.commitMu.Lock()
-	defer runtime.commitMu.Unlock()
-	if err := runtime.commitSessionLocked(renamed); err != nil {
-		if rollbackErr := <-session.worker.Rename(original.Name); rollbackErr != nil {
-			return fmt.Errorf("rename session %q: %v; restore memory: %w", sessionID, err, rollbackErr)
-		}
-		if restoreErr := runtime.commitSessionLocked(original); restoreErr != nil {
-			return fmt.Errorf("rename session %q: %v; restore storage: %w", sessionID, err, restoreErr)
-		}
-		return err
-	}
-	return nil
-}
-
 // DeleteSession 停止指定会话的 worker，删除其持久化会话图，并更新项目摘要。
 func (runtime *ProjectRuntime) DeleteSession(sessionID string) error {
 	if runtime == nil {
@@ -514,49 +458,12 @@ func (runtime *ProjectRuntime) Project() *projectmodel.Project {
 	return projectmodel.CloneProject(runtime.project)
 }
 
-// ProjectFacts returns the project-scoped minimal fact ledger.
-func (runtime *ProjectRuntime) ProjectFacts() *ProjectFactLedger {
-	if runtime == nil {
-		return nil
-	}
-	runtime.mu.RLock()
-	defer runtime.mu.RUnlock()
-	return runtime.facts
-}
-
-// ProjectFactIndex returns the read-only Fact Index renderer used to capture
-// one stable snapshot at the start of every turn.
-func (runtime *ProjectRuntime) ProjectFactIndex() *contextpolicy.ProjectFactIndex {
-	if runtime == nil {
-		return nil
-	}
-	runtime.mu.RLock()
-	defer runtime.mu.RUnlock()
-	return runtime.factIndex
-}
-
-// Store 为需要访问存储的应用服务暴露项目存储对象。
-func (runtime *ProjectRuntime) Store() *storage.ProjectStore {
-	if runtime == nil {
-		return nil
-	}
-	return runtime.store
-}
-
 // Evidence 返回项目持有的审计 journal。
 func (runtime *ProjectRuntime) Evidence() *evidence.EvidenceStore {
 	if runtime == nil {
 		return nil
 	}
 	return runtime.journal
-}
-
-// Workspace 返回锚定在当前项目根目录的本地工具后端。
-func (runtime *ProjectRuntime) Workspace() *builtins.Workspace {
-	if runtime == nil {
-		return nil
-	}
-	return runtime.workspace
 }
 
 // Tools 从已配置的项目 Provider 解析外部工具。

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -31,8 +30,6 @@ type Worker struct {
 type workerRequest struct {
 	ctx     context.Context
 	message string
-	name    string
-	rename  bool
 	resume  bool
 	done    chan error
 }
@@ -73,36 +70,16 @@ func NewWorker(parent context.Context, session *Session, turn TurnFunc) (*Worker
 // Submit queues a user message and returns a channel written once the turn
 // finishes.
 func (worker *Worker) Submit(ctx context.Context, message string) <-chan error {
-	done := make(chan error, 1)
-	if worker == nil {
-		done <- fmt.Errorf("session worker is nil")
-		return done
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	request := workerRequest{ctx: ctx, message: message, done: done}
-	worker.stateMu.Lock()
-	if worker.closed.Load() {
-		worker.stateMu.Unlock()
-		done <- fmt.Errorf("session %q is closed", worker.session.ID)
-		return done
-	}
-	select {
-	case worker.input <- request:
-		worker.stateMu.Unlock()
-	case <-worker.done:
-		worker.stateMu.Unlock()
-		done <- fmt.Errorf("session %q is closed", worker.session.ID)
-	case <-ctx.Done():
-		worker.stateMu.Unlock()
-		done <- ctx.Err()
-	}
-	return done
+	return worker.enqueue(ctx, workerRequest{message: message})
 }
 
 // Resume queues continuation of the most recently interrupted turn.
 func (worker *Worker) Resume(ctx context.Context) <-chan error {
+	return worker.enqueue(ctx, workerRequest{resume: true})
+}
+
+// enqueue queues a request and returns a channel written once it is handled.
+func (worker *Worker) enqueue(ctx context.Context, request workerRequest) <-chan error {
 	done := make(chan error, 1)
 	if worker == nil {
 		done <- fmt.Errorf("session worker is nil")
@@ -111,7 +88,8 @@ func (worker *Worker) Resume(ctx context.Context) <-chan error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	request := workerRequest{ctx: ctx, resume: true, done: done}
+	request.ctx = ctx
+	request.done = done
 	worker.stateMu.Lock()
 	if worker.closed.Load() {
 		worker.stateMu.Unlock()
@@ -127,35 +105,6 @@ func (worker *Worker) Resume(ctx context.Context) <-chan error {
 	case <-ctx.Done():
 		worker.stateMu.Unlock()
 		done <- ctx.Err()
-	}
-	return done
-}
-
-// Rename queues a name change through the same state-ownership boundary.
-func (worker *Worker) Rename(name string) <-chan error {
-	done := make(chan error, 1)
-	if worker == nil {
-		done <- fmt.Errorf("session worker is nil")
-		return done
-	}
-	name = strings.TrimSpace(name)
-	if name == "" {
-		done <- fmt.Errorf("session name is empty")
-		return done
-	}
-	request := workerRequest{name: name, rename: true, done: done}
-	worker.stateMu.Lock()
-	if worker.closed.Load() {
-		worker.stateMu.Unlock()
-		done <- fmt.Errorf("session %q is closed", worker.session.ID)
-		return done
-	}
-	select {
-	case worker.input <- request:
-		worker.stateMu.Unlock()
-	case <-worker.done:
-		worker.stateMu.Unlock()
-		done <- fmt.Errorf("session %q is closed", worker.session.ID)
 	}
 	return done
 }
@@ -182,14 +131,6 @@ func (worker *Worker) Done() <-chan struct{} {
 		return nil
 	}
 	return worker.done
-}
-
-// SessionID returns the immutable worker session id.
-func (worker *Worker) SessionID() string {
-	if worker == nil || worker.session == nil {
-		return ""
-	}
-	return worker.session.ID
 }
 
 // Stop stops the worker.
@@ -239,12 +180,6 @@ func (worker *Worker) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case request := <-worker.input:
-			if request.rename {
-				err := worker.session.Rename(request.name)
-				worker.publishSnapshot()
-				request.done <- err
-				continue
-			}
 			if err := ctx.Err(); err != nil {
 				request.done <- err
 				return

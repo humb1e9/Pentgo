@@ -40,9 +40,9 @@ func New(ctx context.Context, configuration Config) (model.ToolCallingChatModel,
 
 func newOpenAIConfig(configuration Config, baseURL string, client *http.Client) *einoopenai.ChatModelConfig {
 	config := &einoopenai.ChatModelConfig{APIKey: configuration.APIKey, BaseURL: baseURL, Model: configuration.Model, HTTPClient: client}
-	if configuration.Thinking {
+	if effort := configuration.normalizedThinkingEffort(); effort != "" {
 		config.ExtraFields = map[string]any{"enable_thinking": true}
-		config.ReasoningEffort = thinkingEffort(configuration.normalizedThinkingEffort())
+		config.ReasoningEffort = thinkingEffort(effort)
 	}
 	return config
 }

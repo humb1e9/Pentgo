@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"maps"
 	"os/exec"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -24,11 +25,7 @@ func NewLocalRegistry(configurations LocalTools, maximumOutputBytes int) *LocalR
 	if maximumOutputBytes <= 0 {
 		maximumOutputBytes = 65536
 	}
-	names := make([]string, 0, len(configurations))
-	for name := range configurations {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	names := slices.Sorted(maps.Keys(configurations))
 
 	registry := &LocalRegistry{tools: make([]Tool, 0, len(names))}
 	for _, name := range names {
@@ -95,8 +92,6 @@ func stringArguments(arguments map[string]any) ([]string, error) {
 		return nil, fmt.Errorf("args is required")
 	}
 	switch values := value.(type) {
-	case []string:
-		return append([]string(nil), values...), nil
 	case []any:
 		args := make([]string, 0, len(values))
 		for index, value := range values {
@@ -135,20 +130,15 @@ type boundedBuffer struct {
 func (buffer *boundedBuffer) Write(value []byte) (int, error) {
 	buffer.mu.Lock()
 	defer buffer.mu.Unlock()
-	if buffer.maximum <= 0 {
-		buffer.maximum = 65536
-	}
 	remaining := buffer.maximum - buffer.buffer.Len()
-	if remaining > 0 {
-		if len(value) > remaining {
-			_, _ = buffer.buffer.Write(value[:remaining])
-			buffer.truncated = true
-		} else {
-			_, _ = buffer.buffer.Write(value)
-		}
-	} else if len(value) > 0 {
+	if len(value) > remaining {
 		buffer.truncated = true
+		if remaining > 0 {
+			_, _ = buffer.buffer.Write(value[:remaining])
+		}
+		return len(value), nil
 	}
+	_, _ = buffer.buffer.Write(value)
 	return len(value), nil
 }
 
@@ -164,4 +154,3 @@ func (buffer *boundedBuffer) String() string {
 
 var _ Provider = (*LocalRegistry)(nil)
 var _ Tool = (*localTool)(nil)
-var _ ToolSchemaProvider = (*localTool)(nil)

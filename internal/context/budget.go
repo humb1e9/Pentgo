@@ -47,10 +47,11 @@ func EstimateToolTokens(projectTools []tools.Tool) int {
 		if projectTool == nil {
 			continue
 		}
-		schema := map[string]any{"name": projectTool.Name(), "description": projectTool.Description(), "parameters": map[string]any{"type": "object"}}
-		if provider, ok := projectTool.(tools.ToolSchemaProvider); ok && provider.InputSchema() != nil {
-			schema["parameters"] = provider.InputSchema()
+		parameters := projectTool.InputSchema()
+		if parameters == nil {
+			parameters = map[string]any{"type": "object"}
 		}
+		schema := map[string]any{"name": projectTool.Name(), "description": projectTool.Description(), "parameters": parameters}
 		encoded, err := json.Marshal(schema)
 		if err != nil {
 			encoded = []byte(fmt.Sprintf("%s %s", projectTool.Name(), projectTool.Description()))

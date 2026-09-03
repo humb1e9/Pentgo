@@ -34,9 +34,11 @@ type workspaceTool struct {
 	invoke      func(context.Context, *Workspace, map[string]any) (string, error)
 }
 
-func (tool *workspaceTool) Name() string                { return tool.name }
-func (tool *workspaceTool) Description() string         { return tool.description }
-func (tool *workspaceTool) InputSchema() map[string]any { return cloneJSONMap(tool.schema) }
+func (tool *workspaceTool) Name() string        { return tool.name }
+func (tool *workspaceTool) Description() string { return tool.description }
+
+// InputSchema returns the tool's immutable schema; callers must not mutate it.
+func (tool *workspaceTool) InputSchema() map[string]any { return tool.schema }
 func (tool *workspaceTool) Invoke(ctx context.Context, arguments map[string]any) (string, error) {
 	if tool == nil || tool.workspace == nil {
 		return "", fmt.Errorf("workspace tool is unavailable")
@@ -60,7 +62,7 @@ func invokeLS(ctx context.Context, workspace *Workspace, arguments map[string]an
 	for _, entry := range entries {
 		lines = append(lines, fmt.Sprintf("%s\t%s\t%d\t%s", entry.Path, dirMarker(entry.IsDir), entry.Size, entry.ModifiedAt))
 	}
-	return boundToolText(strings.Join(lines, "\n")), nil
+	return boundText(strings.Join(lines, "\n"), workspaceToolOutputLimit), nil
 }
 
 func invokeRead(ctx context.Context, workspace *Workspace, arguments map[string]any) (string, error) {
@@ -80,7 +82,7 @@ func invokeRead(ctx context.Context, workspace *Workspace, arguments map[string]
 	if err != nil {
 		return "", err
 	}
-	return boundToolText(content.Content), nil
+	return boundText(content.Content, workspaceToolOutputLimit), nil
 }
 
 func invokeWrite(ctx context.Context, workspace *Workspace, arguments map[string]any) (string, error) {
@@ -141,7 +143,7 @@ func invokeGlob(ctx context.Context, workspace *Workspace, arguments map[string]
 	for _, entry := range entries {
 		lines = append(lines, fmt.Sprintf("%s\t%s\t%d\t%s", entry.Path, dirMarker(entry.IsDir), entry.Size, entry.ModifiedAt))
 	}
-	return boundToolText(strings.Join(lines, "\n")), nil
+	return boundText(strings.Join(lines, "\n"), workspaceToolOutputLimit), nil
 }
 
 func invokeGrep(ctx context.Context, workspace *Workspace, arguments map[string]any) (string, error) {
@@ -185,7 +187,7 @@ func invokeGrep(ctx context.Context, workspace *Workspace, arguments map[string]
 	for _, match := range matches {
 		lines = append(lines, fmt.Sprintf("%s:%d:%s", match.Path, match.Line, match.Content))
 	}
-	return boundToolText(strings.Join(lines, "\n")), nil
+	return boundText(strings.Join(lines, "\n"), workspaceToolOutputLimit), nil
 }
 
 func invokeExecute(ctx context.Context, workspace *Workspace, arguments map[string]any) (string, error) {
@@ -211,17 +213,13 @@ func invokeExecute(ctx context.Context, workspace *Workspace, arguments map[stri
 	if response.Truncated {
 		output += "\n[... output truncated ...]"
 	}
-	return boundToolText(output), nil
+	return boundText(output, workspaceToolOutputLimit), nil
 }
 
 func objectSchema(properties map[string]any, required ...string) map[string]any {
 	result := map[string]any{"type": "object", "properties": properties}
 	if len(required) > 0 {
-		values := make([]any, len(required))
-		for index, value := range required {
-			values[index] = value
-		}
-		result["required"] = values
+		result["required"] = required
 	}
 	return result
 }
@@ -239,12 +237,6 @@ func dirMarker(directory bool) string {
 		return "dir"
 	}
 	return "file"
-}
-func boundToolText(value string) string {
-	if len(value) <= workspaceToolOutputLimit {
-		return value
-	}
-	return value[:workspaceToolOutputLimit] + "\n[... output truncated ...]"
 }
 
 func requiredString(arguments map[string]any, key string) (string, error) {
@@ -301,24 +293,13 @@ func optionalInt(arguments map[string]any, key string, fallback int) (int, error
 	case int64:
 		return int(value), nil
 	case float64:
-		if value != float64(int(value)) {
-			return 0, fmt.Errorf("%s must be an integer", key)
+		if value == float64(int(value)) {
+			return int(value), nil
 		}
-		return int(value), nil
 	case string:
-		parsed, err := strconv.Atoi(value)
-		if err != nil {
-			return 0, fmt.Errorf("%s must be an integer", key)
+		if parsed, err := strconv.Atoi(value); err == nil {
+			return parsed, nil
 		}
-		return parsed, nil
-	default:
-		return 0, fmt.Errorf("%s must be an integer", key)
 	}
-}
-func cloneJSONMap(source map[string]any) map[string]any {
-	result := make(map[string]any, len(source))
-	for key, value := range source {
-		result[key] = value
-	}
-	return result
+	return 0, fmt.Errorf("%s must be an integer", key)
 }

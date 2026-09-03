@@ -1,22 +1,8 @@
 package app
 
-import (
-	"pentgo/internal/model"
-	"pentgo/internal/project"
-	"pentgo/internal/tools"
-)
+import "pentgo/internal/agent"
 
-// Config groups user-editable settings by the domain that consumes them.
-type Config struct {
-	Model   model.Config   `json:"model"`
-	Tools   tools.Config   `json:"tools"`
-	Project project.Config `json:"project"`
-}
+// Config is the shared runtime and on-disk configuration schema.
+type Config = agent.Config
 
-func Default() Config {
-	return Config{
-		Model:   model.DefaultConfig(),
-		Tools:   tools.DefaultConfig(),
-		Project: project.DefaultConfig(),
-	}
-}
+func Default() Config { return agent.DefaultConfig() }

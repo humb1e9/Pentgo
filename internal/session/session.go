@@ -35,30 +35,13 @@ type Turn struct {
 type Session struct {
 	ID           string    `json:"id"`
 	Name         string    `json:"name"`
-	Target       string    `json:"target"`
 	Targets      []string  `json:"targets,omitempty"`
 	Intent       string    `json:"intent"`
 	Turns        int       `json:"turns"`
-	ActiveTurnID string    `json:"active_turn_id,omitempty"`
 	ActiveTurn   *Turn     `json:"active_turn,omitempty"`
 	FinalSummary string    `json:"final_summary,omitempty"`
 	StartedAt    time.Time `json:"started_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
-}
-
-// SessionSummary 是项目级、可由会话表重新构建的索引条目。
-type SessionSummary struct {
-	ID        string    `json:"id"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-// Project 聚合会话，并记录项目级标识和时间信息。
-type Project struct {
-	ID        string           `json:"id"`
-	Name      string           `json:"name"`
-	CreatedAt time.Time        `json:"created_at"`
-	UpdatedAt time.Time        `json:"updated_at"`
-	Sessions  []SessionSummary `json:"sessions,omitempty"`
 }
 
 // NewSession 创建 open 状态的会话，并规范化可选的标识与时间。
@@ -101,27 +84,21 @@ func (session *Session) Rename(name string) error {
 	return nil
 }
 
-// AddTargets 追加去重、规范化后的目标，并将首个目标保留在兼容旧数据的 Target 字段中。
+// AddTargets 追加去重、规范化后的目标。
 // 返回值表示会话状态是否发生变化。
 func (session *Session) AddTargets(targets ...string) bool {
 	if session == nil {
 		return false
 	}
-	seen := make(map[string]bool, len(session.Targets)+1)
+	seen := make(map[string]bool, len(session.Targets))
 	for _, target := range session.Targets {
 		seen[target] = true
-	}
-	if session.Target != "" {
-		seen[session.Target] = true
 	}
 	changed := false
 	for _, target := range targets {
 		target = strings.TrimSpace(target)
 		if target == "" || seen[target] {
 			continue
-		}
-		if session.Target == "" {
-			session.Target = target
 		}
 		session.Targets = append(session.Targets, target)
 		seen[target] = true
@@ -148,7 +125,6 @@ func (session *Session) BeginTurn(id, message string, startedAt time.Time) (*Tur
 	}
 	turn := &Turn{ID: strings.TrimSpace(id), SessionID: session.ID, Message: strings.TrimSpace(message), Status: TurnRunning, StartedAt: startedAt}
 	session.ActiveTurn = turn
-	session.ActiveTurnID = turn.ID
 	session.UpdatedAt = startedAt
 	copy := *turn
 	return &copy, nil
@@ -173,7 +149,6 @@ func (session *Session) ResumeTurn(turnID string) error {
 	session.ActiveTurn.Status = TurnRunning
 	session.ActiveTurn.Error = ""
 	session.ActiveTurn.FinishedAt = nil
-	session.ActiveTurnID = session.ActiveTurn.ID
 	session.UpdatedAt = time.Now().UTC()
 	return nil
 }
@@ -199,7 +174,6 @@ func (session *Session) finishTurn(turnID string, status TurnStatus, reason, sum
 	session.ActiveTurn.Status = status
 	session.ActiveTurn.Error = strings.TrimSpace(reason)
 	session.ActiveTurn.FinishedAt = &finishedAt
-	session.ActiveTurnID = ""
 	if status == TurnDone {
 		session.Turns++
 		session.FinalSummary = strings.TrimSpace(summary)
@@ -223,16 +197,6 @@ func CloneSession(source *Session) *Session {
 		}
 		cloned.ActiveTurn = &turn
 	}
-	return &cloned
-}
-
-// CloneProject 复制可重新构建的会话摘要索引。
-func CloneProject(source *Project) *Project {
-	if source == nil {
-		return nil
-	}
-	cloned := *source
-	cloned.Sessions = append([]SessionSummary(nil), source.Sessions...)
 	return &cloned
 }
 

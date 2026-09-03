@@ -33,7 +33,6 @@ type Record struct {
 type EvidenceStore struct {
 	mu      sync.Mutex
 	db      *sql.DB
-	path    string
 	secrets []string
 	failed  error
 	closed  bool
@@ -48,7 +47,7 @@ func OpenEvidenceStore(path string, secrets ...string) (*EvidenceStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &EvidenceStore{db: db, path: path, secrets: normalizeSecrets(secrets)}, nil
+	return &EvidenceStore{db: db, secrets: normalizeSecrets(secrets)}, nil
 }
 
 // RecordResult 返回提交到数据库的准确脱敏输出。
@@ -174,14 +173,6 @@ func scanRecord(row interface{ Scan(...any) error }) (Record, error) {
 	record.StartedAt = parseTime(startedAt)
 	record.FinishedAt = parseTime(finishedAt)
 	return record, nil
-}
-
-// Path 返回此 journal 所依赖的 SQLite 数据库位置。
-func (store *EvidenceStore) Path() string {
-	if store == nil {
-		return ""
-	}
-	return store.path
 }
 
 // Close 释放数据库并返回首个持续性写入失败。

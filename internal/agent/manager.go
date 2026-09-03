@@ -23,13 +23,7 @@ import (
 	einomodel "github.com/cloudwego/eino/components/model"
 )
 
-// 打开目录运行时时使用的工作区和默认会话配置。
-const (
-	workspaceDirectory   = ".pentgo"
-	defaultSessionIntent = "交互会话"
-)
-
-// ErrProjectNotFound 表示工作区和旧版根目录中均不存在 PentGo 项目存储。
+// ErrProjectNotFound 表示当前目录中不存在 .pentgo 项目存储。
 var ErrProjectNotFound = errors.New("current directory is not a PentGo project")
 
 // Dependencies 包含 Manager 使用的可替换进程级依赖。
@@ -54,7 +48,6 @@ type Manager struct {
 	skills           *tools.Registry
 	localTools       tools.Provider
 	skillDiagnostics []tools.Diagnostic
-	skillAvailable   bool
 }
 
 // New 创建以 outputRoot 为根目录的 Manager，并为未提供的依赖补充生产默认值。
@@ -81,7 +74,6 @@ func NewManager(cfg Config, outputRoot string, deps Dependencies) *Manager {
 		skills:           registry,
 		localTools:       deps.DiscoverLocalTools(cfg.Tools.Local, cfg.Tools.MaxOutputBytes),
 		skillDiagnostics: append([]tools.Diagnostic(nil), result.Diagnostics...),
-		skillAvailable:   registry.HasSkills(),
 	}
 }
 
@@ -123,27 +115,7 @@ func (coordinator *Manager) claimSkillDiagnostics(store *storage.ProjectStore) e
 	return nil
 }
 
-// CreateProject 在 Manager 根目录初始化并打开项目。
-func (coordinator *Manager) CreateProject(ctx context.Context, name string) (*projectmodel.Project, error) {
-	if coordinator == nil {
-		return nil, fmt.Errorf("coordinator is nil")
-	}
-	coordinator.lifecycle.Lock()
-	defer coordinator.lifecycle.Unlock()
-	if coordinator.HasProject() {
-		return nil, fmt.Errorf("a project is already open")
-	}
-	store, err := storage.CreateProjectStore(coordinator.root, name, coordinator.now())
-	if err != nil {
-		return nil, err
-	}
-	if err := coordinator.openStore(ctx, store); err != nil {
-		return nil, err
-	}
-	return coordinator.CurrentProjectValue(), nil
-}
-
-// OpenCurrentProject 从工作区或根目录打开已有项目。
+// OpenCurrentProject 从当前目录的 .pentgo 工作区打开已有项目。
 func (coordinator *Manager) OpenCurrentProject(ctx context.Context) (*projectmodel.Project, error) {
 	if coordinator == nil {
 		return nil, fmt.Errorf("coordinator is nil")
@@ -168,40 +140,39 @@ func (coordinator *Manager) OpenOrCreateWorkspace(ctx context.Context) (*project
 	if !errors.Is(err, ErrProjectNotFound) {
 		return nil, false, err
 	}
-	store, err := storage.CreateProjectStoreAt(coordinator.workspaceRoot(), filepath.Base(filepath.Clean(coordinator.root)), coordinator.now())
+	store, err := storage.CreateProjectStore(coordinator.root, filepath.Base(filepath.Clean(coordinator.root)), coordinator.now())
 	if err != nil {
 		return nil, false, err
 	}
 	if err := coordinator.openStore(ctx, store); err != nil {
 		return nil, false, err
 	}
-	return coordinator.CurrentProjectValue(), true, nil
+	project, _ = coordinator.CurrentProject()
+	return project, true, nil
 }
 
-// openCurrentProjectLocked 保留对根目录旧项目布局的支持，同时优先使用当前 .pentgo 工作区布局。
+// openCurrentProjectLocked opens only the current directory's .pentgo store.
 func (coordinator *Manager) openCurrentProjectLocked(ctx context.Context) (*projectmodel.Project, error) {
-	if coordinator.HasProject() {
-		return coordinator.CurrentProjectValue(), nil
+	if project, ok := coordinator.CurrentProject(); ok {
+		return project, nil
 	}
-	for _, root := range []string{coordinator.workspaceRoot(), coordinator.root} {
-		store, err := storage.OpenProjectStore(root)
-		if errors.Is(err, storage.ErrNotProject) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		if err := coordinator.openStore(ctx, store); err != nil {
-			return nil, err
-		}
-		return coordinator.CurrentProjectValue(), nil
+	store, err := storage.OpenProjectStore(coordinator.workspaceRoot())
+	if errors.Is(err, storage.ErrNotProject) {
+		return nil, ErrProjectNotFound
 	}
-	return nil, ErrProjectNotFound
+	if err != nil {
+		return nil, err
+	}
+	if err := coordinator.openStore(ctx, store); err != nil {
+		return nil, err
+	}
+	project, _ := coordinator.CurrentProject()
+	return project, nil
 }
 
 // workspaceRoot 返回启动根目录下项目私有的工作区目录。
 func (coordinator *Manager) workspaceRoot() string {
-	return filepath.Join(coordinator.root, workspaceDirectory)
+	return filepath.Join(coordinator.root, storage.WorkspaceDirectory)
 }
 
 // openStore 装配证据脱敏、MCP 连接、模型构造、可选技能和恢复的会话 worker。
@@ -216,7 +187,7 @@ func (coordinator *Manager) openStore(ctx context.Context, store *storage.Projec
 		ctx = context.Background()
 	}
 	secrets := tools.ConfigSecrets(coordinator.cfg.Tools.MCP)
-	projectRuntime, err := OpenProjectRuntimeWithSecrets(ctx, store, nil, secrets...)
+	projectRuntime, err := OpenProjectRuntime(ctx, store, nil, secrets...)
 	if err != nil {
 		return err
 	}
@@ -239,11 +210,6 @@ func (coordinator *Manager) openStore(ctx context.Context, store *storage.Projec
 		_ = projectRuntime.Close()
 		return err
 	}
-	if _, err := projectTools.Tools(ctx); err != nil {
-		_ = projectTools.Close()
-		_ = projectRuntime.Close()
-		return err
-	}
 	if err := projectRuntime.SetToolProvider(projectTools); err != nil {
 		_ = projectTools.Close()
 		_ = projectRuntime.Close()
@@ -257,11 +223,10 @@ func (coordinator *Manager) openStore(ctx context.Context, store *storage.Projec
 		SkillContext: func(request string) string {
 			return matchedSkillContext(coordinator.skills, request)
 		},
-		Clock:        coordinator.deps.Clock,
-		MaxRequests:  coordinator.cfg.Project.MaxTurns,
-		SystemPrompt: llm.BaseSystemPrompt(),
-		Context:      coordinator.cfg.Project.Context,
-		Summarizer:   summaryWriter,
+		Clock:       coordinator.deps.Clock,
+		MaxRequests: coordinator.cfg.Project.MaxTurns,
+		Context:     coordinator.cfg.Project.Context,
+		Summarizer:  summaryWriter,
 	})
 	projectRuntime.SetPauseHandler(service.PauseSession)
 	if err := projectRuntime.SetTurnHandler(func(runContext context.Context, session *sessionstate.Session, message string) error {
@@ -281,16 +246,6 @@ func (coordinator *Manager) openStore(ctx context.Context, store *storage.Projec
 	return nil
 }
 
-// HasProject 表示当前 Manager 是否持有已打开的运行时。
-func (coordinator *Manager) HasProject() bool {
-	if coordinator == nil {
-		return false
-	}
-	coordinator.mu.RLock()
-	defer coordinator.mu.RUnlock()
-	return coordinator.runtime != nil
-}
-
 // CurrentProject 在运行时打开时返回安全的项目快照。
 func (coordinator *Manager) CurrentProject() (*projectmodel.Project, bool) {
 	if coordinator == nil {
@@ -303,12 +258,6 @@ func (coordinator *Manager) CurrentProject() (*projectmodel.Project, bool) {
 		return nil, false
 	}
 	return runtime.Project(), true
-}
-
-// CurrentProjectValue 是省略 bool 返回值的 CurrentProject 便捷形式。
-func (coordinator *Manager) CurrentProjectValue() *projectmodel.Project {
-	project, _ := coordinator.CurrentProject()
-	return project
 }
 
 // NewSession 打开新的运行时会话；目标由调用方显式提供。
@@ -430,17 +379,6 @@ func (coordinator *Manager) Sessions() []*sessionstate.Session {
 	return sessions
 }
 
-// RenameSession 将持久化重命名操作转发给指定会话 worker。
-func (coordinator *Manager) RenameSession(sessionID, name string) error {
-	coordinator.mu.RLock()
-	runtime := coordinator.runtime
-	coordinator.mu.RUnlock()
-	if runtime == nil {
-		return fmt.Errorf("no project is open")
-	}
-	return runtime.RenameSession(sessionID, name)
-}
-
 // Events 返回会话的非持久化运行时进度事件。
 func (coordinator *Manager) Events(sessionID string) <-chan sessionstate.Event {
 	coordinator.mu.RLock()
@@ -465,25 +403,6 @@ func (coordinator *Manager) Messages(sessionID string) []session.Message {
 		return nil
 	}
 	return conversation.Messages()
-}
-
-// FactIndex renders the fixed-size minimal Fact Index for the CLI.
-func (coordinator *Manager) FactIndex() string {
-	coordinator.mu.RLock()
-	runtime := coordinator.runtime
-	coordinator.mu.RUnlock()
-	if runtime == nil {
-		return "当前没有打开的项目。"
-	}
-	index := runtime.ProjectFactIndex()
-	if index == nil {
-		return "项目事实账本不可用。"
-	}
-	text, err := index.Snapshot(context.Background())
-	if err != nil {
-		return "读取项目事实失败：" + err.Error()
-	}
-	return text
 }
 
 // CloseProject 释放当前运行时及其持有的全部资源。

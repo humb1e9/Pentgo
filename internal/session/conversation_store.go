@@ -13,7 +13,6 @@ import (
 type ConversationStore struct {
 	mu        sync.Mutex
 	db        *sql.DB
-	path      string
 	sessionID string
 	messages  []Message
 	failed    error
@@ -22,16 +21,8 @@ type ConversationStore struct {
 
 // NewConversationStore constructs a conversation store bound to an existing
 // database connection. The root package uses it to open a session conversation.
-func NewConversationStore(db *sql.DB, path, sessionID string, messages []Message) *ConversationStore {
-	return &ConversationStore{db: db, path: path, sessionID: sessionID, messages: messages}
-}
-
-// Path 返回包含 conversation 的 SQLite 数据库。
-func (store *ConversationStore) Path() string {
-	if store == nil {
-		return ""
-	}
-	return store.path
+func NewConversationStore(db *sql.DB, sessionID string, messages []Message) *ConversationStore {
+	return &ConversationStore{db: db, sessionID: sessionID, messages: messages}
 }
 
 // Append 在加入内存回放缓存前提交消息。
@@ -206,33 +197,10 @@ func (store *ConversationStore) Close() error {
 	return store.failed
 }
 
-// loadConversationDB 从规范化表中重建消息及其有序工具调用子项；
+// LoadConversation 从规范化表中重建一个会话的消息及其有序工具调用子项；
 // 回放期间绝不调用历史工具。
-// LoadConversation rebuilds the ordered message history for one session from
-// the normalized tables. The root package uses it when opening a session.
+// The root package uses it when opening a session.
 func LoadConversation(db *sql.DB, sessionID string) ([]Message, error) {
-	return loadConversationQueryer(db, sessionID)
-}
-
-func loadConversationDB(db *sql.DB, sessionID string) ([]Message, error) {
-	return loadConversationQueryer(db, sessionID)
-}
-
-// LoadConversationFrom reconstructs messages through any queryer, including
-// the transaction that captured a paired context-surface snapshot.
-func LoadConversationFrom(queryer interface {
-	Query(string, ...any) (*sql.Rows, error)
-}, sessionID string) ([]Message, error) {
-	return loadConversationQueryer(queryer, sessionID)
-}
-
-type conversationQueryer interface {
-	Query(string, ...any) (*sql.Rows, error)
-}
-
-// loadConversationQueryer reconstructs messages through either a database handle
-// or the transaction that captured the paired Context Surface snapshot.
-func loadConversationQueryer(db conversationQueryer, sessionID string) ([]Message, error) {
 	rows, err := db.Query(`
 		SELECT seq, role, content, reasoning_content, tool_call_id, tool_name, tool_arguments_json
 		FROM conversation_messages WHERE session_id = ? ORDER BY seq`, sessionID)

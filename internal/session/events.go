@@ -7,8 +7,6 @@ type Event struct {
 	TurnID    string
 	Kind      string
 	Message   string
-	Output    string
-	Data      any
 }
 
 const (

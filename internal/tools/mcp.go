@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -54,12 +55,7 @@ type Clients struct {
 // 供证据存储在持久化工具输出时脱敏。
 func ConfigSecrets(configurations MCPServers) []string {
 	secrets := make([]string, 0)
-	names := make([]string, 0, len(configurations))
-	for name := range configurations {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
+	for _, name := range slices.Sorted(maps.Keys(configurations)) {
 		configuration := configurations[name]
 		for _, value := range configuration.Env {
 			if strings.TrimSpace(value) != "" {
@@ -88,7 +84,7 @@ func ConnectAll(ctx context.Context, configurations MCPServers, evidence *eviden
 		}
 		names = append(names, name)
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	clients := &Clients{clients: make(map[string]*Client, len(names))}
 	seenTools := make(map[string]bool)
 	for _, name := range names {
@@ -98,12 +94,7 @@ func ConnectAll(ctx context.Context, configurations MCPServers, evidence *eviden
 			return nil, fmt.Errorf("connect MCP server %s: %w", name, err)
 		}
 		clients.clients[name] = client
-		tools, err := client.Tools(ctx)
-		if err != nil {
-			_ = clients.Close()
-			return nil, fmt.Errorf("list MCP server %s tools: %w", name, err)
-		}
-		for _, inner := range tools {
+		for _, inner := range client.tools {
 			toolName := inner.Name()
 			if seenTools[toolName] {
 				_ = clients.Close()
@@ -161,34 +152,26 @@ func ConnectStdio(ctx context.Context, cfg MCPConfig, evidence *evidence.Evidenc
 // Connect 根据配置的传输方式打开一个 MCP 服务。
 // Connect 在标准输入输出、HTTP 和旧版 SSE 传输方式之间选择。
 func Connect(ctx context.Context, cfg MCPConfig, evidence *evidence.EvidenceStore, maxOutputBytes int, projectRoot, tmpDir string) (*Client, error) {
-	switch cfg.Transport() {
+	transportKind := cfg.Transport()
+	switch transportKind {
 	case "stdio":
 		return ConnectStdio(ctx, cfg, evidence, maxOutputBytes, projectRoot, tmpDir)
-	case "http":
-		return ConnectHTTP(ctx, cfg, evidence, maxOutputBytes)
-	case "sse":
-		return ConnectSSE(ctx, cfg, evidence, maxOutputBytes)
+	case "http", "sse":
+		endpoint, err := validEndpoint(cfg.URL)
+		if err != nil {
+			return nil, err
+		}
+		// http 使用 Streamable HTTP 会话，sse 使用旧版 SSE 会话。
+		var transport sdk.Transport
+		if transportKind == "http" {
+			transport = &sdk.StreamableClientTransport{Endpoint: endpoint, HTTPClient: httpClient(cfg.Headers)}
+		} else {
+			transport = &sdk.SSEClientTransport{Endpoint: endpoint, HTTPClient: httpClient(cfg.Headers)}
+		}
+		return connectTransport(ctx, transport, evidence, maxOutputBytes)
 	default:
-		return nil, fmt.Errorf("unsupported MCP transport: %q", cfg.Transport())
+		return nil, fmt.Errorf("unsupported MCP transport: %q", transportKind)
 	}
-}
-
-// ConnectHTTP 使用配置的请求头打开 Streamable HTTP MCP 会话。
-func ConnectHTTP(ctx context.Context, cfg MCPConfig, evidence *evidence.EvidenceStore, maxOutputBytes int) (*Client, error) {
-	endpoint, err := validEndpoint(cfg.URL)
-	if err != nil {
-		return nil, err
-	}
-	return connectTransport(ctx, &sdk.StreamableClientTransport{Endpoint: endpoint, HTTPClient: httpClient(cfg.Headers)}, evidence, maxOutputBytes)
-}
-
-// ConnectSSE 使用配置的请求头打开旧版 SSE MCP 会话。
-func ConnectSSE(ctx context.Context, cfg MCPConfig, evidence *evidence.EvidenceStore, maxOutputBytes int) (*Client, error) {
-	endpoint, err := validEndpoint(cfg.URL)
-	if err != nil {
-		return nil, err
-	}
-	return connectTransport(ctx, &sdk.SSEClientTransport{Endpoint: endpoint, HTTPClient: httpClient(cfg.Headers)}, evidence, maxOutputBytes)
 }
 
 // connectTransport 初始化共享的 MCP 协议会话，并一次性获取工具目录。
@@ -275,14 +258,6 @@ func (transport headerTransport) RoundTrip(request *http.Request) (*http.Respons
 	return transport.base.RoundTrip(copy)
 }
 
-// Tools 返回 MCP 初始化期间发现的工具副本。
-func (client *Client) Tools(context.Context) ([]Tool, error) {
-	if client == nil {
-		return nil, fmt.Errorf("MCP client is nil")
-	}
-	return append([]Tool(nil), client.tools...), nil
-}
-
 // Close 仅释放一次 MCP 会话。
 func (client *Client) Close() error {
 	if client == nil {
@@ -310,12 +285,7 @@ func (clients *Clients) Close() error {
 		return nil
 	}
 	clients.closeOnce.Do(func() {
-		names := make([]string, 0, len(clients.clients))
-		for name := range clients.clients {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		for _, name := range names {
+		for _, name := range slices.Sorted(maps.Keys(clients.clients)) {
 			if err := clients.clients[name].Close(); clients.closeErr == nil && err != nil {
 				clients.closeErr = err
 			}
@@ -330,14 +300,8 @@ func (tool *mcpTool) Name() string { return tool.name }
 // Description 返回 MCP 服务提供的工具描述。
 func (tool *mcpTool) Description() string { return tool.description }
 
-// InputSchema 返回 MCP 服务 Schema 的独立深拷贝。
-func (tool *mcpTool) InputSchema() map[string]any {
-	result := make(map[string]any, len(tool.schema))
-	for key, value := range tool.schema {
-		result[key] = value
-	}
-	return result
-}
+// InputSchema 返回 MCP 服务提供的 Schema；调用方不得修改返回值。
+func (tool *mcpTool) InputSchema() map[string]any { return tool.schema }
 
 // Invoke 将参数转发至 MCP，并在应用层装饰器记录证据前限制返回文本大小。
 func (tool *mcpTool) Invoke(ctx context.Context, arguments map[string]any) (string, error) {
@@ -427,11 +391,7 @@ func mergeEnv(inherited []string, overrides map[string]string) []string {
 			values[key] = value
 		}
 	}
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
+	keys := slices.Sorted(maps.Keys(values))
 	result := make([]string, 0, len(keys))
 	for _, key := range keys {
 		result = append(result, key+"="+values[key])
@@ -439,9 +399,7 @@ func mergeEnv(inherited []string, overrides map[string]string) []string {
 	return result
 }
 
-var _ Provider = (*Client)(nil)
 var _ Closer = (*Client)(nil)
 var _ Provider = (*Clients)(nil)
 var _ Closer = (*Clients)(nil)
 var _ Tool = (*mcpTool)(nil)
-var _ ToolSchemaProvider = (*mcpTool)(nil)

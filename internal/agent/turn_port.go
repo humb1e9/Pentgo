@@ -3,11 +3,17 @@ package agent
 import (
 	"context"
 	"fmt"
+
+	contextpolicy "pentgo/internal/context"
 )
 
 func (runtime *ProjectRuntime) FactSnapshot(ctx context.Context) (string, error) {
-	if runtime == nil || runtime.ProjectFactIndex() == nil {
+	if runtime == nil || runtime.facts == nil {
 		return "", fmt.Errorf("project fact index is unavailable")
 	}
-	return runtime.ProjectFactIndex().Snapshot(ctx)
+	facts, err := runtime.facts.List(ctx)
+	if err != nil {
+		return "", err
+	}
+	return contextpolicy.RenderProjectFactIndex(facts), nil
 }

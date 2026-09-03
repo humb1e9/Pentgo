@@ -6,12 +6,9 @@ import "context"
 type Tool interface {
 	Name() string
 	Description() string
-	Invoke(context.Context, map[string]any) (string, error)
-}
-
-// ToolSchemaProvider optionally supplies an explicit input schema.
-type ToolSchemaProvider interface {
+	// InputSchema supplies the JSON Schema for Invoke arguments.
 	InputSchema() map[string]any
+	Invoke(context.Context, map[string]any) (string, error)
 }
 
 // Provider resolves tools available for one runtime context.

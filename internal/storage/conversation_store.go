@@ -21,5 +21,5 @@ func (store *ProjectStore) OpenConversation(id string) (*sessionstate.Conversati
 		_ = db.Close()
 		return nil, err
 	}
-	return sessionstate.NewConversationStore(db, store.DatabasePath(), id, messages), nil
+	return sessionstate.NewConversationStore(db, id, messages), nil
 }

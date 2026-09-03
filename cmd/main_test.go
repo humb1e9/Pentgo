@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"pentgo/internal/bootstrap"
-	"pentgo/internal/project"
+	"pentgo/app"
+	"pentgo/internal/storage"
 )
 
 func isolateConfig(t *testing.T) string {
@@ -18,7 +18,7 @@ func isolateConfig(t *testing.T) string {
 	root := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", root)
 	t.Setenv("HOME", root)
-	path, err := bootstrap.ConfigFile()
+	path, err := app.ConfigFile()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestRunREPLInitializesWorkspaceAndSession(t *testing.T) {
 	t.Chdir(workspace)
 	var stdout, stderr bytes.Buffer
 
-	code := runREPL(context.Background(), strings.NewReader(""), &stdout, &stderr)
+	code := runCommand(context.Background(), nil, strings.NewReader(""), &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit code = %d; stdout/stderr = %q/%q", code, stdout.String(), stderr.String())
 	}
@@ -50,10 +50,10 @@ func TestRunREPLInitializesWorkspaceAndSession(t *testing.T) {
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := runREPL(context.Background(), strings.NewReader(""), &stdout, &stderr); code != 0 {
+	if code := runCommand(context.Background(), nil, strings.NewReader(""), &stdout, &stderr); code != 0 {
 		t.Fatalf("second exit code = %d; stdout/stderr = %q/%q", code, stdout.String(), stderr.String())
 	}
-	store, err := project.OpenProjectStore(root)
+	store, err := storage.OpenProjectStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,16 +66,16 @@ func TestRunREPLInitializesWorkspaceAndSession(t *testing.T) {
 	}
 }
 
-func TestRunREPLOpensProjectFromCurrentDirectory(t *testing.T) {
+func TestRunREPLOpensWorkspaceFromCurrentDirectory(t *testing.T) {
 	isolateConfig(t)
 	parent := t.TempDir()
-	created, err := project.CreateProjectStore(parent, "fixture", time.Now().UTC())
+	created, err := storage.CreateProjectStore(parent, "fixture", time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Chdir(created.Root())
+	t.Chdir(parent)
 	var stdout, stderr bytes.Buffer
-	if code := runREPL(context.Background(), strings.NewReader(""), &stdout, &stderr); code != 0 {
+	if code := runCommand(context.Background(), nil, strings.NewReader(""), &stdout, &stderr); code != 0 {
 		t.Fatalf("exit code = %d; stdout/stderr = %q/%q", code, stdout.String(), stderr.String())
 	}
 	project, err := created.LoadProject()
@@ -90,13 +90,17 @@ func TestRunREPLOpensProjectFromCurrentDirectory(t *testing.T) {
 func TestRunREPLDoesNotSelectSiblingProject(t *testing.T) {
 	isolateConfig(t)
 	parent := t.TempDir()
-	created, err := project.CreateProjectStore(parent, "fixture", time.Now().UTC())
+	sibling := filepath.Join(parent, "sibling")
+	if err := os.Mkdir(sibling, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	created, err := storage.CreateProjectStore(sibling, "fixture", time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
 	t.Chdir(parent)
-	if code := runREPL(context.Background(), strings.NewReader(""), &stdout, &stderr); code != 0 {
+	if code := runCommand(context.Background(), nil, strings.NewReader(""), &stdout, &stderr); code != 0 {
 		t.Fatalf("exit code = %d; stdout/stderr = %q/%q", code, stdout.String(), stderr.String())
 	}
 	project, err := created.LoadProject()
@@ -121,10 +125,10 @@ func TestRunREPLCreatesSessionsOnlyInCurrentDirectory(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	t.Chdir(first)
-	if code := runREPL(context.Background(), strings.NewReader("/new\n"), &stdout, &stderr); code != 0 {
+	if code := runCommand(context.Background(), nil, strings.NewReader("/new\n"), &stdout, &stderr); code != 0 {
 		t.Fatalf("first exit code = %d; stdout/stderr = %q/%q", code, stdout.String(), stderr.String())
 	}
-	firstStore, err := project.OpenProjectStore(filepath.Join(first, ".pentgo"))
+	firstStore, err := storage.OpenProjectStore(filepath.Join(first, ".pentgo"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,10 +143,10 @@ func TestRunREPLCreatesSessionsOnlyInCurrentDirectory(t *testing.T) {
 	stdout.Reset()
 	stderr.Reset()
 	t.Chdir(second)
-	if code := runREPL(context.Background(), strings.NewReader(""), &stdout, &stderr); code != 0 {
+	if code := runCommand(context.Background(), nil, strings.NewReader(""), &stdout, &stderr); code != 0 {
 		t.Fatalf("second exit code = %d; stdout/stderr = %q/%q", code, stdout.String(), stderr.String())
 	}
-	secondStore, err := project.OpenProjectStore(filepath.Join(second, ".pentgo"))
+	secondStore, err := storage.OpenProjectStore(filepath.Join(second, ".pentgo"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +162,7 @@ func TestRunREPLCreatesSessionsOnlyInCurrentDirectory(t *testing.T) {
 func TestRunREPLRejectsMalformedConfig(t *testing.T) {
 	isolateConfig(t)
 	t.Chdir(t.TempDir())
-	configPath, err := bootstrap.ConfigFile()
+	configPath, err := app.ConfigFile()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +171,7 @@ func TestRunREPLRejectsMalformedConfig(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	code := runREPL(context.Background(), strings.NewReader(""), &stdout, &stderr)
+	code := runCommand(context.Background(), nil, strings.NewReader(""), &stdout, &stderr)
 	if code != 1 || !strings.Contains(stderr.String(), "load config") {
 		t.Fatalf("code/stderr = %d/%q", code, stderr.String())
 	}
@@ -191,7 +195,7 @@ func TestRunCommandResumeReusesExistingSession(t *testing.T) {
 	workspace := t.TempDir()
 	t.Chdir(workspace)
 	var stdout, stderr bytes.Buffer
-	if code := runREPL(context.Background(), strings.NewReader(""), &stdout, &stderr); code != 0 {
+	if code := runCommand(context.Background(), nil, strings.NewReader(""), &stdout, &stderr); code != 0 {
 		t.Fatalf("startup exit code = %d; stdout/stderr = %q/%q", code, stdout.String(), stderr.String())
 	}
 	stdout.Reset()
@@ -199,7 +203,7 @@ func TestRunCommandResumeReusesExistingSession(t *testing.T) {
 	if code := runCommand(context.Background(), []string{"resume"}, strings.NewReader("1\n"), &stdout, &stderr); code != 0 {
 		t.Fatalf("resume exit code = %d; stdout/stderr = %q/%q", code, stdout.String(), stderr.String())
 	}
-	store, err := project.OpenProjectStore(filepath.Join(workspace, ".pentgo"))
+	store, err := storage.OpenProjectStore(filepath.Join(workspace, ".pentgo"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,10 +219,10 @@ func TestRunCommandResumeSelectsRequestedHistory(t *testing.T) {
 	workspace := t.TempDir()
 	t.Chdir(workspace)
 	var stdout, stderr bytes.Buffer
-	if code := runREPL(context.Background(), strings.NewReader(""), &stdout, &stderr); code != 0 {
+	if code := runCommand(context.Background(), nil, strings.NewReader(""), &stdout, &stderr); code != 0 {
 		t.Fatalf("first session exit code = %d; stdout/stderr = %q/%q", code, stdout.String(), stderr.String())
 	}
-	if code := runREPL(context.Background(), strings.NewReader(""), &stdout, &stderr); code != 0 {
+	if code := runCommand(context.Background(), nil, strings.NewReader(""), &stdout, &stderr); code != 0 {
 		t.Fatalf("second session exit code = %d; stdout/stderr = %q/%q", code, stdout.String(), stderr.String())
 	}
 	stdout.Reset()
@@ -232,9 +236,9 @@ func TestRunCommandResumeSelectsRequestedHistory(t *testing.T) {
 }
 
 func TestParseCommandAcceptsResumeOnly(t *testing.T) {
-	command, err := parseCommand([]string{"resume"})
-	if err != nil || !command.resume {
-		t.Fatalf("command/err = %#v/%v", command, err)
+	resume, err := parseCommand([]string{"resume"})
+	if err != nil || !resume {
+		t.Fatalf("resume/err = %v/%v", resume, err)
 	}
 	for _, arguments := range [][]string{{"new"}, {"delete", "session-id"}, {"resume", "session-id"}} {
 		if _, err := parseCommand(arguments); err == nil {

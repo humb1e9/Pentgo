@@ -10,9 +10,3 @@ func nullableText(value string) any {
 	}
 	return value
 }
-func boolInt(value bool) int {
-	if value {
-		return 1
-	}
-	return 0
-}

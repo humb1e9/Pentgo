@@ -23,11 +23,9 @@ func newEinoToolAdapter(inner tools.Tool) (tool.InvokableTool, error) {
 }
 
 func (adapter *einoToolAdapter) Info(context.Context) (*schema.ToolInfo, error) {
-	inputSchema := map[string]any{"type": "object", "properties": map[string]any{}}
-	if provider, ok := adapter.tool.(tools.ToolSchemaProvider); ok {
-		if provided := provider.InputSchema(); provided != nil {
-			inputSchema = provided
-		}
+	inputSchema := adapter.tool.InputSchema()
+	if inputSchema == nil {
+		inputSchema = map[string]any{"type": "object", "properties": map[string]any{}}
 	}
 	data, err := json.Marshal(inputSchema)
 	if err != nil {

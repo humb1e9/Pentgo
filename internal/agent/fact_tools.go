@@ -55,7 +55,7 @@ func (tool *upsertProjectFactTool) Invoke(ctx context.Context, arguments map[str
 	if err != nil {
 		return rejectedFactToolResult(err)
 	}
-	if err := tool.facts.Upsert(ctx, ProjectFactUpsert{Key: key, Value: value, EvidenceRef: evidenceRef}); err != nil {
+	if err := tool.facts.Upsert(ctx, projectmodel.ProjectFact{Key: key, Value: value, EvidenceRef: evidenceRef}); err != nil {
 		return rejectedFactToolResult(err)
 	}
 	return "project fact upserted: " + key, nil

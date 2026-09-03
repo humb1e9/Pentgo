@@ -21,22 +21,12 @@ func main() {
 	os.Exit(runCommand(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
 
-// runREPL 加载配置并启动项目/会话终端入口。
-func runREPL(ctx context.Context, input io.Reader, stdout, stderr io.Writer) int {
-	return runCommand(ctx, nil, input, stdout, stderr)
-}
-
-// command 是解析后的进程启动参数，项目操作统一在 TUI 中完成。
-type command struct {
-	resume bool
-}
-
 // usage 在启动 TUI 前为格式错误的进程参数输出用法说明。
 const usage = "usage: pentgo [resume]"
 
 // runCommand 规范化进程依赖、打开当前工作区，并将终端取消映射为约定的 130 退出码。
 func runCommand(ctx context.Context, args []string, input io.Reader, stdout, stderr io.Writer) int {
-	command, err := parseCommand(args)
+	resume, err := parseCommand(args)
 	if err != nil {
 		fmt.Fprintln(stderr, usage)
 		fmt.Fprintln(stderr, "error:", err)
@@ -73,7 +63,7 @@ func runCommand(ctx context.Context, args []string, input io.Reader, stdout, std
 	runtime := app.NewApplication(cfg, workingDir, os.DirFS(skillsDir))
 	terminal := terminal.NewRuntimeTerminal(runtime, input, stdout)
 	var runErr error
-	if command.resume {
+	if resume {
 		runErr = terminal.Resume(ctx)
 	} else {
 		runErr = terminal.Run(ctx)
@@ -89,14 +79,12 @@ func runCommand(ctx context.Context, args []string, input io.Reader, stdout, std
 }
 
 // parseCommand 只接受默认启动或 `resume`；项目操作由 TUI 命令执行。
-func parseCommand(args []string) (command, error) {
-	switch len(args) {
-	case 0:
-		return command{}, nil
-	case 1:
-		if args[0] == "resume" {
-			return command{resume: true}, nil
-		}
+func parseCommand(args []string) (resume bool, err error) {
+	switch {
+	case len(args) == 0:
+		return false, nil
+	case len(args) == 1 && args[0] == "resume":
+		return true, nil
 	}
-	return command{}, fmt.Errorf("invalid command")
+	return false, fmt.Errorf("invalid command")
 }

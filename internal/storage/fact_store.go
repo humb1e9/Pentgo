@@ -10,9 +10,6 @@ import (
 	projectmodel "pentgo/internal/project"
 )
 
-// ErrFactNotFound identifies a missing project fact.
-var ErrFactNotFound = errors.New("project fact not found")
-
 // ProjectFactRepository owns project-scoped minimal facts through the shared
 // ProjectStore database connection. ProjectStore is the sole connection owner.
 type ProjectFactRepository struct {

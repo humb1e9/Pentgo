@@ -6,17 +6,14 @@ import (
 )
 
 func configDir() (string, error) {
-	if base := os.Getenv("XDG_CONFIG_HOME"); base != "" {
-		return filepath.Join(base, "pentgo"), nil
-	}
-	home, err := os.UserHomeDir()
+	base, err := os.UserConfigDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".config", "pentgo"), nil
+	return filepath.Join(base, "pentgo"), nil
 }
 
-// ConfigFile returns the Linux user-level PentGo configuration path.
+// ConfigFile returns the user-level PentGo configuration path.
 func ConfigFile() (string, error) {
 	dir, err := configDir()
 	if err != nil {

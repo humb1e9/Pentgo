@@ -1,7 +1,6 @@
 package context
 
 import (
-	"context"
 	"fmt"
 	"html"
 	"sort"
@@ -14,33 +13,6 @@ import (
 // ProjectFactIndexMaxRunes is the fixed upper bound for one turn's
 // model-visible project-fact snapshot.
 const ProjectFactIndexMaxRunes = 4096
-
-// ProjectFactLister is the read-only ledger boundary used by the Fact Index.
-type ProjectFactLister interface {
-	List(context.Context) ([]projectmodel.ProjectFact, error)
-}
-
-// ProjectFactIndex renders stable, bounded snapshots from the fact ledger.
-type ProjectFactIndex struct {
-	facts ProjectFactLister
-}
-
-// NewProjectFactIndex creates the read-only model-context projection.
-func NewProjectFactIndex(facts ProjectFactLister) *ProjectFactIndex {
-	return &ProjectFactIndex{facts: facts}
-}
-
-// Snapshot reads the ledger once and returns one immutable turn snapshot.
-func (index *ProjectFactIndex) Snapshot(ctx context.Context) (string, error) {
-	if index == nil || index.facts == nil {
-		return "", fmt.Errorf("project fact index is unavailable")
-	}
-	facts, err := index.facts.List(ctx)
-	if err != nil {
-		return "", err
-	}
-	return RenderProjectFactIndex(facts), nil
-}
 
 // RenderProjectFactIndex formats key-sorted, untrusted facts for a provider
 // system envelope. It includes only complete fact lines within the fixed rune

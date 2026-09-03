@@ -29,43 +29,25 @@ type ProjectStore struct {
 	closed   bool
 }
 
-// CreateProjectStore 在 parent 下创建唯一命名的项目目录。
+// WorkspaceDirectory is the only supported project-store layout.
+const WorkspaceDirectory = ".pentgo"
+
+// CreateProjectStore creates the current workspace's .pentgo directory and
+// writes its unique project row before exposing the store.
 func CreateProjectStore(parent, name string, now time.Time) (*ProjectStore, error) {
 	parent = strings.TrimSpace(parent)
+	name = strings.TrimSpace(name)
 	if parent == "" {
 		return nil, fmt.Errorf("project parent directory is empty")
+	}
+	if name == "" {
+		return nil, fmt.Errorf("project name is empty")
 	}
 	parent, err := filepath.Abs(parent)
 	if err != nil {
 		return nil, fmt.Errorf("resolve project parent directory: %w", err)
 	}
-	if isProjectRoot(parent) {
-		return nil, fmt.Errorf("project parent is already a project")
-	}
-	root := filepath.Join(parent, newID("project"))
-	return createProjectStore(root, name, filepath.Base(root), now)
-}
-
-// CreateProjectStoreAt 在指定工作区目录初始化项目。
-func CreateProjectStoreAt(root, name string, now time.Time) (*ProjectStore, error) {
-	return createProjectStore(root, name, newID("project"), now)
-}
-
-// createProjectStore 创建私有临时存储、初始化 SQLite，
-// 并在暴露可用存储前写入唯一项目行。
-func createProjectStore(root, name, projectID string, now time.Time) (*ProjectStore, error) {
-	root = strings.TrimSpace(root)
-	name = strings.TrimSpace(name)
-	if root == "" {
-		return nil, fmt.Errorf("project root directory is empty")
-	}
-	if name == "" {
-		return nil, fmt.Errorf("project name is empty")
-	}
-	root, err := filepath.Abs(root)
-	if err != nil {
-		return nil, fmt.Errorf("resolve project root directory: %w", err)
-	}
+	root := filepath.Join(parent, WorkspaceDirectory)
 	if isProjectRoot(root) {
 		return nil, fmt.Errorf("project root is already a project")
 	}
@@ -82,7 +64,7 @@ func createProjectStore(root, name, projectID string, now time.Time) (*ProjectSt
 	} else {
 		now = now.UTC()
 	}
-	project := &projectmodel.Project{ID: strings.TrimSpace(projectID), Name: name, CreatedAt: now, UpdatedAt: now}
+	project := &projectmodel.Project{ID: newID("project"), Name: name, CreatedAt: now, UpdatedAt: now}
 	if err := store.saveProject(project); err != nil {
 		_ = store.Close()
 		return nil, err
@@ -99,6 +81,9 @@ func OpenProjectStore(root string) (*ProjectStore, error) {
 	root, err := filepath.Abs(root)
 	if err != nil {
 		return nil, fmt.Errorf("resolve project directory: %w", err)
+	}
+	if filepath.Base(root) != WorkspaceDirectory {
+		return nil, fmt.Errorf("%w: project directory must be %s", ErrNotProject, WorkspaceDirectory)
 	}
 	databasePath := filepath.Join(root, "pentgo.db")
 	_, databaseErr := os.Stat(databasePath)
@@ -142,15 +127,8 @@ func (store *ProjectStore) Root() string {
 	return store.root
 }
 
-// WorkspaceRoot 返回工具边界：项目元数据位于隐藏工作区时返回 .pentgo 的父目录，
-// 否则返回项目根目录本身。
-func (store *ProjectStore) WorkspaceRoot() string {
-	root := store.Root()
-	if filepath.Base(root) == ".pentgo" {
-		return filepath.Dir(root)
-	}
-	return root
-}
+// WorkspaceRoot returns the user workspace that owns this .pentgo store.
+func (store *ProjectStore) WorkspaceRoot() string { return filepath.Dir(store.Root()) }
 
 // DatabasePath 返回此存储的 SQLite 文件位置。
 func (store *ProjectStore) DatabasePath() string { return filepath.Join(store.Root(), "pentgo.db") }
@@ -227,19 +205,18 @@ func loadSessionQuery(queryer interface {
 }, id string) (*sessionstate.Session, error) {
 	var session sessionstate.Session
 	var startedAt, updatedAt int64
-	var lastTurnID, activeTurnID sql.NullString
+	var lastTurnID sql.NullString
 	err := queryer.QueryRow(`
-		SELECT id, name, target, intent, turn_count, last_turn_id,
-		       active_turn_id, final_summary, started_at, updated_at
+		SELECT id, name, intent, turn_count, last_turn_id,
+		       final_summary, started_at, updated_at
 		FROM sessions WHERE id = ?`, id).Scan(
-		&session.ID, &session.Name, &session.Target, &session.Intent,
-		&session.Turns, &lastTurnID, &activeTurnID, &session.FinalSummary,
+		&session.ID, &session.Name, &session.Intent,
+		&session.Turns, &lastTurnID, &session.FinalSummary,
 		&startedAt, &updatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("load session %q: %w", id, err)
 	}
-	session.ActiveTurnID = activeTurnID.String
 	session.StartedAt = parseTime(startedAt)
 	session.UpdatedAt = parseTime(updatedAt)
 	rows, err := queryer.Query("SELECT target FROM session_targets WHERE session_id = ? ORDER BY position", id)
@@ -359,27 +336,24 @@ func saveSessionTx(tx *sql.Tx, session *sessionstate.Session) error {
 		updatedAt = startedAt
 	}
 	lastTurnID := ""
-	activeTurnID := strings.TrimSpace(session.ActiveTurnID)
 	if session.ActiveTurn != nil {
 		lastTurnID = session.ActiveTurn.ID
 	}
 	if _, err := tx.Exec(`
 		INSERT INTO sessions(
-			id, name, target, intent, turn_count, last_turn_id,
-			active_turn_id, final_summary, started_at, updated_at
-		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			id, name, intent, turn_count, last_turn_id,
+			final_summary, started_at, updated_at
+		) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			name = excluded.name,
-			target = excluded.target,
 			intent = excluded.intent,
 			turn_count = excluded.turn_count,
 			last_turn_id = excluded.last_turn_id,
-			active_turn_id = excluded.active_turn_id,
 			final_summary = excluded.final_summary,
 			started_at = excluded.started_at,
 			updated_at = excluded.updated_at`,
-		session.ID, name, session.Target, session.Intent, session.Turns,
-		nullableText(lastTurnID), nullableText(activeTurnID), session.FinalSummary,
+		session.ID, name, session.Intent, session.Turns,
+		nullableText(lastTurnID), session.FinalSummary,
 		timeValue(startedAt), timeValue(updatedAt),
 	); err != nil {
 		return fmt.Errorf("save session: %w", err)
@@ -406,12 +380,8 @@ func saveSessionTx(tx *sql.Tx, session *sessionstate.Session) error {
 		return fmt.Errorf("replace session targets: %w", err)
 	}
 	seen := make(map[string]bool)
-	targets := append([]string(nil), session.Targets...)
-	if session.Target != "" {
-		targets = append([]string{session.Target}, targets...)
-	}
 	position := 0
-	for _, target := range targets {
+	for _, target := range session.Targets {
 		target = strings.TrimSpace(target)
 		if target == "" || seen[target] {
 			continue
@@ -433,8 +403,7 @@ func nullableTime(value *time.Time) any {
 	return timeValue(*value)
 }
 
-// DeleteSession 通过数据库外键删除会话图、更新项目元数据，
-// 并清理废弃的旧版磁盘会话目录。
+// DeleteSession 通过数据库外键删除会话图并更新项目元数据。
 func (store *ProjectStore) DeleteSession(id string) error {
 	if store == nil || store.db == nil || !validID(id) {
 		return fmt.Errorf("session id is invalid")
@@ -466,19 +435,7 @@ func (store *ProjectStore) DeleteSession(id string) error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit session delete %q: %w", id, err)
 	}
-	_ = os.RemoveAll(filepath.Join(store.root, "sessions", id))
-	_ = os.RemoveAll(filepath.Join(store.root, "resume", id))
 	return nil
-}
-
-// SaveProjectIndex 为管理调用方写入唯一项目元数据。
-func (store *ProjectStore) SaveProjectIndex(project *projectmodel.Project) error {
-	if store == nil || store.db == nil || project == nil || strings.TrimSpace(project.ID) == "" || strings.TrimSpace(project.Name) == "" {
-		return fmt.Errorf("project is invalid")
-	}
-	store.commitMu.Lock()
-	defer store.commitMu.Unlock()
-	return store.saveProject(project)
 }
 
 // saveProject 使用独立事务封装项目行持久化。
@@ -542,7 +499,7 @@ func (store *ProjectStore) Close() error {
 	return store.db.Close()
 }
 
-// validID 拒绝路径形式的值，因为 ID 也用于旧版清理逻辑。
+// validID accepts one opaque identifier without path components.
 func validID(id string) bool {
 	return id != "" && id != "." && id != ".." && filepath.Base(id) == id && !strings.ContainsRune(id, filepath.Separator)
 }

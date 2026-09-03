@@ -20,18 +20,23 @@ func DefaultConfig() Config {
 }
 
 func (config Config) Effective() Config {
-	defaults := DefaultConfig()
 	if config.MaxTurns <= 0 {
-		config.MaxTurns = defaults.MaxTurns
+		config.MaxTurns = DefaultConfig().MaxTurns
 	}
-	if config.Context.ContextWindow <= 0 {
-		config.Context.ContextWindow = defaults.Context.ContextWindow
+	config.Context = config.Context.Effective()
+	return config
+}
+
+func (config ContextConfig) Effective() ContextConfig {
+	defaults := DefaultConfig().Context
+	if config.ContextWindow <= 0 {
+		config.ContextWindow = defaults.ContextWindow
 	}
-	if config.Context.RecentMessages <= 0 {
-		config.Context.RecentMessages = defaults.Context.RecentMessages
+	if config.RecentMessages <= 0 {
+		config.RecentMessages = defaults.RecentMessages
 	}
-	if config.Context.SummaryMaxTokens <= 0 {
-		config.Context.SummaryMaxTokens = defaults.Context.SummaryMaxTokens
+	if config.SummaryMaxTokens <= 0 {
+		config.SummaryMaxTokens = defaults.SummaryMaxTokens
 	}
 	return config
 }

@@ -13,7 +13,6 @@ import (
 	projectmodel "pentgo/internal/project"
 	sessionstate "pentgo/internal/session"
 	"pentgo/internal/storage"
-	"pentgo/internal/tools"
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/model"
@@ -26,7 +25,6 @@ type TurnService struct {
 	skillContext  func(string) string
 	now           func() time.Time
 	maxRequests   int
-	systemPrompt  string
 	contextConfig projectmodel.ContextConfig
 	summarizer    contextpolicy.SummaryWriter
 	mu            sync.Mutex
@@ -38,7 +36,6 @@ type TurnServiceConfig struct {
 	SkillContext func(string) string
 	Clock        func() time.Time
 	MaxRequests  int
-	SystemPrompt string
 	Context      projectmodel.ContextConfig
 	Summarizer   contextpolicy.SummaryWriter
 }
@@ -52,8 +49,7 @@ func NewTurnService(cfg TurnServiceConfig) *TurnService {
 		skillContext:  cfg.SkillContext,
 		now:           cfg.Clock,
 		maxRequests:   cfg.MaxRequests,
-		systemPrompt:  strings.TrimSpace(cfg.SystemPrompt),
-		contextConfig: projectmodel.Config{Context: cfg.Context}.Effective().Context,
+		contextConfig: cfg.Context.Effective(),
 		summarizer:    cfg.Summarizer,
 		cancellations: make(map[string]adk.AgentCancelFunc),
 	}
@@ -113,29 +109,30 @@ func (service *TurnService) RunTurn(ctx context.Context, runtime *ProjectRuntime
 	if err != nil {
 		return finishError(err)
 	}
-	instruction := service.systemPrompt
+	instruction := llm.BaseSystemPrompt()
 	if service.skillContext != nil {
 		instruction = strings.TrimSpace(instruction + "\n\n" + service.skillContext(message))
 	}
-	contextWindow := contextpolicy.NewContextWindow(runtime.store, service.contextConfig, service.summarizer, contextpolicy.EstimateTextTokens(llm.SystemPrompt(instruction, ""))+contextpolicy.EstimateToolTokens(availableTools))
+	providerInstruction := llm.SystemPrompt(instruction, "")
+	contextWindow := contextpolicy.NewContextWindow(runtime.store, service.contextConfig, service.summarizer, contextpolicy.EstimateTextTokens(providerInstruction)+contextpolicy.EstimateToolTokens(availableTools))
 	chatModel, err := service.newModel(ctx)
 	if err != nil {
 		return finishError(err)
 	}
 	agent, err := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
 		Name:          "pentgo",
-		Instruction:   llm.SystemPrompt(instruction, ""),
+		Instruction:   providerInstruction,
 		Model:         chatModel,
 		MaxIterations: service.maxRequests,
 		Handlers: []adk.ChatModelAgentMiddleware{
 			NewEvidenceMiddleware(runtime.Evidence()),
-			NewContextMiddleware(ContextMiddlewareConfig{
+			&ContextMiddleware{BaseChatModelAgentMiddleware: &adk.BaseChatModelAgentMiddleware{}, config: ContextMiddlewareConfig{
 				SessionID:    session.ID,
 				Window:       contextWindow,
 				Conversation: conversation.Messages,
-				BuildTools:   func(context.Context) ([]tools.Tool, error) { return availableTools, nil },
+				Tools:        availableTools,
 				Facts:        func(runCtx context.Context) (string, error) { return runtime.FactSnapshot(runCtx) },
-			}),
+			}},
 		},
 	})
 	if err != nil {

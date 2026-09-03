@@ -8,9 +8,9 @@ import (
 
 // Config contains the validated values needed to run one project manager.
 type Config struct {
-	Model   model.Config
-	Tools   tools.Config
-	Project project.Config
+	Model   model.Config   `json:"model"`
+	Tools   tools.Config   `json:"tools"`
+	Project project.Config `json:"project"`
 }
 
 // DefaultConfig returns the runtime defaults for direct construction and tests.

@@ -26,12 +26,12 @@ func (provider *runtimeToolProvider) Tools(context.Context) ([]tools.Tool, error
 	if provider == nil || provider.runtime == nil || provider.session == nil {
 		return nil, fmt.Errorf("runtime tool provider is incomplete")
 	}
-	facts := provider.runtime.ProjectFacts()
+	facts := provider.runtime.facts
 	if facts == nil {
 		return nil, fmt.Errorf("project fact store is unavailable")
 	}
-	tools := builtins.NewTools(provider.runtime.Workspace())
-	tools = append(tools, newProjectFactTools(facts)...)
+	tools := builtins.NewTools(provider.runtime.workspace)
+	tools = append(tools, NewProjectFactTools(facts)...)
 	seen := make(map[string]bool, len(tools)+len(provider.projectTools))
 	for _, tool := range tools {
 		seen[tool.Name()] = true
@@ -47,8 +47,4 @@ func (provider *runtimeToolProvider) Tools(context.Context) ([]tools.Tool, error
 		tools = append(tools, projectTool)
 	}
 	return tools, nil
-}
-
-func newProjectFactTools(facts *ProjectFactLedger) []tools.Tool {
-	return NewProjectFactTools(facts)
 }

@@ -41,7 +41,7 @@ type ContextWindow struct {
 }
 
 func NewContextWindow(store SummaryStore, cfg project.ContextConfig, summarizer SummaryWriter, fixedTokens int) *ContextWindow {
-	cfg = project.Config{Context: cfg}.Effective().Context
+	cfg = cfg.Effective()
 	return &ContextWindow{store: store, contextWindow: cfg.ContextWindow, fixedTokens: fixedTokens, recentMessages: cfg.RecentMessages, summaryTokens: cfg.SummaryMaxTokens, summarizer: summarizer, now: time.Now}
 }
 

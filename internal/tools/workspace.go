@@ -166,12 +166,6 @@ func resolveExisting(path string) (string, error) {
 	}
 }
 
-// within 判断 path 是否为 root 本身或其子路径。
-func within(root, path string) bool {
-	relative, err := filepath.Rel(root, path)
-	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
-}
-
 // shellQuote 生成 POSIX 单引号形式的 Shell 字面量。
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"

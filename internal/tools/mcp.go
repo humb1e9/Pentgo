@@ -352,7 +352,7 @@ func renderMCPResult(result *sdk.CallToolResult) string {
 	if len(parts) == 0 {
 		return "MCP 工具没有返回内容"
 	}
-	return boundText(strings.Join(parts, "\n"), 65536)
+	return strings.Join(parts, "\n")
 }
 
 // boundText 按字节上限截断文本，并为模型上下文标记截断结果。

@@ -18,7 +18,7 @@ type upsertProjectFactTool struct {
 	facts *ProjectFactLedger
 }
 
-func (tool *upsertProjectFactTool) Name() string { return "upsert_project_fact" }
+func (tool *upsertProjectFactTool) Name() string { return tools.FactUpsertName }
 
 func (tool *upsertProjectFactTool) Description() string {
 	return "创建或覆盖一个项目事实；可选用一个已存在 Evidence 序号作为来源引用。"
@@ -66,7 +66,7 @@ type getProjectFactTool struct {
 	facts *ProjectFactLedger
 }
 
-func (tool *getProjectFactTool) Name() string { return "get_project_fact" }
+func (tool *getProjectFactTool) Name() string { return tools.FactGetName }
 
 func (tool *getProjectFactTool) Description() string {
 	return "按 key 读取项目事实的完整 value 与可选 Evidence 引用；找不到时返回 project fact not found。"
@@ -108,7 +108,7 @@ type listProjectFactsTool struct {
 	facts *ProjectFactLedger
 }
 
-func (tool *listProjectFactsTool) Name() string { return "list_project_facts" }
+func (tool *listProjectFactsTool) Name() string { return tools.FactListName }
 
 func (tool *listProjectFactsTool) Description() string {
 	return "按 key 排序列出全部项目事实的固定上限摘要。"

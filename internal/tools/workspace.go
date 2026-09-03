@@ -19,14 +19,20 @@ type Workspace struct {
 	local *local.Local
 }
 
+// workspaceBuiltinNames 是 Eino 本地后端注册的工具名。Workspace 提供同一组
+// 受限本地文件工具，宿主不得让外部 provider 的影子遮蔽它们。
+var workspaceBuiltinNames = []string{
+	"ls", "read_file", "write_file", "edit_file", "glob", "grep", "execute",
+}
+
 // IsName 判断名称是否由 Eino 内置本地后端保留。
 func IsName(name string) bool {
-	switch name {
-	case "ls", "read_file", "write_file", "edit_file", "glob", "grep", "execute":
-		return true
-	default:
-		return false
+	for _, builtin := range workspaceBuiltinNames {
+		if name == builtin {
+			return true
+		}
 	}
+	return false
 }
 
 // NewWorkspace 在创建后端前规范化并校验 root。

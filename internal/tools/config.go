@@ -10,11 +10,26 @@ import (
 
 var localToolNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
-var reservedNames = map[string]bool{
-	"ls": true, "read_file": true, "write_file": true, "edit_file": true,
-	"glob": true, "grep": true, "execute": true,
-	"upsert_project_fact": true, "get_project_fact": true, "list_project_facts": true,
-}
+// Project fact 工具名。宿主为每个会话注入它们，任何外部/本地配置的工具都
+// 不得占用这些名字。fact_tools.go 的 Name() 与 agent 的校验都引用这些常量，
+// 保证重命名只改一处。
+const (
+	FactUpsertName = "upsert_project_fact"
+	FactGetName    = "get_project_fact"
+	FactListName   = "list_project_facts"
+)
+
+// reservedNames 拒绝本地工具配置使用宿主保留的工具名。
+var reservedNames = func() map[string]bool {
+	reserved := make(map[string]bool, len(workspaceBuiltinNames)+3)
+	for _, builtin := range workspaceBuiltinNames {
+		reserved[builtin] = true
+	}
+	reserved[FactUpsertName] = true
+	reserved[FactGetName] = true
+	reserved[FactListName] = true
+	return reserved
+}()
 
 type LocalToolConfig struct {
 	Command     string `json:"command"`

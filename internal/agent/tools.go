@@ -70,9 +70,9 @@ func validateProjectTools(ctx context.Context, provider tools.Provider) error {
 		return err
 	}
 	reserved := map[string]bool{
-		"upsert_project_fact": true,
-		"get_project_fact":    true,
-		"list_project_facts":  true,
+		builtins.FactUpsertName: true,
+		builtins.FactGetName:    true,
+		builtins.FactListName:   true,
 	}
 	for _, tool := range tools {
 		if tool == nil {

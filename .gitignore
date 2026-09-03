@@ -22,11 +22,9 @@ coverage.out
 *.prof
 
 # PentGo project data (metadata stays visible; intermediate files stay local)
-/project-*/tmp/**
 /eng-*/
 /output/
 .pentgo/
-/.pentgo-*/
 pentgo-report-*.md
 /pentgo-output/
 

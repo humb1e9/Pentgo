@@ -83,13 +83,10 @@ pentgo resume # 恢复已有项目并选择会话
 | --- | --- |
 | `/new` | 新建会话 |
 | `/session list` | 查看会话 |
-| `/session rename 名称` | 重命名当前会话 |
+| `/session 会话ID` | 切换到指定会话 |
 | `/session delete [会话 ID]` | 删除指定/当前会话 |
-| `/status` | 当前会话状态 |
-| `/facts` | 查看 Fact Index |
-| `/clear` | 清除终端显示 |
 | `/help` | 帮助 |
-| `/exit` | 退出 |
+| `Ctrl+C` | 退出 |
 
 ## 配置
 
@@ -102,7 +99,6 @@ pentgo resume # 恢复已有项目并选择会话
     "base_url": "https://api.openai.com/v1",
     "model": "你的模型名",
     "api_key": "你的密钥",
-    "thinking": true,
     "thinking_effort": "high"
   },
   "tools": {
@@ -124,7 +120,7 @@ pentgo resume # 恢复已有项目并选择会话
 ```
 
 - `model.provider` 决定协议（`openai` / `anthropic`），连接参数全部平铺在 `model` 下。Anthropic 只需把 `provider` 换成 `anthropic` 并替换 `base_url` 与 `model`；其他兼容服务通常只需替换 `base_url` 和 `model`。
-- `model.thinking` 默认 `false`；设为 `true` 时，OpenAI 兼容请求会带上 `enable_thinking: true`。`model.thinking_effort` 可设为 `low`、`medium` 或 `high`（默认 `medium`），会作为 `reasoning_effort` 发送。仅在所选网关/模型支持思考输出时开启。
+- `model.thinking_effort` 可设为 `low`、`medium` 或 `high`；非空时 OpenAI 兼容请求会带上 `enable_thinking: true`，并把它作为 `reasoning_effort` 发送，留空（默认）则关闭思考输出。仅在所选网关/模型支持思考输出时设置。
 - `tools.local` 把本机命令暴露为模型工具：键名是模型看到的工具名，`command` 支持 `PATH` 命令或绝对路径。工具接收 `{"args":[...]}` 原生参数数组，不经过 shell；工具名不能与内置工具冲突。
 - `tools.mcp` 接入 stdio（`command`/`args`）或 HTTP/SSE（`type` + `url`）服务。所有来源的工具名必须唯一。
 - `project.max_turns` 限制单个用户请求内的模型调用次数（默认 1000）；`project.context.context_window` 是实际模型请求的总输入 token 预算（默认 256000），包含 instruction、工具 schema、Facts、摘要和原始消息；`recent_messages` 保留最近原始消息的最大条数（默认 32），`summary_max_tokens` 限制滚动摘要最大输出（默认 8192）。
@@ -151,7 +147,7 @@ cmd/                    进程入口
 app/                    启动、配置、路径与依赖装配
 terminal/               Bubble Tea 终端界面
 internal/
-├── model/              模型配置、Eino 适配、流式 Stepper 与 Prompt
+├── model/              模型配置、Eino Provider 与 Prompt
 ├── agent/              Agent 编排、轮次、事件、工具适配、暂停与恢复
 ├── context/            token 预算、历史摘要与项目事实索引
 ├── tools/              工作区工具、本地 CLI、MCP 客户端与 Skill Registry
@@ -172,7 +168,7 @@ $ pentgo
 › 对 example.com 做被动子域名收集
   ⋯ subfinder / amass → httpx → upsert_project_fact
   完成：23 子域名，17 存活，写入 subdomains_alive
-› /facts
-› /exit
+› /session list
+› 按 Ctrl+C 退出
 $ pentgo resume   # 会话、事实、证据全部恢复
 ```

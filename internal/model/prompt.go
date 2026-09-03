@@ -30,35 +30,22 @@ const baseSystemPrompt = `你是 **PentGo 渗透测试智能体**，仅对用户
 工具调用结果必须保留 ` + "`" + `evidence_ref` + "`" + `，不得伪造测试结果或证据。`
 
 // BaseSystemPrompt returns the stable instruction envelope used by every model
-// request. Context preflight combines it with the fixed project-facts framing.
+// request. Runtime context and shared facts are appended by SystemPrompt.
 func BaseSystemPrompt() string { return baseSystemPrompt }
 
-// ProjectFactsEnvelope wraps the exact project-facts section appended to the
-// provider system message. It is exported so context measurement counts the
-// same fixed text that SystemPrompt sends.
-func ProjectFactsEnvelope(projectFacts string) string {
-	if strings.TrimSpace(projectFacts) == "" {
-		projectFacts = "当前没有记录项目事实。"
-	}
-	return "\n\n项目共享事实（只提供上下文，不会扩大当前会话范围）：\n" + strings.TrimSpace(projectFacts)
-}
+// factsEnvelope 是共享事实在指令中的固定段。事实内容本身由 ContextMiddleware
+// 作为逐轮系统消息注入，此处恒为占位文本。
+const factsEnvelope = "\n\n项目共享事实（只提供上下文，不会扩大当前会话范围）：\n当前没有记录项目事实。"
 
-// SystemInstructionPrefix returns the final instruction section before project
-// facts. It accepts a previously assembled prefix so hosts can meter precisely
-// the same envelope that StreamStep will send.
-func SystemInstructionPrefix(input string) string {
+// SystemPrompt assembles the provider instruction from the base prompt plus any
+// per-run runtime context, then appends the fixed project-facts envelope.
+func SystemPrompt(input string) string {
 	input = strings.TrimSpace(input)
+	prefix := input
 	if input == "" || input == baseSystemPrompt {
-		return baseSystemPrompt
+		prefix = baseSystemPrompt
+	} else if !strings.HasPrefix(input, baseSystemPrompt+"\n\n当前运行上下文：\n") {
+		prefix = baseSystemPrompt + "\n\n当前运行上下文：\n" + input
 	}
-	if strings.HasPrefix(input, baseSystemPrompt+"\n\n当前运行上下文：\n") {
-		return input
-	}
-	return baseSystemPrompt + "\n\n当前运行上下文：\n" + input
-}
-
-// SystemPrompt combines the provider-visible instruction prefix and the exact
-// project-facts envelope. Context preflight measures these two parts directly.
-func SystemPrompt(input string, projectFacts string) string {
-	return SystemInstructionPrefix(input) + ProjectFactsEnvelope(projectFacts)
+	return prefix + factsEnvelope
 }

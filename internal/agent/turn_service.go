@@ -113,7 +113,7 @@ func (service *TurnService) RunTurn(ctx context.Context, runtime *ProjectRuntime
 	if service.skillContext != nil {
 		instruction = strings.TrimSpace(instruction + "\n\n" + service.skillContext(message))
 	}
-	providerInstruction := llm.SystemPrompt(instruction, "")
+	providerInstruction := llm.SystemPrompt(instruction)
 	contextWindow := contextpolicy.NewContextWindow(runtime.store, service.contextConfig, service.summarizer, contextpolicy.EstimateTextTokens(providerInstruction)+contextpolicy.EstimateToolTokens(availableTools))
 	chatModel, err := service.newModel(ctx)
 	if err != nil {

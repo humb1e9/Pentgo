@@ -484,8 +484,8 @@ func (runtime *ProjectRuntime) PersistState(session *sessionstate.Session) error
 	return runtime.commitSessionLocked(sessionstate.CloneSession(session))
 }
 
-// commitSessionLocked 重建项目摘要条目，并在发布更新后的项目元数据前，
-// 与会话数据一并原子保存。
+// commitSessionLocked 先与会话数据一并原子保存项目元数据，再更新运行时的
+// 项目快照。会话摘要索引由 storage.LoadProject 从 sessions 表重建，不在此维护。
 func (runtime *ProjectRuntime) commitSessionLocked(session *sessionstate.Session) error {
 	runtime.mu.RLock()
 	if runtime.project == nil {
@@ -494,17 +494,6 @@ func (runtime *ProjectRuntime) commitSessionLocked(session *sessionstate.Session
 	}
 	project := projectmodel.CloneProject(runtime.project)
 	runtime.mu.RUnlock()
-	found := false
-	for index, summary := range project.Sessions {
-		if summary.ID == session.ID {
-			project.Sessions[index] = projectmodel.SessionSummary{ID: session.ID, UpdatedAt: session.UpdatedAt}
-			found = true
-			break
-		}
-	}
-	if !found {
-		project.Sessions = append(project.Sessions, projectmodel.SessionSummary{ID: session.ID, UpdatedAt: session.UpdatedAt})
-	}
 	project.UpdatedAt = time.Now().UTC()
 	if err := runtime.store.CommitSession(session, project); err != nil {
 		return err

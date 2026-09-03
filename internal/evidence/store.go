@@ -128,19 +128,6 @@ func (store *EvidenceStore) fail(err error) error {
 	return store.failed
 }
 
-// Lookup 按引用编号获取持久化证据记录。
-func (store *EvidenceStore) Lookup(sequence int) (Record, bool) {
-	if store == nil || store.db == nil || sequence <= 0 {
-		return Record{}, false
-	}
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	record, err := scanRecord(store.db.QueryRow(`
-		SELECT seq, tool, arguments_json, success, output, started_at, finished_at
-		FROM evidence_records WHERE seq = ?`, sequence))
-	return record, err == nil
-}
-
 // Exists reports whether an Evidence record exists. It intentionally does not
 // expose content or interpret success, because fact references are provenance
 // links rather than confidence claims.
@@ -155,24 +142,6 @@ func (store *EvidenceStore) Exists(sequence int) bool {
 	}
 	var found bool
 	return store.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM evidence_records WHERE seq = ?)`, sequence).Scan(&found) == nil && found
-}
-
-// scanRecord 将数据库行转换为公开的证据表示。
-func scanRecord(row interface{ Scan(...any) error }) (Record, error) {
-	var record Record
-	var argumentsJSON string
-	var startedAt, finishedAt int64
-	var success int
-	if err := row.Scan(&record.Seq, &record.Tool, &argumentsJSON, &success, &record.Output, &startedAt, &finishedAt); err != nil {
-		return Record{}, err
-	}
-	if err := json.Unmarshal([]byte(argumentsJSON), &record.Arguments); err != nil {
-		return Record{}, err
-	}
-	record.Success = success != 0
-	record.StartedAt = parseTime(startedAt)
-	record.FinishedAt = parseTime(finishedAt)
-	return record, nil
 }
 
 // Close 释放数据库并返回首个持续性写入失败。
@@ -216,7 +185,6 @@ func (store *EvidenceStore) redact(value string) string {
 }
 
 func timeValue(value time.Time) int64 { return value.UTC().UnixNano() }
-func parseTime(value int64) time.Time { return time.Unix(0, value).UTC() }
 func boolInt(value bool) int {
 	if value {
 		return 1

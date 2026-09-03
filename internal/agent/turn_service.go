@@ -99,7 +99,6 @@ func (service *TurnService) RunTurn(ctx context.Context, runtime *ProjectRuntime
 		return finishError(err)
 	}
 	runtime.PublishSnapshot(session.ID)
-	runtime.Emit(session.ID, sessionstate.Event{TurnID: turn.ID, Kind: sessionstate.EventTurnStarted, Message: message})
 
 	projectTools, err := runtime.Tools(ctx)
 	if err != nil {

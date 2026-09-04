@@ -9,8 +9,6 @@ import (
 	"github.com/cloudwego/eino/adk/filesystem"
 )
 
-const workspaceToolOutputLimit = 64 * 1024
-
 // NewTools returns the deterministic set of host-callable workspace actions.
 // A nil workspace produces wrappers that return validation errors rather than
 // panicking; callers can still inspect their stable names and schemas.
@@ -62,7 +60,7 @@ func invokeLS(ctx context.Context, workspace *Workspace, arguments map[string]an
 	for _, entry := range entries {
 		lines = append(lines, fmt.Sprintf("%s\t%s\t%d\t%s", entry.Path, dirMarker(entry.IsDir), entry.Size, entry.ModifiedAt))
 	}
-	return boundText(strings.Join(lines, "\n"), workspaceToolOutputLimit), nil
+	return boundText(strings.Join(lines, "\n"), workspace.outputLimit), nil
 }
 
 func invokeRead(ctx context.Context, workspace *Workspace, arguments map[string]any) (string, error) {
@@ -82,7 +80,7 @@ func invokeRead(ctx context.Context, workspace *Workspace, arguments map[string]
 	if err != nil {
 		return "", err
 	}
-	return boundText(content.Content, workspaceToolOutputLimit), nil
+	return boundText(content.Content, workspace.outputLimit), nil
 }
 
 func invokeWrite(ctx context.Context, workspace *Workspace, arguments map[string]any) (string, error) {
@@ -143,7 +141,7 @@ func invokeGlob(ctx context.Context, workspace *Workspace, arguments map[string]
 	for _, entry := range entries {
 		lines = append(lines, fmt.Sprintf("%s\t%s\t%d\t%s", entry.Path, dirMarker(entry.IsDir), entry.Size, entry.ModifiedAt))
 	}
-	return boundText(strings.Join(lines, "\n"), workspaceToolOutputLimit), nil
+	return boundText(strings.Join(lines, "\n"), workspace.outputLimit), nil
 }
 
 func invokeGrep(ctx context.Context, workspace *Workspace, arguments map[string]any) (string, error) {
@@ -187,7 +185,7 @@ func invokeGrep(ctx context.Context, workspace *Workspace, arguments map[string]
 	for _, match := range matches {
 		lines = append(lines, fmt.Sprintf("%s:%d:%s", match.Path, match.Line, match.Content))
 	}
-	return boundText(strings.Join(lines, "\n"), workspaceToolOutputLimit), nil
+	return boundText(strings.Join(lines, "\n"), workspace.outputLimit), nil
 }
 
 func invokeExecute(ctx context.Context, workspace *Workspace, arguments map[string]any) (string, error) {
@@ -213,7 +211,7 @@ func invokeExecute(ctx context.Context, workspace *Workspace, arguments map[stri
 	if response.Truncated {
 		output += "\n[... output truncated ...]"
 	}
-	return boundText(output, workspaceToolOutputLimit), nil
+	return boundText(output, workspace.outputLimit), nil
 }
 
 func objectSchema(properties map[string]any, required ...string) map[string]any {

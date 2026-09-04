@@ -186,7 +186,7 @@ func (coordinator *Manager) openStore(ctx context.Context, store *storage.Projec
 		ctx = context.Background()
 	}
 	secrets := tools.ConfigSecrets(coordinator.cfg.Tools.MCP)
-	projectRuntime, err := OpenProjectRuntime(ctx, store, nil, secrets...)
+	projectRuntime, err := OpenProjectRuntime(ctx, store, nil, coordinator.cfg.Tools.MaxOutputBytes, secrets...)
 	if err != nil {
 		return err
 	}

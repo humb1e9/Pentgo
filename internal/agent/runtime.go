@@ -44,8 +44,9 @@ type sessionRuntime struct {
 }
 
 // OpenProjectRuntime 按 Close 的逆序加载项目资源，并在 Evidence 中脱敏可选敏感值。
+// maxOutputBytes 是工作区工具结果返回模型前的字节上限（<=0 时使用默认值）。
 // 调用方必须先设置 turn handler，之后才能打开会话。
-func OpenProjectRuntime(ctx context.Context, store *storage.ProjectStore, portsTools tools.Provider, secrets ...string) (*ProjectRuntime, error) {
+func OpenProjectRuntime(ctx context.Context, store *storage.ProjectStore, portsTools tools.Provider, maxOutputBytes int, secrets ...string) (*ProjectRuntime, error) {
 	if store == nil {
 		return nil, fmt.Errorf("project store is nil")
 	}
@@ -65,7 +66,7 @@ func OpenProjectRuntime(ctx context.Context, store *storage.ProjectStore, portsT
 		return nil, err
 	}
 	facts := NewProjectLedger(repository, journal)
-	workspace, err := tools.NewWorkspace(store.WorkspaceRoot())
+	workspace, err := tools.NewWorkspace(store.WorkspaceRoot(), maxOutputBytes)
 	if err != nil {
 		_ = journal.Close()
 		return nil, err

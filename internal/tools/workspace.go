@@ -15,8 +15,9 @@ import (
 
 // Workspace provides unrestricted local file tools. root is the default base for relative paths and shell commands.
 type Workspace struct {
-	root  string
-	local *local.Local
+	root        string
+	local       *local.Local
+	outputLimit int
 }
 
 // workspaceBuiltinNames 是 Eino 本地后端注册的工具名。Workspace 提供同一组
@@ -35,8 +36,9 @@ func IsName(name string) bool {
 	return false
 }
 
-// NewWorkspace 在创建后端前规范化并校验 root。
-func NewWorkspace(root string) (*Workspace, error) {
+// NewWorkspace 在创建后端前规范化并校验 root。outputLimit 是工具结果返回
+// 模型前的字节上限；小于等于 0 时使用默认上限。
+func NewWorkspace(root string, outputLimit int) (*Workspace, error) {
 	root, err := filepath.Abs(strings.TrimSpace(root))
 	if err != nil {
 		return nil, fmt.Errorf("resolve workspace root: %w", err)
@@ -52,11 +54,14 @@ func NewWorkspace(root string) (*Workspace, error) {
 	if !info.IsDir() {
 		return nil, fmt.Errorf("workspace root is not a directory")
 	}
+	if outputLimit <= 0 {
+		outputLimit = DefaultConfig().MaxOutputBytes
+	}
 	backend, err := local.NewBackend(context.Background(), &local.Config{})
 	if err != nil {
 		return nil, fmt.Errorf("create local filesystem backend: %w", err)
 	}
-	return &Workspace{root: root, local: backend}, nil
+	return &Workspace{root: root, local: backend, outputLimit: outputLimit}, nil
 }
 
 // LsInfo accepts absolute and workspace-relative paths.
